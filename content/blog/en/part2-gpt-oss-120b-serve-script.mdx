@@ -1,0 +1,254 @@
+---
+title: "gpt-oss-120B at 59 tok/s: 6 Pitfalls and a Working Serve Script"
+description: "Getting Microsoft's gpt-oss-120B running on a DGX Spark (SM121, GB10) with vLLM. Six bugs, one wrong environment variable that silently did nothing, a tiktoken file hidden behind a SHA1 hash, and the real reason Qwen3.5-122B runs but stays at 14 tok/s."
+date: "2026-03-19"
+tags: ["DGX Spark", "SM121", "vLLM", "gpt-oss", "MXFP4", "Blackwell", "LLM Serving"]
+series: "Running 120B on a DGX Spark"
+part: 2
+---
+
+[Part 1](/en/blog/part1-why-your-dgx-spark-says-exclamation-marks) covered the four bugs that cause any NVFP4 model to output `!!!!!` on SM121. Fix those first. This post picks up after Qwen3.5-122B is running — and covers what happens when you try to serve gpt-oss-120B, a completely different model format with its own set of landmines.
+
+Target: **59 tok/s** at 131K context on a single GB10 (128 GB unified memory). Actual path to get there: six separate bugs, one of which took longer to find than all the others combined.
+
+---
+
+## The Model
+
+`gpt-oss-120B` is Microsoft's open-source 120B model, MXFP4-quantized, in a format called **harmony**. It uses the `openai_harmony` tokenizer (which depends on tiktoken, not HuggingFace tokenizers). It has a `--reasoning-parser` designed specifically for its output format. These three facts each contribute exactly one bug to this story.
+
+The SM121-compatible vLLM fork is [eugr's branch](https://github.com/eugr/vllm), which patches MXFP4 support to work on GB10.
+
+---
+
+## Bug 1: Import Path Mismatch
+
+The eugr fork was written against his own vLLM tree. When you apply the patches to stock vLLM 0.17.1, one import breaks immediately:
+
+```python
+# eugr fork path (wrong on stock vLLM)
+from vllm.model_executor.layers.quantization.quant_utils import cutlass_fp4_supported
+
+# stock vLLM 0.17.1 (correct)
+from vllm.model_executor.layers.quantization.nvfp4_utils import cutlass_fp4_supported
+```
+
+This is in `mxfp4.py`. Server crashes on startup, error message is not helpful. One-line fix.
+
+---
+
+## Bug 2: `--enforce-eager` Cuts Speed in Half
+
+First successful run. Speed: 26 tok/s. Expected: ~59 tok/s.
+
+The serve script had `--enforce-eager`. This flag disables CUDAGraph and `torch.compile` — it's a debugging flag that forces eager execution mode. Someone added it for debugging at some point and forgot to remove it.
+
+Remove it. **26 tok/s → 59 tok/s**.
+
+`--enforce-eager` should never appear in a production serve script. If it's there, remove it before debugging anything else.
+
+---
+
+## Bug 3: tiktoken Vocab Download Fails on Air-Gapped Machines
+
+gpt-oss uses the `openai_harmony` tokenizer, which uses tiktoken under the hood. On startup, tiktoken downloads its vocab file from OpenAI's CDN:
+
+```
+https://openaipublic.blob.core.windows.net/encodings/o200k_base.tiktoken
+```
+
+The GX10 is on an internal network. Download fails silently or with a cryptic error:
+```
+HarmonyError: error downloading or loading vocab file
+```
+
+The workaround requires reading the tiktoken-rs source code. tiktoken caches vocab files using their **SHA1 hash as the filename**. This is not documented anywhere. The hash for `o200k_base.tiktoken` is:
+
+```
+fb374d419588a4632f3f557e76b4b70aebbca790
+```
+
+Fix:
+```bash
+# on a machine with internet access
+mkdir -p ~/models/tiktoken_cache
+wget "https://openaipublic.blob.core.windows.net/encodings/o200k_base.tiktoken" \
+  -O ~/models/tiktoken_cache/fb374d419588a4632f3f557e76b4b70aebbca790
+
+# in your serve script
+export TIKTOKEN_RS_CACHE_DIR=/home/username/models/tiktoken_cache
+```
+
+The directory and filename must match exactly. No extension on the cached file — just the raw SHA1 hash.
+
+---
+
+## Bug 4: `content: null` — The Reasoning Parser Trap
+
+Server running. First test request. The GX10 logs show tokens being generated. But no response arrives. Check the logs:
+
+```
+content: None
+reasoning_len: 431
+tokens: {'prompt_tokens': 68, 'completion_tokens': 100}
+```
+
+The `--reasoning-parser openai_gptoss` flag routes all output into the `reasoning` field and sets `content` to null. gpt-oss is not a thinking model. The parser is designed for a specific output format gpt-oss uses for its reasoning channel — but if your client only reads `content` (as any standard OpenAI-compatible client does), it gets nothing.
+
+Initial fix: remove `--reasoning-parser openai_gptoss`. Content appears.
+
+*(This diagnosis was correct, but bug 6 was also active. Removing the parser helped, but without fixing bug 6, outputs still degraded into repetition loops for anything longer than a few sentences.)*
+
+---
+
+## Bug 5: System Messages Bypass Harmony Encoding
+
+gpt-oss uses the harmony message format. vLLM processes chat completion requests roughly like this:
+
+1. Build a system message using `get_system_message()`
+2. Iterate over `request.messages` and append each one
+
+The bug (tracked as [vLLM PR #31607](https://github.com/vllm-project/vllm/pull/31607), unmerged at time of writing): if the client sends a message with `role: "system"` in the messages array, it gets serialized as a raw harmony message rather than going through `get_system_message()`. The model sees a malformed token sequence and starts producing garbage.
+
+Any client that sends a system prompt hits this — which is most of them.
+
+Manual fix: patch `vllm/entrypoints/openai/serving_chat.py` to extract system-role messages from `request.messages` and route them through `get_system_message(instructions=...)`.
+
+Also required:
+```bash
+export VLLM_GPT_OSS_HARMONY_SYSTEM_INSTRUCTIONS=1
+```
+
+This env var defaults to `0`. Without it, the `instructions` parameter to `get_system_message()` is silently ignored, and the system prompt never reaches the model regardless.
+
+---
+
+## Bug 6: The Wrong Environment Variable (Silent Failure)
+
+This is the one that takes the longest to find.
+
+After bugs 1–5 are fixed, simple requests work. But anything longer falls into a repetition loop:
+
+```
+The user is asking about... The user is asking about... The user is asking about...
+```
+
+Temperature, top_p, repetition_penalty — none of it matters. The loop always wins.
+
+The known cause: on SM121, CUTLASS_FP4 produces first-token logit corruption (see [Part 1](/en/blog/part1-why-your-dgx-spark-says-exclamation-marks) and [vLLM issue #37030](https://github.com/vllm-project/vllm/issues/37030)). Fix is to force Marlin for all MXFP4 GEMMs.
+
+The serve script already had this:
+
+```bash
+export VLLM_NVFP4_GEMM_BACKEND=marlin   # ← looks right
+```
+
+**This environment variable does not exist in vLLM 0.17.1.**
+
+vLLM reads it, finds no matching env var, and silently ignores it. No warning, no error. It falls back to auto-selection. Auto-selection on SM12x picks CUTLASS_FP4. The startup log shows:
+
+```
+[MXFP4] Auto-selected: CUTLASS_FP4 (vLLM native SM120 FP4 grouped GEMM for SM12x)
+```
+
+The correct env var is:
+
+```bash
+export VLLM_MXFP4_BACKEND=marlin   # ← correct
+```
+
+When this is right, the startup log shows:
+
+```
+[MXFP4] Using backend: marlin (VLLM_MXFP4_BACKEND=marlin)
+```
+
+After this fix: `hi` → normal response. Longer story request → 3,970 chars, no loop, `finish_reason: stop`.
+
+---
+
+## The Working Serve Script
+
+```bash
+#!/bin/bash
+source /home/username/.python-vllm-eugr/bin/activate
+
+# SM121 backend: force Marlin everywhere (CUTLASS_FP4 is broken on SM121)
+export VLLM_MXFP4_BACKEND=marlin               # ← NOT VLLM_NVFP4_GEMM_BACKEND
+export VLLM_MARLIN_USE_ATOMIC_ADD=1            # SM121 Marlin atomic race fix
+export FLASHINFER_DISABLE_VERSION_CHECK=1
+
+# Offline tokenizer cache
+export TIKTOKEN_RS_CACHE_DIR=/home/username/models/tiktoken_cache
+
+# gpt-oss harmony system message fix
+export VLLM_GPT_OSS_HARMONY_SYSTEM_INSTRUCTIONS=1
+
+# Clear compile caches between runs
+rm -rf ~/.cache/flashinfer/ ~/.cache/vllm/torch_compile_cache/ 2>/dev/null || true
+
+exec vllm serve /home/username/models/gpt-oss-120b \
+  --served-model-name gpt-oss-120b \
+  --host 0.0.0.0 --port 8001 \
+  --quantization mxfp4 \
+  --kv-cache-dtype fp8 \
+  --max-model-len 131072 \
+  --max-num-batched-tokens 8192 \
+  --gpu-memory-utilization 0.90 \
+  --attention-backend TRITON_ATTN \
+  --moe-backend marlin
+```
+
+Note: `--reasoning-parser openai_gptoss` is not included. Remove it unless you specifically need the reasoning channel separated.
+
+---
+
+## Performance
+
+| Metric | Value |
+|--------|-------|
+| Decode speed | ~59 tok/s |
+| Backend | Marlin W4A16 (weight dequantized at inference) |
+| KV cache (fp8, 0.90 utilization) | ~580K tokens capacity |
+| Max context | 131K tokens |
+| CUDAGraph | ✅ captured |
+
+The arithmetic: GB10 has 273 GB/s memory bandwidth. 120B × 4-bit ≈ 60 GB. At 273 GB/s, theoretical decode is ~4.5 matrix loads/s, meaning ~60 tok/s. The measured 59 tok/s matches the bandwidth ceiling almost exactly. This is what working looks like on GB10.
+
+---
+
+## Sidebar: Qwen3.5-122B Runs, But Stays at 14 tok/s
+
+After getting gpt-oss working, the obvious question: does Qwen3.5-122B (NVFP4) also run well? After applying the fixes from [Part 1](/en/blog/part1-why-your-dgx-spark-says-exclamation-marks), it runs without errors.
+
+Speed: **14 tok/s**.
+
+This is not a configuration problem. There are no flags to tune. The cause is architectural.
+
+Qwen3.5-122B is a hybrid architecture: standard Transformer attention layers combined with **GDN (Gated Delta Network)** SSM layers. The GDN layers must stay in BF16 (hence the `SupportsQuant` fix from Part 1 — without it, they get quantized and the model produces garbage).
+
+The problem: Marlin has no specialized kernel for GDN layers. Each GDN GEMM falls back to a generic path. On GB10's 273 GB/s bandwidth, the fallback is slow enough that 14 tok/s is roughly where you end up with 122B parameters and no kernel support for half the architecture.
+
+This is a software gap, not a hardware limitation. The compute capability is there. The Marlin kernel for GDN is not. When it lands, expect ~30 tok/s or better.
+
+For now: gpt-oss-120B at 59 tok/s is the working option. Qwen3.5-122B at 14 tok/s runs but is too slow for interactive use.
+
+---
+
+## Summary: The Ordered Checklist
+
+If you're serving gpt-oss-120B on SM121:
+
+1. Apply the SM121 fixes from [Part 1](/en/blog/part1-why-your-dgx-spark-says-exclamation-marks) first.
+2. Fix the `mxfp4.py` import path (eugr fork path → stock vLLM path).
+3. Remove `--enforce-eager` from your serve script. Check. Then check again.
+4. Pre-download the tiktoken vocab; set `TIKTOKEN_RS_CACHE_DIR`.
+5. **Use `VLLM_MXFP4_BACKEND=marlin`** — not `VLLM_NVFP4_GEMM_BACKEND`. The wrong variable silently does nothing.
+6. Confirm the startup log says `Using backend: marlin`, not `Auto-selected: CUTLASS_FP4`.
+7. If sending system prompts: patch `serving_chat.py` for PR #31607, and set `VLLM_GPT_OSS_HARMONY_SYSTEM_INSTRUCTIONS=1`.
+
+The diagnostic for bug 6: if you're getting repetition loops and you think you've forced Marlin, check your startup log. If it says `Auto-selected`, your env var isn't being read.
+
+---
+
+*Part 3: [CUTLASS FP4 on SM121: When the Kernel Doesn't Exist, Write Your Own](/en/blog/part3-cutlass-fp4-sm121-custom-kernel)*
