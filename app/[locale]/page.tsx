@@ -1,8 +1,34 @@
 import Link from 'next/link'
 import { getAllPosts } from '@/lib/blog'
 import { routing } from '@/i18n/routing'
+import type { Metadata } from 'next'
+
+const BASE_URL = 'https://ai-muninn.com'
 
 type Locale = (typeof routing.locales)[number]
+
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<{ locale: string }>
+}): Promise<Metadata> {
+  const { locale } = await params
+  const otherLocale = locale === 'en' ? 'zh-TW' : 'en'
+  return {
+    alternates: {
+      canonical: `${BASE_URL}/${locale}`,
+      languages: {
+        [locale]: `${BASE_URL}/${locale}`,
+        [otherLocale]: `${BASE_URL}/${otherLocale}`,
+      },
+    },
+    openGraph: {
+      url: `${BASE_URL}/${locale}`,
+      locale: locale === 'zh-TW' ? 'zh_TW' : 'en_US',
+      alternateLocale: locale === 'zh-TW' ? 'en_US' : 'zh_TW',
+    },
+  }
+}
 
 const ui: Record<Locale, { prompt: string; viewAll: string; noPost: string; whoami: string[] }> = {
   en: {
@@ -27,6 +53,18 @@ const ui: Record<Locale, { prompt: string; viewAll: string; noPost: string; whoa
   },
 }
 
+const personSchema = {
+  '@context': 'https://schema.org',
+  '@type': 'Person',
+  name: 'coolthor',
+  url: BASE_URL,
+  sameAs: [
+    'https://github.com/coolthor',
+    'https://www.linkedin.com/in/%E5%AD%90%E5%93%B2-%E6%9E%97-65300a9a/',
+  ],
+  description: 'AI infrastructure engineer. Runs 120B models at home, builds options trading systems with AI agents.',
+}
+
 export default async function Home({ params }: { params: Promise<{ locale: string }> }) {
   const { locale } = await params
   const l = locale as Locale
@@ -35,6 +73,10 @@ export default async function Home({ params }: { params: Promise<{ locale: strin
 
   return (
     <div className="space-y-16">
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(personSchema) }}
+      />
       <section>
         <p className="text-xs mb-4" style={{ color: 'var(--text-dim)' }}>
           <span style={{ color: 'var(--cyan)' }}>~</span> /home/coolthor

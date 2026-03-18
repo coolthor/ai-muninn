@@ -5,6 +5,8 @@ import { getAllSlugs, getPost, hasTranslation } from '@/lib/blog'
 import { routing } from '@/i18n/routing'
 import type { Metadata } from 'next'
 
+const BASE_URL = 'https://ai-muninn.com'
+
 type Locale = (typeof routing.locales)[number]
 
 export async function generateStaticParams() {
@@ -25,11 +27,77 @@ export async function generateMetadata({
   const { locale, slug } = await params
   const post = getPost(slug, locale)
   if (!post) return {}
+
+  const url = `${BASE_URL}/${locale}/blog/${slug}`
+  const otherLocale = locale === 'en' ? 'zh-TW' : 'en'
+  const otherExists = hasTranslation(slug, otherLocale)
+
   return {
     title: post.title,
     description: post.description,
-    openGraph: { title: post.title, description: post.description, type: 'article' },
+    alternates: {
+      canonical: url,
+      ...(otherExists && {
+        languages: {
+          [locale]: url,
+          [otherLocale]: `${BASE_URL}/${otherLocale}/blog/${slug}`,
+        },
+      }),
+    },
+    openGraph: {
+      title: post.title,
+      description: post.description,
+      type: 'article',
+      url,
+      locale: locale === 'zh-TW' ? 'zh_TW' : 'en_US',
+      ...(otherExists && {
+        alternateLocale: locale === 'zh-TW' ? 'en_US' : 'zh_TW',
+      }),
+      publishedTime: post.date,
+      tags: post.tags,
+      ...(post.series && { section: post.series }),
+    },
+    twitter: {
+      card: 'summary',
+      title: post.title,
+      description: post.description,
+    },
   }
+}
+
+function JsonLd({ post, url, locale }: {
+  post: { title: string; description: string; date: string; tags: string[] }
+  url: string
+  locale: string
+}) {
+  const schema = {
+    '@context': 'https://schema.org',
+    '@type': 'TechArticle',
+    headline: post.title,
+    description: post.description,
+    datePublished: post.date,
+    dateModified: post.date,
+    url,
+    inLanguage: locale === 'zh-TW' ? 'zh-TW' : 'en',
+    author: {
+      '@type': 'Person',
+      name: 'coolthor',
+      url: BASE_URL,
+    },
+    publisher: {
+      '@type': 'Person',
+      name: 'coolthor',
+      url: BASE_URL,
+    },
+    keywords: post.tags.join(', '),
+    mainEntityOfPage: { '@type': 'WebPage', '@id': url },
+  }
+  return (
+    <script
+      type="application/ld+json"
+      dangerouslySetInnerHTML={{ __html: JSON.stringify(schema) }}
+    />
+  )
 }
 
 export default async function BlogPost({
@@ -45,9 +113,12 @@ export default async function BlogPost({
   const otherLocale: Locale = l === 'en' ? 'zh-TW' : 'en'
   const otherExists = hasTranslation(slug, otherLocale)
   const isZh = l === 'zh-TW'
+  const url = `${BASE_URL}/${l}/blog/${slug}`
 
   return (
     <article>
+      <JsonLd post={post} url={url} locale={l} />
+
       {/* breadcrumb */}
       <div className="mb-8 text-xs" style={{ color: 'var(--text-dim)' }}>
         <Link href={`/${l}`} className="hover:text-[var(--cyan)] transition-colors">~</Link>

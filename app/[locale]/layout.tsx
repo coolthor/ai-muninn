@@ -8,6 +8,13 @@ export const metadata: Metadata = {
   title: { default: 'ai-muninn', template: '%s — ai-muninn' },
   description: 'Research notes on AI infrastructure, LLM serving, and autonomous agents.',
   openGraph: { siteName: 'ai-muninn', type: 'website' },
+  alternates: {
+    canonical: 'https://ai-muninn.com/en',
+    languages: {
+      'en': 'https://ai-muninn.com/en',
+      'zh-TW': 'https://ai-muninn.com/zh-TW',
+    },
+  },
 }
 
 type Locale = (typeof routing.locales)[number]
