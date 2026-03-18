@@ -1,4 +1,4 @@
-import { Link } from '@/i18n/navigation'
+import Link from 'next/link'
 import { getAllPosts } from '@/lib/blog'
 import { routing } from '@/i18n/routing'
 import type { Metadata } from 'next'
@@ -46,8 +46,7 @@ export default async function BlogIndex({ params }: { params: Promise<{ locale: 
               </span>
               <div className="min-w-0">
                 <Link
-                  href={`/blog/${post.slug}`}
-                  locale={l}
+                  href={`/${l}/blog/${post.slug}`}
                   className="text-sm group-hover:text-[var(--cyan-dim)] transition-colors leading-snug"
                   style={{ color: 'var(--cyan)' }}
                 >

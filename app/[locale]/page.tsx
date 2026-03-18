@@ -1,4 +1,4 @@
-import { Link } from '@/i18n/navigation'
+import Link from 'next/link'
 import { getAllPosts } from '@/lib/blog'
 import { routing } from '@/i18n/routing'
 
@@ -70,8 +70,7 @@ export default async function Home({ params }: { params: Promise<{ locale: strin
                   {post.date}
                 </span>
                 <Link
-                  href={`/blog/${post.slug}`}
-                  locale={l}
+                  href={`/${l}/blog/${post.slug}`}
                   className="text-sm hover:text-[var(--cyan-dim)] transition-colors"
                   style={{ color: 'var(--cyan)' }}
                 >
@@ -81,7 +80,7 @@ export default async function Home({ params }: { params: Promise<{ locale: strin
             ))}
           </ul>
           <div className="mt-6">
-            <Link href="/blog" locale={l} className="text-xs" style={{ color: 'var(--text-dim)' }}>
+            <Link href={`/${l}/blog`} className="text-xs" style={{ color: 'var(--text-dim)' }}>
               {t.viewAll}
             </Link>
           </div>

@@ -1,5 +1,5 @@
 import { notFound } from 'next/navigation'
-import { Link } from '@/i18n/navigation'
+import Link from 'next/link'
 import { MDXRemote } from 'next-mdx-remote/rsc'
 import { getAllSlugs, getPost, hasTranslation } from '@/lib/blog'
 import { routing } from '@/i18n/routing'
@@ -50,9 +50,9 @@ export default async function BlogPost({
     <article>
       {/* breadcrumb */}
       <div className="mb-8 text-xs" style={{ color: 'var(--text-dim)' }}>
-        <Link href="/" locale={l} className="hover:text-[var(--cyan)] transition-colors">~</Link>
+        <Link href={`/${l}`} className="hover:text-[var(--cyan)] transition-colors">~</Link>
         <span className="mx-1">/</span>
-        <Link href="/blog" locale={l} className="hover:text-[var(--cyan)] transition-colors">blog</Link>
+        <Link href={`/${l}/blog`} className="hover:text-[var(--cyan)] transition-colors">blog</Link>
         <span className="mx-1">/</span>
         <span>{slug}</span>
       </div>
@@ -75,8 +75,7 @@ export default async function BlogPost({
           ))}
           {otherExists && (
             <Link
-              href={`/blog/${slug}`}
-              locale={otherLocale}
+              href={`/${otherLocale}/blog/${slug}`}
               className="px-2 py-0.5 border rounded hover:border-[var(--cyan)] hover:text-[var(--cyan)] transition-colors"
               style={{ borderColor: 'var(--border)' }}
             >
@@ -93,7 +92,7 @@ export default async function BlogPost({
 
       {/* footer nav */}
       <div className="mt-12 pt-6 border-t text-sm" style={{ borderColor: 'var(--border)' }}>
-        <Link href="/blog" locale={l} style={{ color: 'var(--text-dim)' }} className="hover:text-[var(--cyan)] transition-colors">
+        <Link href={`/${l}/blog`} style={{ color: 'var(--text-dim)' }} className="hover:text-[var(--cyan)] transition-colors">
           {isZh ? '← 返回文章列表' : '← back to blog'}
         </Link>
       </div>
