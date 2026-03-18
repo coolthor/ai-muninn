@@ -1,14 +1,17 @@
-import Link from 'next/link'
+import { Link } from '@/i18n/navigation'
 import { getAllPosts } from '@/lib/blog'
+import { routing } from '@/i18n/routing'
 import type { Metadata } from 'next'
 
-export const metadata: Metadata = {
-  title: 'blog — ai-muninn',
-  description: 'Research notes on AI infrastructure, LLM serving, and autonomous agents.',
-}
+export const metadata: Metadata = { title: 'blog' }
 
-export default function BlogIndex() {
-  const posts = getAllPosts()
+type Locale = (typeof routing.locales)[number]
+
+export default async function BlogIndex({ params }: { params: Promise<{ locale: string }> }) {
+  const { locale } = await params
+  const l = locale as Locale
+  const posts = getAllPosts(locale)
+  const isZh = l === 'zh-TW'
 
   return (
     <div>
@@ -17,21 +20,20 @@ export default function BlogIndex() {
           <span style={{ color: 'var(--cyan)' }}>❯</span> ls -lt ~/blog
         </p>
         <p className="text-xs" style={{ color: 'var(--text-dim)' }}>
-          {posts.length} post{posts.length !== 1 ? 's' : ''}
+          {posts.length} {isZh ? '篇文章' : `post${posts.length !== 1 ? 's' : ''}`}
         </p>
       </div>
 
       {posts.length === 0 ? (
         <p className="text-sm" style={{ color: 'var(--text-dim)' }}>
-          nothing here yet
+          {isZh ? '尚無文章' : 'nothing here yet'}
         </p>
       ) : (
         <ul className="space-y-px">
-          {/* header row */}
           <li className="flex gap-4 pb-2 mb-2 text-xs border-b" style={{ color: 'var(--text-dim)', borderColor: 'var(--border)' }}>
-            <span className="w-24 shrink-0">date</span>
-            <span className="w-16 shrink-0 hidden sm:block">read</span>
-            <span>title</span>
+            <span className="w-24 shrink-0">{isZh ? '日期' : 'date'}</span>
+            <span className="w-16 shrink-0 hidden sm:block">{isZh ? '閱讀' : 'read'}</span>
+            <span>{isZh ? '標題' : 'title'}</span>
           </li>
 
           {posts.map(post => (
@@ -45,6 +47,7 @@ export default function BlogIndex() {
               <div className="min-w-0">
                 <Link
                   href={`/blog/${post.slug}`}
+                  locale={l}
                   className="text-sm group-hover:text-[var(--cyan-dim)] transition-colors leading-snug"
                   style={{ color: 'var(--cyan)' }}
                 >

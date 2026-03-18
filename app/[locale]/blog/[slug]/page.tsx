@@ -1,0 +1,102 @@
+import { notFound } from 'next/navigation'
+import { Link } from '@/i18n/navigation'
+import { MDXRemote } from 'next-mdx-remote/rsc'
+import { getAllSlugs, getPost, hasTranslation } from '@/lib/blog'
+import { routing } from '@/i18n/routing'
+import type { Metadata } from 'next'
+
+type Locale = (typeof routing.locales)[number]
+
+export async function generateStaticParams() {
+  const params: { locale: string; slug: string }[] = []
+  for (const locale of routing.locales) {
+    for (const slug of getAllSlugs(locale)) {
+      params.push({ locale, slug })
+    }
+  }
+  return params
+}
+
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<{ locale: string; slug: string }>
+}): Promise<Metadata> {
+  const { locale, slug } = await params
+  const post = getPost(slug, locale)
+  if (!post) return {}
+  return {
+    title: post.title,
+    description: post.description,
+    openGraph: { title: post.title, description: post.description, type: 'article' },
+  }
+}
+
+export default async function BlogPost({
+  params,
+}: {
+  params: Promise<{ locale: string; slug: string }>
+}) {
+  const { locale, slug } = await params
+  const l = locale as Locale
+  const post = getPost(slug, locale)
+  if (!post) notFound()
+
+  const otherLocale: Locale = l === 'en' ? 'zh-TW' : 'en'
+  const otherExists = hasTranslation(slug, otherLocale)
+  const isZh = l === 'zh-TW'
+
+  return (
+    <article>
+      {/* breadcrumb */}
+      <div className="mb-8 text-xs" style={{ color: 'var(--text-dim)' }}>
+        <Link href="/" locale={l} className="hover:text-[var(--cyan)] transition-colors">~</Link>
+        <span className="mx-1">/</span>
+        <Link href="/blog" locale={l} className="hover:text-[var(--cyan)] transition-colors">blog</Link>
+        <span className="mx-1">/</span>
+        <span>{slug}</span>
+      </div>
+
+      {/* meta */}
+      <header className="mb-8 pb-6 border-b" style={{ borderColor: 'var(--border)' }}>
+        {post.series && (
+          <p className="text-xs mb-2" style={{ color: 'var(--text-dim)' }}>
+            {post.series} · part {post.part}
+          </p>
+        )}
+        <h1 className="text-xl font-semibold leading-snug mb-3" style={{ color: 'var(--cyan)' }}>
+          {post.title}
+        </h1>
+        <div className="flex flex-wrap items-center gap-4 text-xs" style={{ color: 'var(--text-dim)' }}>
+          <span>{post.date}</span>
+          <span>{post.readingTime} {isZh ? '分鐘閱讀' : 'min read'}</span>
+          {post.tags.slice(0, 4).map(tag => (
+            <span key={tag}>#{tag.toLowerCase().replace(/\s+/g, '-')}</span>
+          ))}
+          {otherExists && (
+            <Link
+              href={`/blog/${slug}`}
+              locale={otherLocale}
+              className="px-2 py-0.5 border rounded hover:border-[var(--cyan)] hover:text-[var(--cyan)] transition-colors"
+              style={{ borderColor: 'var(--border)' }}
+            >
+              {otherLocale === 'zh-TW' ? '中文版' : 'English'}
+            </Link>
+          )}
+        </div>
+      </header>
+
+      {/* content */}
+      <div className="prose">
+        <MDXRemote source={post.content} />
+      </div>
+
+      {/* footer nav */}
+      <div className="mt-12 pt-6 border-t text-sm" style={{ borderColor: 'var(--border)' }}>
+        <Link href="/blog" locale={l} style={{ color: 'var(--text-dim)' }} className="hover:text-[var(--cyan)] transition-colors">
+          {isZh ? '← 返回文章列表' : '← back to blog'}
+        </Link>
+      </div>
+    </article>
+  )
+}
