@@ -27,9 +27,8 @@ export default async function LocaleLayout({
   if (!routing.locales.includes(locale as Locale)) notFound()
 
   return (
-    <html lang={locale}>
-      <body>
-        <div className="min-h-screen flex flex-col max-w-3xl mx-auto px-4 sm:px-6">
+    <>
+      <div className="min-h-screen flex flex-col max-w-3xl mx-auto px-4 sm:px-6">
           <header className="py-6 border-b" style={{ borderColor: 'var(--border)' }}>
             <nav className="flex items-center justify-between">
               <Link href="/" locale={locale as Locale} className="text-sm font-semibold" style={{ color: 'var(--cyan)' }}>
@@ -59,7 +58,6 @@ export default async function LocaleLayout({
             <span>built in public · {new Date().getFullYear()}</span>
           </footer>
         </div>
-      </body>
-    </html>
+    </>
   )
 }
