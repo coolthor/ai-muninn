@@ -38,8 +38,14 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             {children}
           </main>
 
-          <footer className="py-6 border-t text-xs" style={{ borderColor: 'var(--border)', color: 'var(--text-dim)' }}>
-            <span style={{ color: 'var(--cyan)' }}>coolthor</span> · built in public · {new Date().getFullYear()}
+          <footer className="py-6 border-t text-xs flex items-center gap-3" style={{ borderColor: 'var(--border)', color: 'var(--text-dim)' }}>
+            <span style={{ color: 'var(--cyan)' }}>coolthor</span>
+            <span>·</span>
+            <a href="https://github.com/coolthor" target="_blank" rel="noopener noreferrer" className="hover:text-[var(--cyan)] transition-colors">github</a>
+            <span>·</span>
+            <a href="https://www.linkedin.com/in/%E5%AD%90%E5%93%B2-%E6%9E%97-65300a9a/" target="_blank" rel="noopener noreferrer" className="hover:text-[var(--cyan)] transition-colors">linkedin</a>
+            <span>·</span>
+            <span>built in public · {new Date().getFullYear()}</span>
           </footer>
         </div>
       </body>
