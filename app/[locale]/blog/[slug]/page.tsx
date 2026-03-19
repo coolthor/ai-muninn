@@ -66,11 +66,11 @@ export async function generateMetadata({
 }
 
 function JsonLd({ post, url, locale }: {
-  post: { title: string; description: string; date: string; tags: string[] }
+  post: { title: string; description: string; date: string; tags: string[]; series?: string; part?: number }
   url: string
   locale: string
 }) {
-  const schema = {
+  const schema: Record<string, unknown> = {
     '@context': 'https://schema.org',
     '@type': 'TechArticle',
     headline: post.title,
@@ -91,6 +91,14 @@ function JsonLd({ post, url, locale }: {
     },
     keywords: post.tags.join(', '),
     mainEntityOfPage: { '@type': 'WebPage', '@id': url },
+    ...(post.series && {
+      isPartOf: {
+        '@type': 'CreativeWorkSeries',
+        name: post.series,
+        url: `${BASE_URL}/${locale}/blog`,
+      },
+      position: post.part,
+    }),
   }
   return (
     <script
@@ -117,7 +125,7 @@ export default async function BlogPost({
 
   return (
     <article>
-      <JsonLd post={post} url={url} locale={l} />
+      <JsonLd post={{ title: post.title, description: post.description, date: post.date, tags: post.tags, series: post.series, part: post.part }} url={url} locale={l} />
 
       {/* breadcrumb */}
       <div className="mb-8 text-xs" style={{ color: 'var(--text-dim)' }}>
