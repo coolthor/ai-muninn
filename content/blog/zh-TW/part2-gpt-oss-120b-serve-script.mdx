@@ -188,6 +188,8 @@ export VLLM_MXFP4_BACKEND=marlin   # ← 正確
 source /home/username/.python-vllm-eugr/bin/activate
 
 # SM121 後端：強制全部走 Marlin（CUTLASS_FP4 在 SM121 是壞的）
+# 注意：使用 eugr/spark-vllm-docker 的話，他們的 patch 讓 CUTLASS 可以跑——
+#       改用 --mxfp4-backend CUTLASS + VLLM_USE_FLASHINFER_MOE_MXFP4_MXFP8=1
 export VLLM_MXFP4_BACKEND=marlin               # ← 不是 VLLM_NVFP4_GEMM_BACKEND
 export VLLM_MARLIN_USE_ATOMIC_ADD=1            # SM121 Marlin atomic race fix
 export FLASHINFER_DISABLE_VERSION_CHECK=1
@@ -205,13 +207,19 @@ exec vllm serve /home/username/models/gpt-oss-120b \
   --served-model-name gpt-oss-120b \
   --host 0.0.0.0 --port 8001 \
   --quantization mxfp4 \
+  --mxfp4-layers moe,qkv,o,lm_head \
   --kv-cache-dtype fp8 \
   --max-model-len 131072 \
   --max-num-batched-tokens 8192 \
   --gpu-memory-utilization 0.90 \
-  --attention-backend TRITON_ATTN \
+  --attention-backend FLASHINFER \
   --moe-backend marlin
 ```
+
+原始 script 的兩個 flag 根據 [eugr/spark-vllm-docker recipe](https://github.com/eugr/spark-vllm-docker) 和 [NVIDIA Developer Forum 的 GB10 benchmark 討論](https://forums.developer.nvidia.com/t/vllm-on-gb10-gpt-oss-120b-mxfp4-slower-than-sglang-llama-cpp-what-s-missing/356651) 做了更新：
+
+- `--attention-backend FLASHINFER` 取代 `TRITON_ATTN`。TRITON 是 fallback 路徑；FLASHINFER 是完整實作，實測更快。
+- `--mxfp4-layers moe,qkv,o,lm_head` 明確量化 projection layers。不加的話，qkv/o/lm_head 跑在 BF16——白白浪費效能。
 
 注意：`--reasoning-parser openai_gptoss` 不在這份 script 裡。除非你需要 reasoning channel 分離，否則不要加。
 

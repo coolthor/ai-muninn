@@ -188,6 +188,8 @@ After this fix: `hi` → normal response. Longer story request → 3,970 chars, 
 source /home/username/.python-vllm-eugr/bin/activate
 
 # SM121 backend: force Marlin everywhere (CUTLASS_FP4 is broken on SM121)
+# NOTE: if using eugr/spark-vllm-docker, their patches make CUTLASS work —
+#       use --mxfp4-backend CUTLASS + VLLM_USE_FLASHINFER_MOE_MXFP4_MXFP8=1 instead
 export VLLM_MXFP4_BACKEND=marlin               # ← NOT VLLM_NVFP4_GEMM_BACKEND
 export VLLM_MARLIN_USE_ATOMIC_ADD=1            # SM121 Marlin atomic race fix
 export FLASHINFER_DISABLE_VERSION_CHECK=1
@@ -205,13 +207,19 @@ exec vllm serve /home/username/models/gpt-oss-120b \
   --served-model-name gpt-oss-120b \
   --host 0.0.0.0 --port 8001 \
   --quantization mxfp4 \
+  --mxfp4-layers moe,qkv,o,lm_head \
   --kv-cache-dtype fp8 \
   --max-model-len 131072 \
   --max-num-batched-tokens 8192 \
   --gpu-memory-utilization 0.90 \
-  --attention-backend TRITON_ATTN \
+  --attention-backend FLASHINFER \
   --moe-backend marlin
 ```
+
+Two flags updated from the original script, based on [eugr/spark-vllm-docker recipe](https://github.com/eugr/spark-vllm-docker) and a [NVIDIA Developer Forum thread](https://forums.developer.nvidia.com/t/vllm-on-gb10-gpt-oss-120b-mxfp4-slower-than-sglang-llama-cpp-what-s-missing/356651) benchmarking gpt-oss-120B on GB10:
+
+- `--attention-backend FLASHINFER` replaces `TRITON_ATTN`. TRITON is a fallback path; FLASHINFER is the complete path and benchmarks faster.
+- `--mxfp4-layers moe,qkv,o,lm_head` explicitly quantizes projection layers. Without it, qkv/o/lm_head run in BF16 — leaving performance on the table.
 
 Note: `--reasoning-parser openai_gptoss` is not included. Remove it unless you specifically need the reasoning channel separated.
 
