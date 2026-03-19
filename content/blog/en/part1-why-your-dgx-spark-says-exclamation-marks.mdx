@@ -7,6 +7,18 @@ series: "Qwen3.5-122B on DGX Spark"
 part: 1
 ---
 
+## Preface
+
+You bought enterprise GPU hardware. You downloaded a model that says it supports the hardware. You ran the standard command. The server started with no errors. The model output `!!!!!!!!!!!!!!` for every single prompt.
+
+This article is a full diagnostic record of what happened and why — four independent bugs, each required to get from garbage output to coherent text.
+
+The analogy: imagine a new car where the engine computer is programmed for the European version of the model, but you bought the North American one. The engine runs. It starts fine. It just doesn't fire on the right fuel map, so performance is subtly wrong in a way that looks like the car works until you actually drive it. Same hardware, different microcode — the software was never told they're not the same.
+
+That's SM121 versus SM120 in one sentence.
+
+---
+
 You got a DGX Spark. You downloaded `Qwen3.5-122B-A12B-NVFP4`. You fired up vLLM:
 
 ```bash
@@ -221,6 +233,21 @@ Three issues worth filing against `vllm-project/vllm`:
 
 ---
 
+## What Was Gained
+
+Even with all four bugs fixed, Qwen3.5-122B lands at ~15 tok/s — not the theoretical W4A4 ceiling. That's a separate story covered in [Part 2](/en/blog/part2-qwen-122b-14-toks-gdn-kernel-gap). But the work here wasn't wasted.
+
+**Confirmed:**
+- The row-identical failure signature is a reliable diagnostic for CUTLASS FP4 on SM121. Not zeros, not random noise — same value repeated across every column in a row. If you see this, you know exactly what to look for.
+- All four bugs are independent. Each one needs to be fixed separately. Fixing three of four doesn't give you 75% working output — it gives you garbage with a different root cause.
+- `SupportsQuant` is a non-obvious requirement for hybrid Qwen architectures. The GDN layers look like any other layer in the model's config — there's no warning when they get quantized incorrectly.
+
+**Established:**
+- SM121 (GB10, DGX Spark) and SM120 (GB200) are not interchangeable software targets, despite both being labeled "Blackwell SM12x." The difference is invisible to vLLM's capability detection without explicit patches.
+- `VLLM_NVFP4_GEMM_BACKEND` (wrong) vs `VLLM_MXFP4_BACKEND` (correct) — one is silently ignored. Always confirm with the startup log.
+
+---
+
 ## TL;DR
 
 If you have a DGX Spark and your NVFP4 model only outputs `!!!!!`:
@@ -235,4 +262,4 @@ You'll land at ~15 tok/s via Marlin W4A16. Not the theoretical W4A4 throughput, 
 
 ---
 
-*Part 2: [gpt-oss-120B at 59 tok/s: 6 Pitfalls and a Working Serve Script](/blog/part2-gpt-oss-120b-serve-script)*
+*Next in this series: [Qwen3.5-122B Runs. But at 14 tok/s.](/en/blog/part2-qwen-122b-14-toks-gdn-kernel-gap)*

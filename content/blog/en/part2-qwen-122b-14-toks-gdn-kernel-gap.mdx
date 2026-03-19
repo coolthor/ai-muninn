@@ -7,64 +7,80 @@ series: "Qwen3.5-122B on DGX Spark"
 part: 2
 ---
 
-[Part 1](/en/blog/part1-why-your-dgx-spark-says-exclamation-marks) was about getting Qwen3.5-122B to produce anything other than `!!!!!`. Four bugs, SM121-specific, all fixable. After patching them, the model boots clean and generates coherent output.
+## Preface
 
-Then you check the speed.
+This article is about a result that looks like failure but isn't.
 
-**14 tok/s.**
+After patching four SM121-specific bugs ([Part 1](/en/blog/part1-why-your-dgx-spark-says-exclamation-marks)), Qwen3.5-122B runs correctly on a DGX Spark. The output is coherent. The model works. But the speed settles at 14 tok/s — roughly a quarter of what gpt-oss-120B achieves on the same hardware.
 
-This post is about why that number is where it is, and why there's nothing to tune.
+No amount of tuning moves it. That's the story.
+
+The analogy: imagine a 12-lane highway where six lanes are freshly paved and six are still dirt. Traffic flows — it's not broken — but half the lanes are running at construction-zone speed. The hardware is fine. The pavement (software kernel support) for half the architecture isn't there yet. You can't fix a missing road by adjusting your driving.
 
 ---
 
 ## What I Wanted
 
-The goal was simple: use Qwen3.5-122B-A12B-NVFP4 as the primary model on the DGX Spark. 122B parameters, NVFP4 quantization, 128 GB unified memory — on paper, the GB10 should handle this. The arithmetic works out: 122B × 4-bit ≈ 61 GB, leaving room for KV cache at the 128 GB ceiling.
+The goal was to use Qwen3.5-122B-A12B-NVFP4 as the primary model on the DGX Spark. 122B parameters, NVFP4 quantization, 128 GB unified memory — the math works out: 122B × 4-bit ≈ 61 GB, leaving room for KV cache. With gpt-oss-120B hitting [59 tok/s](/en/blog/part2-gpt-oss-120b-serve-script) on the same box, the expectation for 122B NVFP4 was in the same range. Not identical — larger model, different architecture — but comparable.
 
-With gpt-oss-120B hitting [59 tok/s](/en/blog/part2-gpt-oss-120b-serve-script), the expectation for 122B NVFP4 was in the same range. Maybe a bit slower — larger model, slightly different architecture. Not 14 tok/s.
+14 tok/s was not the expectation.
 
 ---
 
 ## What I Tried
 
-After the Part 1 fixes (SM121 PTX path, Marlin thread race, SupportsQuant, CUTLASS_FP4 exclusion), the model loads and runs. The output is correct. The first few tokens arrive fast. Then the throughput number stabilizes.
+After the Part 1 fixes (SM121 PTX path, Marlin thread race, SupportsQuant, CUTLASS_FP4 exclusion), the model loads and generates correct output. The first tokens arrive fast. Then throughput stabilizes at 14 tok/s.
 
-Tried the obvious things:
+Everything obvious was tried:
 
 - **`--enforce-eager` removed** — wasn't there, not the issue
-- **KV cache dtype** — fp8, same as gpt-oss, no difference
-- **`--max-num-batched-tokens`** — tuned up and down, marginal effect
-- **`VLLM_MXFP4_BACKEND=marlin`** — already set
+- **KV cache dtype** — fp8, same as gpt-oss, no change
+- **`--max-num-batched-tokens`** — tuned up and down, marginal effect only
+- **`VLLM_MXFP4_BACKEND=marlin`** — already set and confirmed in startup log
 - **`--moe-backend marlin`** — already set
 - **GPU memory utilization** — 0.90, standard
 
-Nothing moved the number meaningfully. 14 tok/s stayed 14 tok/s regardless of what was tuned.
+14 tok/s held steady regardless. This is when "tuning problem" becomes "architecture problem."
 
 ---
 
 ## Where the Problem Actually Is
 
-Qwen3.5-122B-A12B is a **hybrid architecture**. It is not a standard Transformer. It combines two types of layers:
+Qwen3.5-122B-A12B is a **hybrid architecture** — not a standard Transformer. It combines two types of layers:
 
-- **Standard attention layers** — normal Transformer MHA/MLA, Marlin handles these fine
+- **Standard attention layers** — normal Transformer MHA/MLA, Marlin handles these with a specialized kernel
 - **GDN (Gated Delta Network) layers** — SSM-style recurrent layers, must stay in BF16
 
-The GDN layers are the issue. Marlin has specialized kernels for standard linear layers and MoE expert GEMMs. It does **not** have a specialized kernel for GDN. Every GDN GEMM falls back to a generic compute path.
+Marlin has fast, optimized kernels for standard linear layers and MoE expert GEMMs. It does **not** have a specialized kernel for GDN. Every GDN GEMM falls back to a generic compute path — functional, but slow.
 
-On the GB10 (273 GB/s memory bandwidth), the generic fallback is slow enough that it dominates decode time. The attention layers run at normal speed; the GDN layers crawl. The throughput you observe is the harmonic mean of "fast Marlin path" and "slow generic path" — and 14 tok/s is what that average looks like with 122B parameters.
+This is also why the `SupportsQuant` fix from Part 1 is non-negotiable: without it, vLLM quantizes the GDN layers to NVFP4, which corrupts their recurrent hidden state and breaks the model entirely. The fix keeps GDN in BF16 — correct behavior, but it means GDN runs on the unoptimized path.
 
-This is why the `SupportsQuant` fix from Part 1 matters: without it, the GDN layers get quantized to NVFP4, their recurrent state corrupts, and the output becomes garbage. The fix keeps them in BF16 — which is correct, but it means GDN runs on the non-specialized path.
+On GB10's 273 GB/s bandwidth, the math is straightforward: moving 61 GB of weights takes ~0.22 seconds per decode step. The theoretical ceiling for 122B NVFP4 on GB10 is around 30 tok/s. To reach it, every layer needs an efficient kernel. When half the architecture (GDN) falls back to generic, the throughput averages down toward half the ceiling. 14 tok/s is where that average lands.
 
-**The bandwidth math:** At 273 GB/s, moving 61 GB of weights once takes ~0.22 seconds. Theoretical decode ceiling for 122B NVFP4 on GB10 is around ~30 tok/s. To hit that, every layer needs an efficient kernel. When half the architecture falls back to a generic path, you get roughly half the ceiling — which is close to where 14 tok/s lands.
+---
+
+## What Was Gained
+
+The result is 14 tok/s, not the ~30 tok/s ceiling. But the work wasn't wasted.
+
+**Confirmed:**
+- The SM121 fix stack from Part 1 works correctly for Qwen3.5-122B. Output is coherent and accurate.
+- `SupportsQuant` is required — without it, GDN layers get quantized and output is garbage. This is a non-obvious bug that would cost hours to diagnose from scratch.
+- The theoretical decode ceiling on GB10 for 122B NVFP4 is ~30 tok/s. When Marlin adds GDN kernel support, this is the target to validate against.
+
+**Established:**
+- 14 tok/s is the current floor, not a bug. There is nothing misconfigured.
+- The bottleneck is a software gap (missing Marlin GDN kernel), not a hardware limitation.
+- GB10 has sufficient compute for Qwen3.5-122B. The problem is squarely in the software stack.
+
+**The diagnostic pattern:** if Qwen3.5-122B runs slowly on SM121 and you've already set `VLLM_MXFP4_BACKEND=marlin` and `--moe-backend marlin`, confirmed startup logs show `Using backend: marlin`, and output is correct — you've hit the kernel gap. Stop tuning. The number will move when the kernel arrives.
 
 ---
 
 ## Conclusion
 
-Qwen3.5-122B runs correctly on SM121 after the Part 1 fixes. Output is coherent. The model works.
+Qwen3.5-122B runs correctly on DGX Spark after the Part 1 patches. 14 tok/s is not a failure mode — it's the current software ceiling given what Marlin supports today.
 
-14 tok/s is not a configuration problem. It is a software gap: Marlin does not yet have a specialized kernel for GDN layers. When that kernel lands — either in Marlin or in a future vLLM/Triton path — the throughput should recover toward the theoretical ~30 tok/s ceiling.
+For interactive use on GB10 right now: gpt-oss-120B at 59 tok/s is the working choice. Qwen3.5-122B at 14 tok/s is usable for offline batch workloads where latency matters less.
 
-For now, if you need interactive speed on a DGX Spark: use gpt-oss-120B at 59 tok/s. Qwen3.5-122B at 14 tok/s is correct but not fast enough for interactive use.
-
-If you came here because your Qwen is slow: you're not missing a flag. You've already found the ceiling.
+If you found this because your Qwen is running at 14 tok/s: you haven't missed a flag. You've found the ceiling. Come back when the Marlin GDN kernel lands.
