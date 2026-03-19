@@ -1,5 +1,5 @@
 ---
-title: "gpt-oss-120B at 59 tok/s: 6 Pitfalls and a Working Serve Script"
+title: "[vLLM] gpt-oss-120B at 59 tok/s: 6 Pitfalls and a Working Serve Script"
 description: "Getting Microsoft's gpt-oss-120B running on a DGX Spark (SM121, GB10) with vLLM. Six bugs, one wrong environment variable that silently did nothing, a tiktoken file hidden behind a SHA1 hash, and a repetition loop that took longer to find than all the rest combined."
 date: "2026-03-19"
 tags: ["DGX Spark", "SM121", "vLLM", "gpt-oss", "MXFP4", "Blackwell", "LLM Serving"]
@@ -7,7 +7,17 @@ series: "gpt-oss-120B on DGX Spark"
 part: 1
 ---
 
-[Part 1](/en/blog/part1-why-your-dgx-spark-says-exclamation-marks) covered the four bugs that cause any NVFP4 model to output `!!!!!` on SM121. Fix those first. This post picks up after Qwen3.5-122B is running — and covers what happens when you try to serve gpt-oss-120B, a completely different model format with its own set of landmines.
+## Preface
+
+Same hardware, different model, different problem set. After getting [SM121 NVFP4 working](/en/blog/part1-why-your-dgx-spark-says-exclamation-marks), the natural next question is: what else can this machine run? gpt-oss-120B is Microsoft's open-source 120B model — a different quantization format, a different tokenizer, and its own category of silent failures.
+
+This article is the full debugging record: six bugs between a blank shell and a working serve script, with a working script at the end.
+
+The analogy: it's like moving into a new apartment where everything looks standard but nothing quite fits — the outlets are a different standard, the fridge runs on the wrong voltage, and the building's water pressure affects the pipes in ways no one warned you about. Each problem is fixable. None of them are obvious until you hit them.
+
+---
+
+[Part 1](/en/blog/part1-why-your-dgx-spark-says-exclamation-marks) covered the four bugs that cause any NVFP4 model to output `!!!!!` on SM121. Fix those first. This post picks up after that — and covers what happens when you try to serve gpt-oss-120B, a completely different model format with its own set of landmines.
 
 Target: **59 tok/s** at 131K context on a single GB10 (128 GB unified memory). Actual path to get there: six separate bugs, one of which took longer to find than all the others combined.
 
@@ -214,6 +224,24 @@ Note: `--reasoning-parser openai_gptoss` is not included. Remove it unless you s
 | CUDAGraph | ✅ captured |
 
 The arithmetic: GB10 has 273 GB/s memory bandwidth. 120B × 4-bit ≈ 60 GB. At 273 GB/s, theoretical decode is ~4.5 matrix loads/s, meaning ~60 tok/s. The measured 59 tok/s matches the bandwidth ceiling almost exactly. This is what working looks like on GB10.
+
+---
+
+## What Was Gained
+
+All six bugs were fixed. 59 tok/s is the result — close to the bandwidth ceiling, which means the stack is working correctly. But the lessons are worth stating explicitly, because each one is non-obvious and will recur.
+
+**The bugs that cost the most time:**
+- **Bug 6 (wrong env var)** was the hardest because it was invisible. No error, no warning. The startup log is the only signal. Always read the startup log before debugging model behavior.
+- **Bug 5 (harmony system message)** has no workaround via config — it requires a source patch. Any client sending system prompts will hit this silently if unpatched.
+
+**Transferable diagnostics:**
+- Repetition loops on gpt-oss → check startup log for `Auto-selected: CUTLASS_FP4`. If present, your Marlin env var isn't being read.
+- `content: null` in responses → either reasoning parser is routing output to the wrong field, or the model is generating into reasoning tokens. Check the parser flag first.
+- Tokenizer download failures on internal networks → tiktoken uses SHA1-hashed filenames for its cache. There is no documentation for this. The workaround is pre-downloading and pointing `TIKTOKEN_RS_CACHE_DIR` at the directory.
+
+**The pattern that applies everywhere:**
+`--enforce-eager` should never be in a production serve script. If you inherited a script and the speed is wrong, check for this flag first. It's an easy 2× regression to introduce and forget.
 
 ---
 
