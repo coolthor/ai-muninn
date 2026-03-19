@@ -29,6 +29,8 @@ part: 1
 
 支援 SM121 的 vLLM fork 是 [eugr 的分支](https://github.com/eugr/vllm)，把 MXFP4 支援 patch 成能在 GB10 上跑。
 
+> **注意：** 這篇文章寫完之後，eugr 發布了 [spark-vllm-docker](https://github.com/eugr/spark-vllm-docker)——一個 Docker 化的安裝方式，有預編譯的 nightly wheel、model recipe、以及多機支援。裡面有 `run-recipe.sh openai-gpt-oss-120b` 可以自動處理大部分設定。如果你要手動 patch stock vLLM，下面的步驟還是適用；但大多數情況下，Docker repo 是更簡單的路徑。
+
 ---
 
 ## 坑 1：Import 路徑不對
@@ -146,6 +148,8 @@ The user is asking about... The user is asking about... The user is asking about
 Temperature、top_p、repetition_penalty——全沒用。迴圈必勝。
 
 已知原因：在 SM121 上，CUTLASS_FP4 會產生 first-token logit 錯誤（參見[第一篇](/zh-TW/blog/part1-why-your-dgx-spark-says-exclamation-marks)和 [vLLM issue #37030](https://github.com/vllm-project/vllm/issues/37030)）。修法是強制所有 MXFP4 GEMM 走 Marlin。
+
+> **注意：** 這個修法適用於 stock vLLM。[spark-vllm-docker](https://github.com/eugr/spark-vllm-docker) 使用另一個有不同 patch 的 vLLM build，設定 `--mxfp4-backend CUTLASS` 加上 `VLLM_USE_FLASHINFER_MOE_MXFP4_MXFP8=1`——他們的 patch 讓 CUTLASS 能在 SM121 上正確運作。如果你用的是那個 Docker image，不需要 Marlin workaround。如果你用的是 stock vLLM 或手動打 patch，則需要。
 
 Serve script 裡已經有這個了：
 
