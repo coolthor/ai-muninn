@@ -21,7 +21,7 @@ The analogy: imagine a 12-lane highway where six lanes are freshly paved and six
 
 ## What I Wanted
 
-The goal was to use Qwen3.5-122B-A12B-NVFP4 as the primary model on the DGX Spark. 122B parameters, NVFP4 quantization, 128 GB unified memory — the math works out: 122B × 4-bit ≈ 61 GB, leaving room for KV cache. With gpt-oss-120B hitting [59 tok/s](/en/blog/part2-gpt-oss-120b-serve-script) on the same box, the expectation for 122B NVFP4 was in the same range. Not identical — larger model, different architecture — but comparable.
+The goal was to use [Qwen3.5-122B-A12B-NVFP4](https://huggingface.co/Qwen/Qwen3.5-122B-A12B-NVFP4) as the primary model on the DGX Spark. 122B parameters, NVFP4 quantization, 128 GB unified memory — the math works out: 122B × 4-bit ≈ 61 GB, leaving room for KV cache. With gpt-oss-120B hitting [59 tok/s](/en/blog/part2-gpt-oss-120b-serve-script) on the same box, the expectation for 122B NVFP4 was in the same range. Not identical — larger model, different architecture — but comparable.
 
 14 tok/s was not the expectation.
 

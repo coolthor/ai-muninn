@@ -72,7 +72,7 @@ The GX10 is on an internal network. Download fails silently or with a cryptic er
 HarmonyError: error downloading or loading vocab file
 ```
 
-The workaround requires reading the tiktoken-rs source code. tiktoken caches vocab files using their **SHA1 hash as the filename**. This is not documented anywhere. The hash for `o200k_base.tiktoken` is:
+The workaround requires reading the [tiktoken source code](https://github.com/openai/tiktoken). tiktoken caches vocab files using their **SHA1 hash as the filename**. This is not documented anywhere. The hash for `o200k_base.tiktoken` is:
 
 ```
 fb374d419588a4632f3f557e76b4b70aebbca790

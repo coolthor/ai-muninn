@@ -72,7 +72,7 @@ GX10 在內網。下載失敗，要麼靜默失敗，要麼報一個不直觀的
 HarmonyError: error downloading or loading vocab file
 ```
 
-繞過這個問題需要翻 tiktoken-rs 原始碼。tiktoken 用檔案的 **SHA1 hash 當作快取檔名**。這個機制沒有任何文件。`o200k_base.tiktoken` 的 hash 是：
+繞過這個問題需要翻 [tiktoken 原始碼](https://github.com/openai/tiktoken)。tiktoken 用檔案的 **SHA1 hash 當作快取檔名**。這個機制沒有任何文件。`o200k_base.tiktoken` 的 hash 是：
 
 ```
 fb374d419588a4632f3f557e76b4b70aebbca790

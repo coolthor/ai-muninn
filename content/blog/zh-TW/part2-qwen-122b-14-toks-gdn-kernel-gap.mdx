@@ -21,7 +21,7 @@ part: 1
 
 ## 我想做什麼
 
-目標很單純：用 Qwen3.5-122B-A12B-NVFP4 當 DGX Spark 的主力模型。122B 參數，NVFP4 量化，128 GB 統一記憶體——算法沒問題：122B × 4-bit ≈ 61 GB，剩下空間給 KV cache。gpt-oss-120B 在同一台機器上能跑 [59 tok/s](/zh-TW/blog/part2-gpt-oss-120b-serve-script)，所以對 122B NVFP4 的預期也在這個量級。也許稍慢一點——模型更大，架構不同——但應該在同一個數量級。
+目標很單純：用 [Qwen3.5-122B-A12B-NVFP4](https://huggingface.co/Qwen/Qwen3.5-122B-A12B-NVFP4) 當 DGX Spark 的主力模型。122B 參數，NVFP4 量化，128 GB 統一記憶體——算法沒問題：122B × 4-bit ≈ 61 GB，剩下空間給 KV cache。gpt-oss-120B 在同一台機器上能跑 [59 tok/s](/zh-TW/blog/part2-gpt-oss-120b-serve-script)，所以對 122B NVFP4 的預期也在這個量級。也許稍慢一點——模型更大，架構不同——但應該在同一個數量級。
 
 14 tok/s 不在預期裡。
 
