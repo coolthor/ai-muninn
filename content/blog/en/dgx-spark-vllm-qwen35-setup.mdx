@@ -1,0 +1,298 @@
+---
+title: "[vLLM] Qwen3.5-35B at 47 tok/s on a Desktop: Migrating from Ollama to vLLM"
+description: "Moving from Ollama to vLLM on a DGX Spark (GB10, 128GB). Prefix caching drops TTFT from seconds to 0.12s. Six gotchas: thinking mode, memory fights, docker restart, warmup, SSM + chunked prefill, and parameter coupling."
+date: "2026-03-14"
+tags: ["DGX Spark", "GB10", "vLLM", "Ollama", "Qwen3.5", "Docker", "Blackwell", "AI Agent"]
+series: "DGX Spark"
+part: 3
+---
+
+## Preface
+
+Switching from hand tools to a conveyor belt doesn't change what you're making — it changes how many you make per hour. The output quality is the same. The economics are different.
+
+That's the migration from Ollama to vLLM in one sentence. Same model, same hardware, different throughput — and a qualitatively different TTFT story for always-on agents.
+
+This is a record of how that migration went on an ASUS Ascent GX10 (NVIDIA GB10, 128GB unified memory). The [benchmark that preceded this](/en/blog/dgx-spark-ollama-benchmark-8-models) selected the model; this article covers what it takes to actually run it under vLLM. Six gotchas. None of them are obvious. One of them causes a 9x throughput regression that I did not anticipate.
+
+---
+
+## Why Move from Ollama
+
+The core problem is TTFT — time to first token. For an interactive chat session, a 2-3 second TTFT is annoying. For an always-on agent that calls a model dozens of times per hour, it compounds into real latency.
+
+The specific mechanism: yui (my agent) runs with a long system prompt. Every conversation turn, the system prompt goes through the model's prefill phase again. With Ollama, there's no prefix cache — the model re-computes attention over the full system prompt on every call. With vLLM's prefix caching enabled, a cached system prompt prefix is retrieved from KV cache instead of recomputed. The prefill phase for repeated context drops to near zero.
+
+The numbers: **Ollama TTFT for a warm model with a long system prompt: 2-4 seconds. vLLM TTFT with prefix cache hit: 0.12 seconds.** At the scale of an always-on agent, that difference is structural, not cosmetic.
+
+| Criterion | Ollama | vLLM |
+|---|---|---|
+| Setup | Single binary, one command | Docker, more flags |
+| Prefix caching | No | Yes — KV cache reuse |
+| TTFT (cold prompt) | 2-4s | 0.12s (cache hit) |
+| Config tolerance | Forgiving | Strict — crashes on bad flags |
+| GB10 nightly support | ✅ | Requires `cu130-nightly` image |
+| SSM model support | ✅ | ✅ (but avoid `--enable-chunked-prefill`) |
+
+The tradeoff is real: vLLM's configuration is less forgiving. You will hit startup crashes on invalid flag combinations. The gotchas section exists because I hit them.
+
+---
+
+## The Setup
+
+### Download the Model
+
+[Qwen/Qwen3.5-35B-A3B-FP8](https://huggingface.co/Qwen/Qwen3.5-35B-A3B-FP8) — 35GB, 14 safetensors shards.
+
+```bash
+HF_HUB_ENABLE_HF_TRANSFER=1 hf download Qwen/Qwen3.5-35B-A3B-FP8 \
+  --local-dir ~/models/qwen35-35b-hf
+```
+
+`HF_HUB_ENABLE_HF_TRANSFER=1` enables the Rust-based transfer backend — meaningfully faster for large multi-shard downloads. The `hf` CLI is from `huggingface_hub[cli]`.
+
+### Docker Image Note
+
+Use `vllm/vllm-openai:cu130-nightly`. Not the stable image.
+
+The stable vLLM image does not support Qwen3.5-35B on GB10. It either fails silently or errors out with missing kernel support. There is no helpful error message that tells you the stable image is the problem. If you're debugging strange startup failures, try nightly first.
+
+### Working Docker Command
+
+```bash
+docker run -d --name qwen35 --restart unless-stopped \
+  --gpus all --ipc host --shm-size 64gb -p 8000:8000 \
+  -v /home/coolthor/models/qwen35-35b-hf:/models/qwen35 \
+  vllm/vllm-openai:cu130-nightly \
+  --model /models/qwen35 \
+  --served-model-name qwen3.5-35b \
+  --max-model-len 131072 \          # 131K context
+  --gpu-memory-utilization 0.85 \   # leaves headroom; ~62GB KV cache
+  --enable-prefix-caching \         # the main reason for the migration
+  --reasoning-parser qwen3 \        # routes <think> tokens correctly
+  --enable-auto-tool-choice \       # enables tool/function calling
+  --tool-call-parser qwen3_coder \  # parser for qwen3 tool call format
+  --kv-cache-dtype fp8 \            # fp8 KV cache — more tokens per GB
+  --max-num-seqs 8 \                # coupled with max-num-batched-tokens (see Gotcha 6)
+  --max-num-batched-tokens 4096     # must be >= block_size for SSM (see Gotcha 6)
+```
+
+**Startup timeline:**
+- Model load (14 shards): ~96 seconds
+- `torch.compile` first run: ~25 seconds; cached runs: ~7 seconds
+- FlashInfer autotuning: ~15 seconds
+- Total cold start: 2-3 minutes
+
+This is normal. The container is ready when you see `vLLM engine started` in the logs.
+
+---
+
+## Gotcha 1: The Nightly Image Requirement
+
+Stable vLLM doesn't work on GB10 with Qwen3.5.
+
+The failure modes vary — sometimes a missing CUDA kernel, sometimes a silent quantization fallback, sometimes a startup crash. There isn't one clear error message that identifies the root cause as "wrong image." You just get failures that look like model or config problems.
+
+Use `cu130-nightly`. Pin to a specific digest if you need reproducibility:
+
+```bash
+docker pull vllm/vllm-openai:cu130-nightly
+```
+
+The nightly images for cu130 have the Blackwell kernel support that stable doesn't yet include at the time of writing.
+
+---
+
+## Gotcha 2: Thinking Mode Is Trained In
+
+Qwen3.5 defaults to thinking mode. This means the model generates `<think>...</think>` tokens before its actual response — and it does this because it was trained that way, not because of a system prompt or template setting.
+
+The failure mode: you set up vLLM, make a test request, and get back `content: null` with a populated `reasoning_content` field. Or you get a response that's 80% thinking tokens and 20% actual output, and your client only reads `content`.
+
+The jinja template approach doesn't fully work. Even if you patch the chat template to suppress thinking, the model generates think tokens anyway because the training pushes it there.
+
+**The only reliable fix: pass `enable_thinking: false` in every request.**
+
+```bash
+curl http://<your-gx10-ip>:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "qwen3.5-35b",
+    "messages": [{"role": "user", "content": "Hello"}],
+    "chat_template_kwargs": {"enable_thinking": false}
+  }'
+```
+
+The `chat_template_kwargs` field is passed per-request to vLLM's template rendering. This is the correct control surface.
+
+**Secondary trap:** if you set `max_tokens` too small and thinking mode is active, the model burns its token budget generating think tokens and returns `content: null` with `finish_reason: length`. The response technically succeeded — it just produced nothing visible. Always set `enable_thinking: false` unless you specifically need the reasoning chain.
+
+---
+
+## Gotcha 3: Unified Memory Has No Partitions
+
+GB10 has unified memory — the CPU and GPU share the same 128GB pool. There is no separate VRAM allocation. This means Ollama and vLLM compete for the same memory space.
+
+The failure mode: you start vLLM while Ollama has a model loaded, and vLLM OOMs during startup. Or vLLM starts but has less KV cache than expected because Ollama is holding 20GB for a model that KEEP_ALIVE hasn't expired yet.
+
+Ollama's default `KEEP_ALIVE` is 2 hours. If you loaded a model recently, it's likely still in memory.
+
+**Before starting vLLM:**
+
+```bash
+# Check what Ollama has loaded
+curl -s http://localhost:11434/api/ps
+
+# Unload a specific model
+curl -s -X POST http://localhost:11434/api/generate \
+  -d '{"model": "MODEL_NAME", "keep_alive": 0}'
+```
+
+Verify the output of `api/ps` shows no models before starting the container.
+
+**`nvidia-smi` is not useful here.** On unified memory, `nvidia-smi --query-gpu=memory.used` always returns `N/A`. Use vLLM's metrics endpoint instead:
+
+```bash
+curl -s http://localhost:8000/metrics | grep kv_cache
+```
+
+---
+
+## Gotcha 4: `docker restart` Isn't a Restart
+
+`docker restart qwen35` stops and starts the container, but the CUDA context from the previous run lingers in the driver. If Ollama loaded a model between your last vLLM shutdown and this restart, vLLM starts into an already-occupied memory space and OOMs.
+
+The correct restart sequence:
+
+```bash
+# 1. Stop the container
+docker stop qwen35
+
+# 2. Verify Ollama has nothing loaded
+curl -s http://localhost:11434/api/ps
+
+# 3. If anything is loaded, unload it
+curl -s -X POST http://localhost:11434/api/generate \
+  -d '{"model": "MODEL_NAME", "keep_alive": 0}'
+
+# 4. Start the container
+docker start qwen35
+
+# 5. Follow logs until ready
+docker logs -f qwen35
+```
+
+Step 2 and 3 are the ones people skip. Don't skip them.
+
+---
+
+## Gotcha 5: Don't Add `--enable-chunked-prefill`
+
+This was the most expensive gotcha. The number: adding `--enable-chunked-prefill` drops throughput from ~50 tok/s to 5.7 tok/s. That's a 9x regression.
+
+The reason: Qwen3.5-35B-A3B is an SSM+MoE hybrid model — it uses a Mamba-style state space architecture alongside the MoE layers. Chunked prefill is an optimization for pure Transformer models. It works by splitting the prefill phase into chunks and interleaving them with decode, which improves GPU utilization for Transformers by preventing the prefill from stalling ongoing decode requests.
+
+For SSM models, chunked prefill requires passing the recurrent hidden state across chunk boundaries. Each boundary adds overhead proportional to the hidden state size. On a long sequence, the number of boundaries multiplies that overhead. The "optimization" turns into a throughput cliff.
+
+**Never use `--enable-chunked-prefill` with SSM or hybrid SSM+MoE models.** This includes Qwen3.5-35B-A3B and any other model with Mamba layers. The flag is beneficial for dense Transformer models; it's harmful for anything with recurrent state.
+
+---
+
+## Gotcha 6: Parameter Coupling
+
+`--max-num-seqs` and `--max-num-batched-tokens` are not independent flags. Setting one without the other in a way that creates an inconsistent configuration causes a startup crash.
+
+The specific mechanism: Qwen3.5-35B with SSM layers has a Mamba cache that requires block alignment. With `--max-model-len 131072`, vLLM computes `block_size = ceil(131072 / X) = 2096`. The default `max_num_batched_tokens` is 2048 — which is less than 2096. This creates a validation error on startup:
+
+```
+pydantic.error_wrappers.ValidationError: max_num_batched_tokens (2048) must be >= block_size (2096)
+```
+
+The fix: always set `--max-num-batched-tokens 4096` when using `--max-num-seqs 8` with a 131K context SSM model. The working values are in the docker command above.
+
+If you change `--max-model-len`, recalculate. The formula: `block_size = ceil(max_model_len / some_divisor)`, and `max_num_batched_tokens` must be >= that value. When in doubt, set `max_num_batched_tokens` higher rather than lower — it's a ceiling on batch size, not a fixed allocation.
+
+---
+
+## Connecting Your Agent
+
+vLLM exposes an OpenAI-compatible API on port 8000. Connecting an agent is straightforward — the only required extra step is the per-request `chat_template_kwargs`.
+
+openclaw config:
+
+```json
+{
+  "providers": {
+    "vllm": {
+      "baseUrl": "http://<your-gx10-ip>:8000/v1",
+      "apiKey": "none",
+      "api": "openai-completions"
+    }
+  }
+}
+```
+
+Every request from the agent must include:
+
+```json
+"chat_template_kwargs": {"enable_thinking": false}
+```
+
+This cannot be set as a default at the server level for Qwen3.5. It must come per-request.
+
+**Verification:**
+
+```bash
+# Check server health
+curl -s http://<your-gx10-ip>:8000/health
+
+# List loaded models
+curl -s http://<your-gx10-ip>:8000/v1/models
+```
+
+A healthy server returns `{"status": "ok"}` from the health endpoint.
+
+---
+
+## What Was Gained
+
+| Metric | Value |
+|---|---|
+| Decode speed (warm) | 47 tok/s |
+| TTFT (prefix cache hit) | 0.12s |
+| TTFT (cold, long system prompt) | 2-4s (same as Ollama) |
+| KV cache (fp8, 0.85 util) | ~62 GiB / ~820K tokens |
+| Max context | 131K tokens |
+| Cold start | 2-3 minutes |
+
+The TTFT improvement from prefix caching is the primary reason to make this migration. For yui — an agent that runs with a fixed system prompt across all conversations — the prefix cache hits on every call after the first. The 2-4 second Ollama TTFT drops to 0.12 seconds. At the call volumes an always-on agent generates, this is a different category of responsiveness.
+
+The Gotcha 5 discovery (chunked prefill + SSM = 9x slowdown) is not documented clearly anywhere in vLLM's docs at the time of writing. It's the kind of thing you hit if you're trying to tune throughput and you assume all prefill flags are safe to experiment with. They're not. SSM architecture breaks the assumptions that chunked prefill is built on.
+
+The setup is more operationally involved than Ollama — you have to manage Docker, watch for memory conflicts, and get the parameter coupling right. The TTFT win for agent workloads makes it worthwhile.
+
+---
+
+## The Working Command
+
+```bash
+docker run -d --name qwen35 --restart unless-stopped \
+  --gpus all --ipc host --shm-size 64gb -p 8000:8000 \
+  -v /home/coolthor/models/qwen35-35b-hf:/models/qwen35 \
+  vllm/vllm-openai:cu130-nightly \
+  --model /models/qwen35 \
+  --served-model-name qwen3.5-35b \
+  --max-model-len 131072 \
+  --gpu-memory-utilization 0.85 \
+  --enable-prefix-caching \
+  --reasoning-parser qwen3 \
+  --enable-auto-tool-choice \
+  --tool-call-parser qwen3_coder \
+  --kv-cache-dtype fp8 \
+  --max-num-seqs 8 \
+  --max-num-batched-tokens 4096
+```
+
+---
+
+*Also in this series: [Why Your DGX Spark Only Says "!!!!!": Debugging NVFP4 on SM121](/en/blog/part1-why-your-dgx-spark-says-exclamation-marks) · [8 Models on DGX Spark: Finding the Best Stack for AI Agents](/en/blog/dgx-spark-ollama-benchmark-8-models) · [gpt-oss-120B at 59 tok/s: 6 Pitfalls and a Working Serve Script](/en/blog/part2-gpt-oss-120b-serve-script)*

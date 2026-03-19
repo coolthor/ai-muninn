@@ -1,0 +1,188 @@
+---
+title: "[AI Agent] Zero API Cost: Running OpenClaw on DGX Spark + Mac Mini"
+description: "Full stack local AI agent: Mac Mini M4 as the always-on gateway, GX10 for inference, Telegram as the UI. No subscriptions, no cloud APIs. Six deployment lessons from the trenches."
+date: "2026-03-03"
+tags: ["OpenClaw", "AI Agent", "DGX Spark", "Mac Mini", "Self-Hosted", "Ollama", "SearXNG"]
+series: "AI Agent"
+part: 1
+---
+
+## Preface
+
+OpenClaw's mascot is a lobster. The project's ethos is that you raise it at home — feed it local compute, give it tools, and it becomes your personal agent. The mascot is apt: lobsters are slow to mature, particular about their environment, and surprisingly productive once they've settled in.
+
+My Mac Mini M4 arrived around the same time I was wrapping up my iOS app. I had the hardware. I had the time. I went in expecting a weekend project. It took longer than a weekend.
+
+This is the deployment record: what the architecture looks like, and six lessons I'd want to have read before starting. The inference backend migration (Ollama → vLLM) is covered in a separate article — see [Migrating Qwen3.5 from Ollama to vLLM on DGX Spark](/en/blog/dgx-spark-vllm-qwen35-setup). This post covers the agent layer: OpenClaw, the gateway, the search stack, and what it took to make yui (my agent) actually useful.
+
+---
+
+## The Architecture
+
+The split is straightforward: Mac Mini M4 runs the gateway. GX10 runs inference. Telegram is the interface.
+
+```
+You
+ │
+ ▼ Telegram
+Mac Mini M4 (always-on)
+ │  OpenClaw gateway (launchd agent)
+ │  SearXNG (Orbstack Docker)
+ │
+ ▼ Tailscale
+ASUS GX10 (DGX Spark)
+ │  Ollama / vLLM
+ │  128GB unified memory
+ ▼
+Model (Qwen3.5, GLM4, etc.)
+```
+
+The Mac Mini runs 24/7 at low power draw. It handles routing, tool calls, search, and memory. The GX10 is GPU-heavy and power-hungry — it handles only inference, and only when called. Tailscale connects them over a private network, so the GX10 doesn't need a public IP.
+
+This split matters for always-on agents. If the gateway and the inference backend live on the same machine, you can't restart vLLM without also taking down the agent. Keeping them separate means vLLM restarts (which happen, see [the Qwen3.5 article](/en/blog/dgx-spark-vllm-qwen35-setup)) don't interrupt the agent's availability.
+
+The OpenClaw gateway runs as a launchd agent (`ai.openclaw.gateway`) on the Mac Mini. Config lives at `~/.openclaw/openclaw.json`. The gateway hot-reloads on file save — no restart needed for config changes.
+
+Logs:
+```
+/tmp/openclaw/gateway-stdout.log
+/tmp/openclaw/gateway-stderr.log
+/tmp/openclaw/openclaw-YYYY-MM-DD.log
+```
+
+---
+
+## Lesson 1: Start with Ollama, Graduate to vLLM
+
+SGLang's prefill performance is excellent. The setup is not beginner-friendly. If you're new to inference frameworks and you try to start with SGLang, you will spend more time debugging the framework than using the agent.
+
+Start with Ollama. It's a single binary, one command, and it works on GB10 out of the box. For the initial deployment — getting OpenClaw connected, testing tools, tuning the system prompt — Ollama is the right choice. You can iterate on the agent while Ollama handles inference.
+
+Once the agent is stable, migrate to vLLM for the TTFT improvement. The full migration record is in [Migrating Qwen3.5 from Ollama to vLLM on DGX Spark](/en/blog/dgx-spark-vllm-qwen35-setup). The short version: vLLM's prefix caching drops TTFT from 2-4 seconds to 0.12 seconds for repeated system prompt context — which is what an always-on agent with a fixed system prompt hits on every call.
+
+The Ollama benchmark that informed the model choice is at [8 Models on DGX Spark: Finding the Best Stack for AI Agents](/en/blog/dgx-spark-ollama-benchmark-8-models). The conclusion: Qwen3.5-35B is the starting point if your hardware can fit it. Solid reasoning, decent speed, built-in vision.
+
+For initial deployment: Ollama on GX10, connect OpenClaw, verify the agent works end-to-end. Then migrate to vLLM.
+
+---
+
+## Lesson 2: Orbstack + SearXNG on the Gateway
+
+The default OpenClaw search configuration calls external APIs. External APIs have rate limits, cost money per request, and send your queries to third parties. For a personal agent that runs hundreds of searches per day, this is the wrong default.
+
+The fix: run [SearXNG](https://github.com/searxng/searxng) locally on the Mac Mini, hook it into OpenClaw's config.
+
+SearXNG is a metasearch engine — it aggregates results from DuckDuckGo, Bing, Google, and others without exposing your queries to any single provider. One Docker container, zero API keys, unlimited requests.
+
+[Orbstack](https://orbstack.dev) is the right Docker runtime for Mac. It starts faster than Docker Desktop, uses less memory, and its networking integrates cleanly with macOS. If you're running containers on Mac Mini, use Orbstack.
+
+One-liner to start SearXNG:
+
+```bash
+docker run -d --name searxng \
+  -p 8888:8080 \
+  -v ~/.searxng:/etc/searxng \
+  --restart unless-stopped \
+  searxng/searxng:latest
+```
+
+Then in `~/.openclaw/openclaw.json`, point the search tool at `http://localhost:8888`. The config hot-reloads — no restart needed.
+
+The quality difference is measurable. SearXNG aggregates more sources than any single API, and the absence of rate limits means yui can run parallel searches without backing off. This is the single change with the highest impact on agent output quality.
+
+---
+
+## Lesson 3: The Chrome Relay Is Not Optional
+
+OpenClaw has a browser extension called the OpenClaw Relay. It enables browser automation — navigating pages, reading dynamic content, interacting with elements. Without it, the agent's web capabilities are limited to static content fetched by the server.
+
+This is easy to skip because it's not in the main setup flow. You install OpenClaw, it runs, everything seems fine. Then you give yui a task that requires reading a page with JavaScript-rendered content, and it fails silently.
+
+Install the Chrome OpenClaw Relay extension, enable it, reload the browser. One step. The delta in web capability is significant.
+
+---
+
+## Lesson 4: Minimal Skills First
+
+ClawHub has a growing library of community skills. On first login, it's tempting to install every skill that looks useful. This is a mistake.
+
+Each skill adds surface area to the agent's context and tool list. A skill that isn't being used adds tokens to every system prompt and increases the chance of tool selection errors. The agent becomes less coherent as the tool list grows beyond what it regularly uses.
+
+Start with two:
+
+- **qmd** — local knowledge base and semantic search. Lets the agent store and retrieve structured knowledge across sessions. This is the skill that makes yui's memory actually work rather than depending on conversation history.
+- **SearXNG** — the local search tool described above.
+
+That's it for the first two weeks. Watch what tasks yui actually handles. Add skills based on observed gaps, not on what looks interesting in ClawHub.
+
+The expansion strategy: one new skill at a time, with a week between additions to observe the effect on behavior.
+
+---
+
+## Lesson 5: SSH Access Changes Everything
+
+Mac Mini has SSH and Screen Sharing in System Preferences. Enable both. Then lock them down: accept connections only over Tailscale, not from the public internet.
+
+Once SSH is enabled, you can use Claude Code or Codex to remote into the Mac Mini and help configure, debug, and extend the OpenClaw setup. The workflow:
+
+```bash
+ssh mac-mini
+# Claude Code or Codex takes over from here
+```
+
+The debugging loop for agent configuration is normally: make change → save config → test in Telegram → observe → repeat. With remote access, this loop can run without physically touching the Mac Mini. It also means you can do configuration work from anywhere on the Tailscale network — from the GX10 itself, from a laptop, from wherever.
+
+The security requirement: don't expose SSH on a public port. Route everything through Tailscale. The attack surface on Tailscale is your Tailscale account, not the SSH daemon.
+
+---
+
+## Lesson 6: The Inference Backend Matters More Than the Model
+
+For an interactive chat session, the model is the dominant factor. For an always-on agent that calls the model dozens of times per hour, the backend is the dominant factor.
+
+The specific issue is TTFT — time to first token. With Ollama and no prefix cache, a 500-token system prompt gets recomputed from scratch on every call. At 2-4 seconds per call, this adds up. At the call volumes yui generates, the waiting time is structurally different from a single-user chat session.
+
+vLLM's prefix caching changes this. A cached system prompt prefix is retrieved from KV cache instead of recomputed. TTFT for a cache-hit drops to 0.12 seconds. The system prompt is always a cache hit after the first call.
+
+The numbers from the migration:
+
+| Metric | Ollama | vLLM (prefix cache) |
+|--------|--------|---------------------|
+| TTFT (warm, long system prompt) | 2-4s | 0.12s |
+| Decode speed | ~46 tok/s | ~47 tok/s |
+| Setup complexity | Low | Higher |
+
+The decode speed is nearly identical. The TTFT difference is what justifies the migration for agent workloads. Full details at [Migrating Qwen3.5 from Ollama to vLLM on DGX Spark](/en/blog/dgx-spark-vllm-qwen35-setup).
+
+Implication: if you're running an always-on agent, sort out the inference backend before optimizing anything else. A faster model with a slower backend is a worse agent than a slightly slower model with a properly tuned backend.
+
+---
+
+## What Was Gained
+
+The economics: zero API cost. No subscriptions, no per-token billing, no rate limits. The Mac Mini's power draw is under 20W at idle; the GX10 draws more but only during inference. The hardware is already paid for. The marginal cost of running yui is electricity.
+
+What yui does: market research, daily summaries of selected topics, structured analysis pipelines. The qmd skill gives her persistent memory across sessions, which changes the quality of the output — she can build on prior research rather than starting cold each time.
+
+The key architectural insight: Mac Mini as gateway, GX10 as inference is the right split for a personal agent. The gateway is cheap, always-on, and handles everything except model inference. The GPU machine handles only what requires GPU. Keeping them separated means they can be maintained and restarted independently.
+
+The agent named yui has been running continuously since this setup. She's not a toy deployment — she handles real research tasks and runs on hardware I own, with no cloud dependencies.
+
+---
+
+## The Working Stack
+
+| Layer | Component |
+|-------|-----------|
+| Gateway | Mac Mini M4, OpenClaw (`ai.openclaw.gateway` launchd agent) |
+| Containers | Orbstack + SearXNG on Mac Mini |
+| Network | Tailscale (Mac Mini ↔ GX10) |
+| Inference | ASUS GX10 (GB10, 128GB) + Ollama or vLLM |
+| Interface | Telegram |
+| Memory | qmd (ClawHub skill) |
+
+No cloud dependencies. No API keys for inference or search. Full stack on hardware you own.
+
+---
+
+*Also in this series: [8 Models on DGX Spark: Finding the Best Stack for AI Agents](/en/blog/dgx-spark-ollama-benchmark-8-models) · [Migrating Qwen3.5 from Ollama to vLLM on DGX Spark](/en/blog/dgx-spark-vllm-qwen35-setup)*

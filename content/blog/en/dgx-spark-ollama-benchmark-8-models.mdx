@@ -1,0 +1,198 @@
+---
+title: "[Benchmark] 8 Models on DGX Spark: Finding the Best Stack for AI Agents"
+description: "Benchmarking 8 local LLMs on NVIDIA GB10 (128GB unified memory) across 7 task categories. Quantization surprises, a 120B model that fails at JSON, and thinking models that spend their entire budget thinking."
+date: "2026-03-05"
+tags: ["DGX Spark", "GB10", "Ollama", "Benchmark", "LLM", "AI Agent", "Blackwell"]
+series: "DGX Spark"
+part: 2
+---
+
+## Preface
+
+Before any quest, you choose your weapons. Not all weapons suit all fights — and you don't find that out until after the first dungeon, when the sword you thought was general-purpose turns out to melt on contact with acid.
+
+This is that process, applied to local LLMs.
+
+After getting [SM121 working with vLLM](/en/blog/part1-why-your-dgx-spark-says-exclamation-marks), the immediate practical question became: *which models are actually worth running on this machine, and for which tasks?* I had 128GB of unified memory and an [ASUS Ascent GX10](https://www.asus.com/servers-workstations/mini-pc/ascent-gx10/) sitting in my office. Running [Ollama](https://ollama.com) at this point — before the vLLM migration — I benchmarked eight models across seven task categories to find the right stack for AI coding agents.
+
+Here's what I learned.
+
+---
+
+## The Hardware
+
+ASUS Ascent GX10. NVIDIA GB10 Grace Blackwell Superchip. 128GB unified memory, 273 GB/s bandwidth, SM121 compute capability.
+
+The hardware backstory — why SM121 is different from the GB200 and what that means for kernel selection — is covered in [Part 1](/en/blog/part1-why-your-dgx-spark-says-exclamation-marks). This article treats the hardware as a given and focuses on what runs well on it.
+
+The short version: 128GB means you can run models that would require multi-GPU setups elsewhere. This benchmark takes advantage of that.
+
+---
+
+## Test Methodology
+
+Seven task categories, each designed to stress a different capability:
+
+1. **Logic reasoning** — multi-step deduction, constraint satisfaction
+2. **Code generation** — write a working function from a specification
+3. **Translation** — English ↔ Chinese, evaluating naturalness and accuracy
+4. **Math** — arithmetic through algebra, with explicit working shown
+5. **Summarization** — condense a long document while preserving key points
+6. **Debugging** — identify and explain a bug in provided code
+7. **Tool calling** — generate valid JSON matching a specified function signature
+
+Tool calling deserves specific explanation. In AI agent frameworks, models communicate with tools by generating structured JSON that matches a function signature — something like:
+
+```json
+{
+  "function": "search_web",
+  "arguments": {
+    "query": "NVIDIA GB10 specs",
+    "max_results": 5
+  }
+}
+```
+
+If the model generates invalid JSON, the agent framework either crashes or silently fails. This is a binary pass/fail category, not a quality gradient. It's one of the most important capabilities for production agent use.
+
+All tests used [Ollama](https://ollama.com) via the `/api/generate` and `/api/chat` endpoints. More on why both endpoints matter in Finding 3.
+
+---
+
+## Results
+
+### Speed
+
+| Model | Format | Speed (tok/s) |
+|---|---|---|
+| qwen3-vl:30b | native (raw mode) | 78.5 |
+| qwen3-vl:30b | thinking mode | 76–79 |
+| qwen3-coder-next | q4\_K\_M | 47.0 |
+| gpt-oss:120b | MXFP4 | 42.4 |
+| qwen3-coder-next | q8\_0 | 36.1 |
+| glm-4.7-flash | bf16 | 27.5 |
+
+### VRAM
+
+| Model | VRAM Usage |
+|---|---|
+| qwen3-vl:30b | ~19 GB |
+| qwen3-coder-next q4\_K\_M | ~20 GB (estimated) |
+| qwen3-coder-next q8\_0 | ~33 GB (estimated) |
+| gpt-oss:120b | ~60 GB (estimated) |
+| glm-4.7-flash bf16 | ~30 GB (estimated) |
+
+*VRAM figures for q4\_K\_M and q8\_0 are estimated from model parameter counts and quantization formats. The qwen3-vl:30b 19 GB figure was directly observed.*
+
+Notable: qwen3-coder-next q4\_K\_M and q8\_0 share blob storage in Ollama — two quantizations of the same model don't double your disk usage.
+
+---
+
+## Finding 1: Quantization Matters Less Than You Think
+
+The headline comparison: qwen3-coder-next q4\_K\_M vs q8\_0 across all seven task categories.
+
+The speed difference is real: **47.0 tok/s vs 36.1 tok/s**, a 23% gap. The VRAM difference is substantial: roughly 33GB less for q4. Across seven tasks, the quality difference was close to invisible.
+
+The specific differences I found:
+
+- **Translation**: q8 occasionally produced slightly more natural phrasing — the kind of difference a human would catch but a BLEU score wouldn't
+- **Debugging**: q8 explanations were marginally more detailed, adding an extra sentence or two of context around the root cause
+
+Everything else — logic, code generation, math, summarization, tool calling — was functionally identical between the two quantizations.
+
+The practical implication: **q4\_K\_M is the right choice for almost everything.** You get 23% more throughput, you free 33GB for other models (or larger context), and you lose almost nothing in quality for the tasks that matter for agent workloads.
+
+The principle this suggests: on a model with 32B+ parameters, 4-bit quantization retains enough precision that the quality floor is set by the model's training and architecture, not by the quantization level. This isn't surprising if you've read the quantization literature — it just wasn't obvious to me until I tested it directly.
+
+---
+
+## Finding 2: Bigger Isn't Always Better
+
+gpt-oss:120b is a 120B model. It failed tool calling.
+
+Not "worse at tool calling." Failed. Generated invalid JSON in the tool calling tests — a dealbreaker for any agent framework that depends on structured output. For tasks where the output format is load-bearing, a model that can't reliably produce valid JSON is a non-starter regardless of its benchmark scores on other tasks.
+
+The verbosity problem was separate but consistent. On translation and summarization tasks, gpt-oss:120b was 5–6× more verbose than qwen3-coder-next with no corresponding quality improvement. The extra output wasn't adding precision or nuance — it was padding. For agent workflows that process model outputs programmatically, verbosity without content is a tax on latency.
+
+At 42.4 tok/s, gpt-oss:120b is already slower than qwen3-coder-next q4. At 5× the verbosity with worse structured output, the practical case for using it as an agent backbone is difficult to make.
+
+The lesson: parameter count is a proxy for capability, not a guarantee. Tool calling specifically depends on fine-tuning and RLHF focus, not on raw model size. A well-tuned 32B model will reliably outperform a poorly-tuned 120B model on structured output tasks every time.
+
+---
+
+## Finding 3: Thinking Models Need Different API Calls
+
+This one is a real trap.
+
+Both glm-4.7-flash and qwen3-vl return **empty responses** when called via the standard `/api/generate` endpoint. The models appear to run — tokens are being generated, the request takes time — but the returned `response` field is empty.
+
+What's happening: these models route their output into an internal "thinking" channel. The actual response lives in a field that `/api/generate` doesn't expose. You have to use `/api/chat` to access it:
+
+```bash
+# This returns empty response for thinking models:
+curl http://<your-gx10-ip>:11434/api/generate \
+  -d '{"model": "glm-4.7-flash", "prompt": "Translate: Hello world", "stream": false}'
+
+# This works:
+curl http://<your-gx10-ip>:11434/api/chat \
+  -d '{
+    "model": "glm-4.7-flash",
+    "messages": [{"role": "user", "content": "Translate: Hello world"}],
+    "stream": false
+  }'
+```
+
+The second call returns a `message.content` field with the actual output. The thinking process is in a separate field — you can inspect it if you want, ignore it if you don't.
+
+The qwen3-vl case had an additional failure mode worth documenting separately.
+
+### The 7,094 Character Thinking Incident
+
+qwen3-vl:30b in thinking mode can burn its entire token budget on internal reasoning and produce zero characters of actual output.
+
+In one test — a single translation sentence — the model spent 7,094 characters of thinking tokens working through the translation and then returned an empty response. Not truncated. Not an error. Just nothing. The thinking was thorough and the output was absent.
+
+This isn't a bug exactly — it's a consequence of how thinking models allocate their budget. When the thinking process fills the context, there's nothing left for output. For short tasks where the model over-thinks, you get maximum reasoning and minimum results.
+
+The practical workaround: for simple tasks, use qwen3-vl in raw mode (no thinking). Reserve thinking mode for tasks where the reasoning depth actually adds value — complex multi-step analysis, not translation.
+
+---
+
+## The Stack I Use
+
+Three roles, three models:
+
+**Primary: qwen3-coder-next q4\_K\_M** — 47.0 tok/s, reliable tool calling, solid across all seven task categories. For an AI coding agent that needs to call tools, generate code, and reason about logic at volume, this is the workhorse. The q4 quantization gives the speed and memory headroom to run it alongside other models.
+
+**Vision: qwen3-vl:30b** — only 19GB, which means you can run it alongside the primary model with room to spare. Handles image input. Use raw mode (not thinking mode) for straightforward tasks — translation, description, extraction. Reserve thinking mode for cases where you actually need it and the task is complex enough to justify the token budget risk.
+
+**Deep reasoning: glm-4.7-flash** — when you need thorough analysis rather than fast responses. Slower at 27.5 tok/s, but the thinking channel adds depth for tasks where surface-level answers aren't enough. Use it as a deliberate choice for complex reasoning tasks, not as a general-purpose model.
+
+Running qwen3-coder-next q4 (~20GB) and qwen3-vl together (~19GB) uses approximately **71GB** of the available 128GB. The machine is less than half-loaded. That headroom is useful — it means you can load additional models for specific tasks, keep contexts warm, or switch between configurations without waiting for models to reload.
+
+---
+
+## What Was Gained
+
+A few transferable principles from this benchmark:
+
+**VRAM math matters more than model count.** 128GB sounds like a lot until you start running 60GB models. The insight from this benchmark: two smaller specialized models often outperform one large general model on actual agent tasks, use less memory, and give you more operational flexibility. The 71GB headroom with two models running isn't waste — it's deliberate reserve.
+
+**Verbosity is not quality.** gpt-oss:120b's 5–6× verbosity on summarization and translation produced no corresponding quality improvement. For programmatic processing — which is most of what an AI agent does with model output — shorter, accurate responses are better than longer, padded ones. Benchmark for output quality per token, not just output quality.
+
+**The API endpoint is part of the model's interface contract.** Thinking models that silently return empty responses via `/api/generate` aren't buggy — but they're also not going to tell you that you're using the wrong endpoint. If a model works in the Ollama UI but returns empty responses in your code, check whether you're using `/api/generate` or `/api/chat`. The difference is not documented prominently.
+
+**Tool calling is a quality gate, not a quality gradient.** For agent frameworks, a model that sometimes generates invalid JSON is operationally equivalent to a model that always fails. This should be tested first, not benchmarked last. If structured output fails, nothing else about the model's quality matters for that use case.
+
+---
+
+## What Changed After This
+
+This benchmark informed the move from Ollama to vLLM. The specific motivations: prefix caching for repeated system prompts (significant for agent workflows with long tool schemas), lower TTFT at the start of each call, and finer control over KV cache management.
+
+The vLLM migration on GB10/SM121 has its own set of complications — covered in the other articles in this series.
+
+---
+
+*Next: [Why Your DGX Spark Only Says "!!!!!": Debugging NVFP4 on SM121](/en/blog/part1-why-your-dgx-spark-says-exclamation-marks)*

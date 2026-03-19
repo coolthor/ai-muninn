@@ -1,0 +1,141 @@
+---
+title: "[Dev Workflow] I Made Two AIs Argue. The Disagreements Are the Point."
+description: "A custom /debate command that pits Codex CLI against Gemini CLI on architecture, code, and decisions. Different training data, different blind spots — and the disagreements between them are usually the most useful output."
+date: "2026-03-19"
+tags: ["Dev Workflow", "Claude Code", "Gemini", "Codex", "Multi-AI", "Code Review"]
+series: "AI Workflow"
+part: 3
+---
+
+## Preface
+
+A single expert's opinion is valuable. Two experts who disagree are more valuable — not because one of them is right, but because their disagreement tells you where the uncertainty actually lives. The same logic applies to AI models.
+
+I built a `/debate` command that sends the same prompt to two separate AI models — Codex CLI and Gemini CLI — and has them argue about a codebase or architectural decision. The disagreements between them are not a failure mode. They're the output.
+
+For the compliance and hook infrastructure that makes custom commands like this possible, see [Claude Code Mandatory Instructions](/en/blog/claude-code-mandatory-instructions).
+
+---
+
+## The Problem
+
+Most AI-assisted code review has a structural flaw: the model agrees with you. Not because it's sycophantic (though that's also a risk), but because it was trained on similar code, with similar patterns, by developers with similar assumptions. Ask a model to review an architecture decision and it will generally validate whatever you've already committed to, because the inputs it was trained on probably looked similar.
+
+The fix is not to ask better questions. The fix is to get a second opinion from a model with different training data, different architectural biases, and different blind spots.
+
+When two models from different companies, trained on different data, disagree about an approach — that's a signal. When they agree — that's a different, stronger signal. Neither outcome is noise.
+
+---
+
+## How /debate Works
+
+The `/debate` command is a Claude Code skill. Claude acts as orchestrator: it formats the debate topic, sends it to both models via PAL MCP, collects their responses, and synthesizes the output.
+
+The PAL MCP routing:
+
+```
+Codex CLI  → mcp__pal__clink(cli_name="codex", role="codereviewer")
+Gemini CLI → mcp__pal__clink(cli_name="gemini", role="default")
+```
+
+Both use the same `clink` interface but different underlying CLIs. Codex is OpenAI's CLI with a static analysis orientation. Gemini is Google's CLI with a broader architectural view. They have different defaults, different failure modes, and — crucially — different things they look at first.
+
+A typical invocation:
+
+```
+/debate Should the greeks calculation be cached at the API layer or computed per-request?
+         --files /Users/coolthor/BPSTracker-API/src/greeks/calculator.ts
+                 /Users/coolthor/BPSTracker-API/src/routes/greeks.ts
+```
+
+Claude formats this into a prompt, fires it at both models with `absolute_file_paths` set, waits for both responses, then synthesizes: where did they agree, where did they diverge, and what does the divergence point at.
+
+### Modes
+
+Three modes are available:
+
+**`--attack`** — both models are instructed to find problems. Not balanced debate; adversarial analysis. Useful for security review and pre-launch sanity checks.
+
+**`--explore`** — both models look for opportunities, not problems. Useful when the code is correct but you want to find what could be better.
+
+**Default (no flag)** — genuine debate. Each model is given a position to defend (or allowed to choose one) and asked to argue against the other. The orchestrator (Claude) does not take a side; it summarizes and identifies the crux of disagreement.
+
+---
+
+## Observed Behavioral Differences
+
+After running this system across several projects, the behavioral split between the two models is consistent enough to be useful:
+
+**Gemini** tends to lead with architecture. It challenges the structure before it challenges the implementation. "Is this the right boundary between these services?" before "is this function implemented correctly?" When Gemini pushes back early, it's usually asking whether the approach is right at all — which is the question you most want to hear before you've written five thousand lines.
+
+**Codex** dives into the code first. It reads through the implementation, surfaces type issues, identifies edge cases at the function level, and then — once it's done the tour — raises structural concerns. Codex's concerns about edge cases and error handling are usually more specific and directly actionable than Gemini's.
+
+The interaction between these tendencies is where the value lives. A concrete example from a BPS Tracker API review:
+
+The question was whether to compute options Greeks (delta, theta, vega) per-request or cache them at a fifteen-minute interval. Gemini argued against caching at the API layer entirely — it questioned whether the Greeks data belonged in the API at all, or whether it should be a separate service with its own cache. Codex engaged with the caching implementation directly: it found a race condition in the cache invalidation logic that would produce stale deltas during high-volatility periods when the refresh interval was most critical.
+
+Gemini asked the right architectural question. Codex found the actual bug. Both were necessary.
+
+When both models agreed — the cache should be invalidated on market open/close events — that agreement held more weight than either opinion in isolation.
+
+---
+
+## The PAL MCP Layer
+
+The debate command depends on `mcp__pal__clink` for external model access. The routing rules:
+
+```
+# Correct routing
+mcp__pal__clink(cli_name="gemini", ...)  # Gemini CLI via API key
+mcp__pal__clink(cli_name="codex", ...)   # Codex CLI via API key
+
+# Wrong: these will fail — chat tool has no Gemini/OpenAI API keys configured
+mcp__pal__chat(model="gemini", ...)
+```
+
+The `clink` tool accepts `absolute_file_paths` — pass these whenever you want the model to read actual code rather than summarize a description. Codex in particular will read the entire codebase before engaging; this is expensive but produces more grounded analysis than working from a description.
+
+Follow-up prompts in the same debate session use `continuation_id` to maintain context across calls without re-uploading the files.
+
+---
+
+## Limitations
+
+**Context window ceiling.** The practical context limit via `clink` is around 20K characters. For large codebases, you need to be selective about which files you send. This is actually a useful constraint — it forces you to identify which files are actually relevant to the question, rather than dumping everything.
+
+**Codex reads everything first.** When given a set of files, Codex will read all of them before engaging. For a ten-file review, this means the first response takes longer than you'd expect and costs more tokens. It's worth it — the analysis is more grounded — but budget for it.
+
+**Behavior is not fully stable.** Both models have non-deterministic behavior, and the debate format sometimes produces asymmetric engagement: one model writes three paragraphs, the other writes eight. The synthesizer (Claude) handles this, but the raw output is uneven.
+
+**Not suitable for all tasks.** The debate format has overhead — two model calls, synthesis time, and interpretation effort. Routing a typo fix through `/debate` is waste. The right threshold: major architectural decisions, security-sensitive code, pre-launch reviews, and cases where you genuinely don't know which approach is correct.
+
+---
+
+## When to Use It
+
+Use `/debate` when:
+
+- You're making an architectural decision that affects more than one system boundary
+- The code touches security-sensitive paths (auth, order execution, payment processing)
+- You've been staring at the same approach for too long and want external pressure
+- A refactor is complete and you want validation before merging
+
+Skip `/debate` when:
+
+- The change is a typo, config value, or string update
+- You already have a strong, evidence-backed reason for the approach
+- The code is already covered by a security review agent in the same session
+
+The meta point: a single AI has training data blind spots that are invisible to it by definition. Two AIs trained by different companies on different corpora have different blind spots. Where they overlap in confidence, you have a stronger signal. Where they diverge, you have a question worth answering.
+
+---
+
+## What's Next
+
+The current implementation is functional but manual. The next step is integrating `/debate` as an automatic step in the pre-merge workflow — triggered on PRs that touch specific high-risk paths, rather than on-demand. The MCP layer and skill structure will need optimization for that use case, particularly around context management and cost.
+
+Until then, the on-demand version runs clean for the cases that matter most.
+
+---
+
+*Also in this series: [Claude Code Mandatory Instructions: Hooks and Compliance Patterns](/en/blog/claude-code-mandatory-instructions)*

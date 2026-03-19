@@ -1,0 +1,173 @@
+---
+title: "[Claude Code] 用 Claude Code 測 iOS App：context 用量砍 81%"
+description: "把截圖導向的 iOS 測試改成 ui_describe_all 優先，BPS Tracker 測試的 context 用量從 81,290 KB 降到 15,215 KB。外加 Fastlane 整合：截圖、App Store 上傳全自動。"
+date: "2026-03-19"
+tags: ["Claude Code", "iOS", "Swift", "Testing", "Fastlane", "BPS Tracker"]
+series: "AI Workflow"
+part: 2
+---
+
+## 前言
+
+用 LLM 測試 iOS app，有點像叫人靠拍照來認識一棟建築。每走一步拍一張，可以運作，但照片很貴，拍到第十五張你會開始想說——用文字描述是不是快多了？
+
+結果這個直覺是對的。這篇文章講我怎麼調整 Claude Code 的 iOS 測試行為，讓它幫 BPS Tracker（一個追蹤 Bull Put Spread 期權部位的 iOS app）測試時，context 用量砍掉 81%，測試速度也同步上去。另外也會講 Fastlane 整合，把截圖和 App Store 上傳流程自動化。
+
+關於 CLAUDE.md 和 hook 的合規設定層，見 [Claude Code Mandatory Instructions](/zh-TW/blog/claude-code-mandatory-instructions)。
+
+---
+
+## 問題
+
+BPS Tracker 是個 SwiftUI app，UI 不算簡單：有一個活躍部位列表、一個建倉輸入畫面（多個欄位）、一個設定頁，還有訂閱 paywall。用 Claude Code 加 iOS Simulator MCP 測試時，它預設的行為大概是：
+
+1. 點一個按鈕
+2. 截圖
+3. 分析截圖
+4. 決定下一步
+5. 重複
+
+每張截圖都是原始圖片資料——比文字貴太多了。一次跑完十個畫面、每個畫面兩個狀態切換的測試，context 大概是 81,290 KB。其中大部分是截圖，而那些截圖能提供的資訊，用 accessibility label 三十個字就說清楚了。
+
+反饋迴圈也慢。圖片上傳要時間，分析要更多時間。同一個流程跑十次確認修好了沒，延遲就這樣一直疊。
+
+---
+
+## 解法
+
+### Rule 1：優先用 ui_describe_all
+
+iOS Simulator MCP 提供了一組工具：
+
+- `mcp__ios-simulator__ui_describe_all` — 把目前畫面的完整 accessibility tree 以文字回傳
+- `mcp__ios-simulator__screenshot` — 截目前畫面的 PNG
+- `mcp__ios-simulator__ui_tap` — 點一個座標或 accessibility element
+- `mcp__ios-simulator__ui_type` — 在聚焦的欄位輸入文字
+- `mcp__ios-simulator__ui_swipe` — 往某方向滑動
+- `mcp__ios-simulator__ui_view` — 回傳特定區域的 UI 層級結構
+
+關鍵點：`ui_describe_all` 回傳的是結構化文字形式的 accessibility tree。對於狀態驗證——「這個按鈕有沒有啟用？」、「這個 label 的值對嗎？」、「這個 modal 有沒有出現？」——文字描述完整又精確。同樣狀態的截圖，是把相同資訊包進一個 PNG，處理成本高十倍。
+
+我在專案的 CLAUDE.md 加了這條規則：
+
+```
+## iOS Testing Policy
+
+當用 simulator MCP 測試 iOS UI 時：
+- 優先用 ui_describe_all 做狀態驗證（元素有無、數值對不對、按鈕有無啟用）
+- 截圖保留給：視覺 layout bug、顏色/動畫問題、accessibility label 不存在或不正確的情況
+- 不要每次 tap 後都截圖。只在上述條件成立時截。
+```
+
+就這一條規則，同等測試的 context 用量從約 81,290 KB 降到約 15,215 KB，砍掉 81%。測試速度也跟著提升，因為模型不用一直在處理圖片資料，可以直接執行動作。
+
+### 座標快取模式
+
+Claude 第一次跑新畫面的測試，會先呼叫 `ui_describe_all`，找到相關元素，記下位置。之後的執行應該要能跳過這個探索階段。
+
+我的做法：每次測試結束後，Claude 把座標快照寫進專案的一個檔案：
+
+```json
+// .claude/ui-coordinates.json
+{
+  "spread_list_screen": {
+    "add_spread_button": { "x": 374, "y": 812, "label": "Add Spread" },
+    "first_spread_row": { "x": 187, "y": 240, "label": "NVDA 480/470 Put" }
+  },
+  "spread_entry_screen": {
+    "ticker_field": { "x": 187, "y": 320, "label": "Ticker Symbol" },
+    "short_strike_field": { "x": 187, "y": 400, "label": "Short Strike" },
+    "submit_button": { "x": 187, "y": 680, "label": "Add Spread" }
+  }
+}
+```
+
+之後的測試 session 開始時先讀這個檔案。如果座標還有效（用一次 `ui_describe_all` 確認 label 還吻合），就跳過完整的元素探索直接執行。如果 layout 改了——比如 UI 重構後——快取失效，重新建立。
+
+CLAUDE.md 的指令：
+
+```
+測試完成後，把這次觀察到的元素座標更新進 .claude/ui-coordinates.json。
+測試開始時，讀取 .claude/ui-coordinates.json，
+如果目前的 ui_describe_all 輸出確認 label 還對應，就用儲存的座標。
+```
+
+每次測試省個幾秒，跨 session 的行為一致性也明顯變好。
+
+### Fastlane 整合
+
+BPS Tracker 的 App Store 上架流程涉及多個裝置尺寸的截圖生成、metadata 更新、binary 上傳。Fastlane 全包了。
+
+專案 `Fastfile` 裡相關的 lane：
+
+```ruby
+lane :screenshots do
+  capture_ios_screenshots(
+    scheme: "BPSTracker",
+    devices: ["iPhone 16 Pro Max", "iPhone 16 Pro", "iPhone SE (3rd generation)"],
+    languages: ["en-US", "zh-TW"],
+    output_directory: "./fastlane/screenshots"
+  )
+end
+
+lane :upload_metadata do
+  deliver(
+    submit_for_review: false,
+    force: true,
+    skip_binary_upload: true,
+    skip_screenshots: false,
+    screenshots_path: "./fastlane/screenshots"
+  )
+end
+
+lane :release do
+  build_ios_app(
+    scheme: "BPSTracker",
+    export_method: "app-store"
+  )
+  deliver(
+    submit_for_review: false,
+    force: true
+  )
+end
+```
+
+自動化的部分：跨裝置尺寸和語系的截圖生成、從 `./fastlane/metadata/` 讀取 metadata 更新、binary 上傳到 App Store Connect。Claude 可以直接用 Bash 呼叫這些 lane。
+
+還需要注意的部分：`fastlane screenshots` 在 simulator 裡跑 UI 測試，如果中間某個 assertion 失敗，Claude 有時會進入迴圈——它會重試 lane 而不是先看錯誤。修法是在 CLAUDE.md 裡的 Fastlane 規則加上：讀完錯誤輸出才能重試，連續相同失敗就停下來，別繼續重試。這個部分還在處理中。
+
+---
+
+## 得到了什麼
+
+**數字：**
+
+| 指標 | 截圖優先 | ui_describe_all 優先 |
+|------|----------|----------------------|
+| 每次完整測試的 context | ~81,290 KB | ~15,215 KB |
+| 降幅 | — | 81% |
+| 主觀測試速度 | 慢 | 明顯快 |
+
+**可轉移的模式：**
+
+screenshot 和 describe 的取捨適用於任何有 MCP 工具能回傳 UI 狀態文字描述的場景。原則一樣：用最便宜的、能包含所需資訊的表示方式。圖片只有在資訊本身是視覺性的時候才需要——顏色、layout、動畫。
+
+座標快取模式可以移植到任何需要重複導航穩定 UI 的自動化流程。寫一次座標，之後讀回來用。成本就是一個 JSON 檔和 CLAUDE.md 的幾行說明。
+
+**還沒解決的：**
+
+Layout 驗證還是要截圖。如果 SwiftUI view 渲染錯了——padding 不對、文字被截掉、元素重疊——`ui_describe_all` 抓不到。Accessibility tree 描述的是元素是什麼、值是什麼，不是它們在視覺上怎麼排列。Layout 回歸測試還是得靠截圖。
+
+Fastlane 的迴圈偵測不可靠。Claude 有時在失敗的 lane 沒讀錯誤就重試，然後下一次同樣方式失敗。這個模式需要更強的 CLAUDE.md 規則。
+
+---
+
+## 結論
+
+預設行為——截圖截個不停——對 iOS 測試來說是個錯誤的預設。Accessibility label 能精確又便宜地描述 UI 狀態。改動就是 CLAUDE.md 裡的一段話。81% 的 context 降幅不是調優的結果，是用對工具的自然結果。
+
+座標快取模式是可選的，但值得花十分鐘設定。跳過探索階段的測試更快、更可預期。Fastlane 整合移掉了 App Store 流程裡的手動步驟。剩下的問題——迴圈偵測、layout 驗證——是已知的、有邊界的。其他部分都跑得很順。
+
+---
+
+*同系列：[Claude Code Mandatory Instructions：Hook 與合規模式](/zh-TW/blog/claude-code-mandatory-instructions)*

@@ -1,0 +1,298 @@
+---
+title: "[vLLM] Qwen3.5-35B 跑到 47 tok/s：從 Ollama 遷移到 vLLM"
+description: "在 DGX Spark（GB10，128GB）上從 Ollama 換到 vLLM。Prefix caching 讓 TTFT 從幾秒降到 0.12s。六個坑：thinking mode、記憶體衝突、docker 重啟、warmup、SSM + chunked prefill，以及參數耦合。"
+date: "2026-03-14"
+tags: ["DGX Spark", "GB10", "vLLM", "Ollama", "Qwen3.5", "Docker", "Blackwell", "AI Agent"]
+series: "DGX Spark"
+part: 3
+---
+
+## 前言
+
+從手工具換到流水線，做出來的東西沒有變，但每小時產量不同。輸出品質一樣，經濟效益不同。
+
+這一句話就是從 Ollama 遷移到 vLLM 的本質。同一個 model、同一台機器，TTFT 卻換了一個類別。
+
+這篇是在 ASUS Ascent GX10（NVIDIA GB10，128GB unified memory）上做這次遷移的實錄。[之前的 benchmark](/zh-TW/blog/dgx-spark-ollama-benchmark-8-models) 選定了 model；這篇記的是在 vLLM 下實際跑起來要踩過哪些坑。六個坑。沒有一個是顯而易見的。其中一個會造成 9 倍 throughput 衰退，而且完全不在我的預期裡。
+
+---
+
+## 為什麼從 Ollama 換到 vLLM
+
+核心問題是 TTFT — 第一個 token 出來的時間。互動式聊天，2-3 秒的 TTFT 只是讓人不耐煩。一個每小時呼叫 model 幾十次的 always-on agent，這個延遲會累積成真正的問題。
+
+具體機制：yui（我的 agent）有一個很長的 system prompt。每次對話輪次，這個 system prompt 都要重新跑 prefill。Ollama 沒有 prefix cache — model 每次都要重新計算 system prompt 全長的 attention。vLLM 開啟 prefix caching 之後，重複出現的 system prompt prefix 直接從 KV cache 取出，prefill 時間降到幾乎為零。
+
+數字：**Ollama TTFT（有長 system prompt 的暖機狀態）：2-4 秒。vLLM TTFT（prefix cache 命中）：0.12 秒。** 在 always-on agent 的使用規模下，這不是優化，是結構性的差異。
+
+| 項目 | Ollama | vLLM |
+|---|---|---|
+| 安裝難度 | 單一 binary，一行指令 | Docker，flag 較多 |
+| Prefix caching | 無 | 有 — KV cache 重用 |
+| TTFT（cold prompt） | 2-4s | 0.12s（cache 命中） |
+| 設定容錯性 | 寬鬆 | 嚴格 — 錯誤 flag 直接 crash |
+| GB10 nightly 支援 | ✅ | 需要 `cu130-nightly` image |
+| SSM model 支援 | ✅ | ✅（但不要加 `--enable-chunked-prefill`） |
+
+代價是真實存在的：vLLM 的設定比較不寬鬆。flag 組合不對會在 startup 直接 crash。下面的 Gotcha 章節記的就是我踩過的每一個。
+
+---
+
+## 設定流程
+
+### 下載 Model
+
+[Qwen/Qwen3.5-35B-A3B-FP8](https://huggingface.co/Qwen/Qwen3.5-35B-A3B-FP8) — 35GB，14 個 safetensors shard。
+
+```bash
+HF_HUB_ENABLE_HF_TRANSFER=1 hf download Qwen/Qwen3.5-35B-A3B-FP8 \
+  --local-dir ~/models/qwen35-35b-hf
+```
+
+`HF_HUB_ENABLE_HF_TRANSFER=1` 開啟 Rust 傳輸後端，對大型多 shard 下載速度有明顯幫助。`hf` CLI 來自 `huggingface_hub[cli]`。
+
+### Docker Image 說明
+
+用 `vllm/vllm-openai:cu130-nightly`，不要用 stable 版本。
+
+Stable vLLM image 在 GB10 上跑 Qwen3.5 不支援。失敗的方式不固定 — 有時是缺少 CUDA kernel，有時是 quantization silent fallback，有時是 startup crash。沒有一個清楚的錯誤訊息會告訴你「你用了錯誤的 image」。遇到奇怪的 startup 失敗，先換 nightly 再說。
+
+### 可用的 Docker 指令
+
+```bash
+docker run -d --name qwen35 --restart unless-stopped \
+  --gpus all --ipc host --shm-size 64gb -p 8000:8000 \
+  -v /home/coolthor/models/qwen35-35b-hf:/models/qwen35 \
+  vllm/vllm-openai:cu130-nightly \
+  --model /models/qwen35 \
+  --served-model-name qwen3.5-35b \
+  --max-model-len 131072 \          # 131K context
+  --gpu-memory-utilization 0.85 \   # 保留餘裕；約 62GB KV cache
+  --enable-prefix-caching \         # 遷移的主要理由
+  --reasoning-parser qwen3 \        # 正確處理 <think> token
+  --enable-auto-tool-choice \       # 開啟 tool/function calling
+  --tool-call-parser qwen3_coder \  # qwen3 tool call 格式 parser
+  --kv-cache-dtype fp8 \            # fp8 KV cache — 每 GB 放更多 token
+  --max-num-seqs 8 \                # 與 max-num-batched-tokens 耦合（見 Gotcha 6）
+  --max-num-batched-tokens 4096     # 必須 >= SSM 的 block_size（見 Gotcha 6）
+```
+
+**Startup 時間表：**
+- Model 載入（14 個 shard）：約 96 秒
+- `torch.compile` 初次：約 25 秒；有 cache 的後續執行：約 7 秒
+- FlashInfer autotuning：約 15 秒
+- 總 cold start：2-3 分鐘
+
+這是正常的。看到 `vLLM engine started` 出現在 log 裡才算就緒。
+
+---
+
+## Gotcha 1：必須用 Nightly Image
+
+Stable vLLM 在 GB10 上跑 Qwen3.5 無法正常運作。
+
+失敗方式不固定，沒有一個明確的錯誤訊息告訴你「問題出在 image」。只是各種 startup 失敗，看起來像 model 或 config 的問題。
+
+用 `cu130-nightly`：
+
+```bash
+docker pull vllm/vllm-openai:cu130-nightly
+```
+
+cu130 的 nightly image 包含 stable 版本目前還沒有的 Blackwell kernel 支援。如果你需要可重現的環境，用 `--platform` 加上特定 digest 鎖版。
+
+---
+
+## Gotcha 2：Thinking Mode 是訓練進去的
+
+Qwen3.5 預設開啟 thinking mode。這個 model 在沒有任何設定的情況下，就會在正式回答之前輸出 `<think>...</think>` token — 因為訓練時就是這樣訓練的，不是 system prompt 或 template 控制的。
+
+失敗情境：你裝好 vLLM，發第一個 request，得到 `content: null`，但 `reasoning_content` 裡有東西。或者你得到一個回應，80% 是 thinking token，20% 是實際內容，而你的 client 只讀 `content`。
+
+修改 jinja template 不是可靠的解法。就算你 patch 了 chat template 要壓制 thinking，model 還是會輸出 think token，因為訓練推著它這樣做。
+
+**唯一可靠的做法：每個 request 都傳 `enable_thinking: false`。**
+
+```bash
+curl http://<your-gx10-ip>:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "qwen3.5-35b",
+    "messages": [{"role": "user", "content": "Hello"}],
+    "chat_template_kwargs": {"enable_thinking": false}
+  }'
+```
+
+`chat_template_kwargs` 欄位是 per-request 傳給 vLLM template rendering 的正確控制介面。
+
+**第二個陷阱：** 如果 `max_tokens` 設太小而 thinking mode 是開著的，model 會把 token budget 全部燒在 think token 上，回傳 `content: null` 加 `finish_reason: length`。request 技術上成功了，但回傳的是空的。除非你明確需要推理鏈，否則一律帶 `enable_thinking: false`。
+
+---
+
+## Gotcha 3：Unified Memory 沒有分區
+
+GB10 使用 unified memory — CPU 和 GPU 共用同一個 128GB 記憶體池。沒有獨立的 VRAM 分配。這表示 Ollama 和 vLLM 競爭同一個記憶體空間。
+
+失敗情境：你在 Ollama 還有 model 載入的狀態下啟動 vLLM，vLLM 在 startup 時 OOM。或者 vLLM 啟動了，但 KV cache 比預期少，因為 Ollama 的 KEEP_ALIVE 還沒到期，還在佔著 20GB。
+
+Ollama 的預設 `KEEP_ALIVE` 是 2 小時。如果你最近有跑過任何 model，它很可能還在記憶體裡。
+
+**啟動 vLLM 之前：**
+
+```bash
+# 確認 Ollama 目前載了什麼
+curl -s http://localhost:11434/api/ps
+
+# 卸載特定 model
+curl -s -X POST http://localhost:11434/api/generate \
+  -d '{"model": "MODEL_NAME", "keep_alive": 0}'
+```
+
+確認 `api/ps` 顯示沒有任何 model 之後再啟動 container。
+
+**`nvidia-smi` 在這裡沒用。** Unified memory 架構下，`nvidia-smi --query-gpu=memory.used` 永遠回傳 `N/A`。這是正常行為。用 vLLM 的 metrics endpoint：
+
+```bash
+curl -s http://localhost:8000/metrics | grep kv_cache
+```
+
+---
+
+## Gotcha 4：`docker restart` 不是真正的重啟
+
+`docker restart qwen35` 會停止並重啟 container，但前一次執行的 CUDA context 還會殘留在 driver 裡。如果你上次關 vLLM 之後，Ollama 又載了 model，這次 vLLM 啟動進去的是已經被佔用的記憶體空間，直接 OOM。
+
+正確的重啟流程：
+
+```bash
+# 1. 停止 container
+docker stop qwen35
+
+# 2. 確認 Ollama 沒有任何 model 載入
+curl -s http://localhost:11434/api/ps
+
+# 3. 如果有，先卸載
+curl -s -X POST http://localhost:11434/api/generate \
+  -d '{"model": "MODEL_NAME", "keep_alive": 0}'
+
+# 4. 啟動 container
+docker start qwen35
+
+# 5. 跟著 log 等到就緒
+docker logs -f qwen35
+```
+
+第 2 和第 3 步是大家跳過的那個。不要跳過。
+
+---
+
+## Gotcha 5：不要加 `--enable-chunked-prefill`
+
+這是代價最高的 Gotcha。具體數字：加了 `--enable-chunked-prefill` 之後，throughput 從 ~50 tok/s 掉到 5.7 tok/s。9 倍衰退。
+
+原因：Qwen3.5-35B-A3B 是 SSM+MoE hybrid model — 使用 Mamba 風格的 state space 架構搭配 MoE 層。Chunked prefill 是針對純 Transformer model 的優化，做法是把 prefill phase 切成 chunk，和 decode 交錯執行，藉此提升 GPU 使用率。
+
+對 SSM model 來說，chunked prefill 需要在每個 chunk 邊界傳遞 recurrent hidden state。每個邊界都有對應的 overhead，乘以 chunk 數量之後，長序列上的累積代價就非常大。「優化」變成 throughput 懸崖。
+
+**凡是含有 SSM 或 hybrid SSM+MoE 架構的 model，永遠不要加 `--enable-chunked-prefill`。** 包含 Qwen3.5-35B-A3B 和任何帶有 Mamba layer 的 model。這個 flag 對純 dense Transformer 有益；對任何有 recurrent state 的 model 有害。
+
+---
+
+## Gotcha 6：參數耦合
+
+`--max-num-seqs` 和 `--max-num-batched-tokens` 不是獨立的 flag。設法讓它們組合出不一致的狀態，startup 就會 crash。
+
+具體機制：Qwen3.5-35B 帶 SSM layer，有一個 Mamba cache 需要對齊 block。用 `--max-model-len 131072` 時，vLLM 計算出 `block_size = ceil(131072 / X) = 2096`。預設的 `max_num_batched_tokens` 是 2048，比 2096 小，於是 startup 時出現 validation error：
+
+```
+pydantic.error_wrappers.ValidationError: max_num_batched_tokens (2048) must be >= block_size (2096)
+```
+
+解法：搭配 `--max-num-seqs 8` 和 131K context 的 SSM model 時，一定要加 `--max-num-batched-tokens 4096`。上面 docker 指令裡的數值是可用的組合。
+
+如果你改了 `--max-model-len`，記得重算。公式：`block_size = ceil(max_model_len / some_divisor)`，`max_num_batched_tokens` 必須 >=  這個值。不確定的時候，把 `max_num_batched_tokens` 設高一點而不是低一點 — 它是 batch size 的上限，不是固定分配。
+
+---
+
+## 連接你的 Agent
+
+vLLM 在 port 8000 上提供 OpenAI 相容的 API。接上 agent 很直接 — 唯一的額外步驟是每個 request 都要帶 `chat_template_kwargs`。
+
+openclaw 設定：
+
+```json
+{
+  "providers": {
+    "vllm": {
+      "baseUrl": "http://<your-gx10-ip>:8000/v1",
+      "apiKey": "none",
+      "api": "openai-completions"
+    }
+  }
+}
+```
+
+每個 request 都必須包含：
+
+```json
+"chat_template_kwargs": {"enable_thinking": false}
+```
+
+這個值沒辦法在 server 層級設成 Qwen3.5 的預設值，必須 per-request 帶。
+
+**驗證：**
+
+```bash
+# 確認 server 健康
+curl -s http://<your-gx10-ip>:8000/health
+
+# 列出載入的 model
+curl -s http://<your-gx10-ip>:8000/v1/models
+```
+
+正常的 server 會從 health endpoint 回傳 `{"status": "ok"}`。
+
+---
+
+## 換來了什麼
+
+| 指標 | 數值 |
+|---|---|
+| Decode 速度（暖機後） | 47 tok/s |
+| TTFT（prefix cache 命中） | 0.12s |
+| TTFT（cold，長 system prompt） | 2-4s（和 Ollama 一樣） |
+| KV cache（fp8，0.85 utilization） | ~62 GiB / ~82 萬 token |
+| 最大 context | 131K tokens |
+| Cold start | 2-3 分鐘 |
+
+prefix caching 帶來的 TTFT 改善是這次遷移的主要理由。對 yui 來說 — 一個在所有對話都用固定 system prompt 的 agent — 第一次之後每次呼叫都會命中 prefix cache。Ollama 的 2-4 秒 TTFT 降到 0.12 秒。在 always-on agent 產生的呼叫量下，這是一個不同類別的回應感受。
+
+Gotcha 5 的發現（chunked prefill + SSM = 9 倍慢）在寫這篇文章的時間點，沒有清楚記錄在 vLLM 的文件裡。如果你在嘗試調整 throughput，很容易就會試到這個 flag，並假設所有 prefill 相關的 flag 都是安全的實驗範圍。不是的。SSM 架構打破了 chunked prefill 建立在上面的假設。
+
+整體設定比 Ollama 更需要手動管理 — 要管 Docker、注意記憶體衝突、把參數耦合弄對。對 agent 工作負載來說，TTFT 的收益值得這個代價。
+
+---
+
+## 可用指令（完整版）
+
+```bash
+docker run -d --name qwen35 --restart unless-stopped \
+  --gpus all --ipc host --shm-size 64gb -p 8000:8000 \
+  -v /home/coolthor/models/qwen35-35b-hf:/models/qwen35 \
+  vllm/vllm-openai:cu130-nightly \
+  --model /models/qwen35 \
+  --served-model-name qwen3.5-35b \
+  --max-model-len 131072 \
+  --gpu-memory-utilization 0.85 \
+  --enable-prefix-caching \
+  --reasoning-parser qwen3 \
+  --enable-auto-tool-choice \
+  --tool-call-parser qwen3_coder \
+  --kv-cache-dtype fp8 \
+  --max-num-seqs 8 \
+  --max-num-batched-tokens 4096
+```
+
+---
+
+*同系列其他文章：[為什麼你的 DGX Spark 只輸出「!!!!!」：SM121 上的 NVFP4 除錯紀錄](/zh-TW/blog/part1-why-your-dgx-spark-says-exclamation-marks) · [DGX Spark 上的 8 個 Model 評測：為 AI Agent 找到最佳組合](/zh-TW/blog/dgx-spark-ollama-benchmark-8-models) · [gpt-oss-120B 跑到 59 tok/s：6 個坑與一份可用的啟動腳本](/zh-TW/blog/part2-gpt-oss-120b-serve-script)*

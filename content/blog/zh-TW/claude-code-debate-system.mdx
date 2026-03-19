@@ -1,0 +1,141 @@
+---
+title: "[Dev Workflow] 讓兩個 AI 吵架。它們不同意的地方才是重點。"
+description: "一個 /debate 指令讓 Codex CLI 和 Gemini CLI 對同一份程式碼互相辯論。訓練資料不同、盲點不同——它們的分歧通常是最有用的輸出。"
+date: "2026-03-19"
+tags: ["Dev Workflow", "Claude Code", "Gemini", "Codex", "Multi-AI", "Code Review"]
+series: "AI Workflow"
+part: 3
+---
+
+## 前言
+
+一個專家的意見有價值。兩個意見相左的專家更有價值——不是因為其中一個是對的，而是因為他們的分歧告訴你不確定性真正落在哪裡。這個邏輯同樣適用於 AI 模型。
+
+我建了一個 `/debate` 指令，把同一個 prompt 發給兩個不同的 AI 模型——Codex CLI 和 Gemini CLI——讓它們針對同一份 codebase 或架構決策互相辯論。它們之間的分歧不是 failure mode，而是輸出本身。
+
+關於讓這類自訂指令得以運作的 hook 和合規基礎設施，見 [Claude Code Mandatory Instructions](/zh-TW/blog/claude-code-mandatory-instructions)。
+
+---
+
+## 問題
+
+大多數 AI 輔助 code review 有一個結構性的問題：模型會同意你。不完全是因為它討好人（雖然這也是風險），而是因為它訓練資料裡的程式碼、模式、和開發者的假設都跟你差不多。叫一個模型審查架構決策，它通常會驗證你已經做出的選擇，因為它看過的資料本來就長這樣。
+
+解法不是問更好的問題。解法是找一個訓練資料不同、架構偏好不同、盲點不同的模型，要第二個意見。
+
+當兩個來自不同公司、在不同資料上訓練的模型，對同一個做法意見相左——那是個訊號。當它們意見一致——那是另一種、更強的訊號。兩種結果都不是雜訊。
+
+---
+
+## /debate 怎麼運作
+
+`/debate` 是一個 Claude Code skill。Claude 扮演 orchestrator：把辯論主題格式化，透過 PAL MCP 發給兩個模型，收集回應，再做綜合。
+
+PAL MCP routing：
+
+```
+Codex CLI  → mcp__pal__clink(cli_name="codex", role="codereviewer")
+Gemini CLI → mcp__pal__clink(cli_name="gemini", role="default")
+```
+
+兩個都用同一個 `clink` 介面，但背後是不同的 CLI。Codex 是 OpenAI 的 CLI，偏向靜態分析。Gemini 是 Google 的 CLI，有更廣的架構視角。它們有不同的預設行為、不同的 failure mode，以及——這才是關鍵——它們第一眼看的東西不一樣。
+
+典型的呼叫：
+
+```
+/debate Greeks 計算應該在 API 層快取還是每次請求重新算？
+         --files /Users/coolthor/BPSTracker-API/src/greeks/calculator.ts
+                 /Users/coolthor/BPSTracker-API/src/routes/greeks.ts
+```
+
+Claude 把這個格式化成 prompt，帶著 `absolute_file_paths` 打給兩個模型，等兩個回應，然後做綜合：它們在哪裡同意、在哪裡分歧、分歧指向什麼。
+
+### 模式
+
+有三種模式：
+
+**`--attack`** — 兩個模型都被指示找問題。不是平衡辯論，是對抗性分析。適合 security review 和上線前的 sanity check。
+
+**`--explore`** — 兩個模型找機會，不找問題。適合程式碼正確但想知道還可以怎麼更好的情況。
+
+**預設（不帶 flag）** — 真正的辯論。每個模型被給一個立場（或自己選一個），被要求對另一個提出反駁。Orchestrator（Claude）不表態，只做總結並找出分歧的核心。
+
+---
+
+## 觀察到的行為差異
+
+在幾個專案跑過這個系統之後，兩個模型的行為分歧夠穩定，穩定到可以當作工具來用：
+
+**Gemini** 先從架構切入。它在挑戰實作之前先挑戰結構。「這兩個服務的邊界對嗎？」先於「這個 function 寫對了嗎？」Gemini 如果很早就推回來，通常是在問這個做法對不對——而這是你最需要在寫了五千行之前聽到的問題。
+
+**Codex** 先鑽進程式碼裡。它把實作讀完，找型別問題，在 function 層面找 edge case，然後——逛完一圈之後——才提出結構性的顧慮。Codex 對 edge case 和錯誤處理的意見通常比 Gemini 更具體、更能直接行動。
+
+這兩種傾向的互動，就是價值所在。一個 BPS Tracker API review 的具體例子：
+
+問題是選擇把 options Greeks（delta、theta、vega）每次請求重算，還是以十五分鐘為間隔快取。Gemini 完全反對在 API 層快取——它質疑 Greeks 資料是不是本來就不該在 API 裡，或許應該是一個有自己 cache 的獨立服務。Codex 則直接處理快取的實作：它找到了 cache invalidation 邏輯裡一個 race condition，會在高波動時段——也就是刷新間隔最關鍵的時候——產生過期的 delta。
+
+Gemini 問了對的架構問題。Codex 找到了真正的 bug。兩個都是必要的。
+
+當兩個模型意見一致——cache 應該在開收盤事件觸發 invalidation——那個一致的分量比任何一個單獨的意見都重。
+
+---
+
+## PAL MCP 層
+
+debate 指令靠 `mcp__pal__clink` 存取外部模型。routing 規則：
+
+```
+# 正確的 routing
+mcp__pal__clink(cli_name="gemini", ...)  # Gemini CLI via API key
+mcp__pal__clink(cli_name="codex", ...)   # Codex CLI via API key
+
+# 錯誤：這些會失敗——chat tool 沒有設定 Gemini/OpenAI API key
+mcp__pal__chat(model="gemini", ...)
+```
+
+`clink` 工具接受 `absolute_file_paths`——只要你想讓模型讀實際的程式碼而不是文字描述，就帶這個參數。Codex 特別會在開始之前把整個 codebase 讀完；這很貴，但比起靠描述運作，分析結果更紮實。
+
+同一個 debate session 的後續 prompt 用 `continuation_id` 維持 context，不用重複上傳檔案。
+
+---
+
+## 限制
+
+**Context window 上限。** 透過 `clink` 的實際 context 上限大約是 20K 字元。對大型 codebase，你需要選要送哪些檔案。這其實是個有用的限制——它逼你想清楚哪些檔案才真的跟問題有關，而不是把所有東西都倒進去。
+
+**Codex 會先把所有東西讀完。** 給了一組檔案，Codex 會在開始之前全部讀過。對十個檔案的 review，第一個回應會比預期慢，token 花費也比較多。這是值得的——分析更紮實——但要把這個算進去。
+
+**行為不完全穩定。** 兩個模型都有不確定性，辯論格式有時會產生不對稱的參與：一個寫三段，另一個寫八段。Synthesizer（Claude）會處理，但原始輸出是不均勻的。
+
+**不適合所有任務。** Debate 格式有 overhead——兩次模型呼叫、綜合時間、解讀工作量。把一個 typo 修改跑進 `/debate` 是浪費。合適的門檻：重大架構決策、安全敏感程式碼、上線前 review，以及你真的不知道哪個做法對的情況。
+
+---
+
+## 什麼時候用
+
+用 `/debate` 的時機：
+
+- 做的架構決策影響超過一個系統邊界
+- 程式碼碰到安全敏感路徑（認證、訂單執行、金流）
+- 看同一個做法太久，需要外部壓力
+- 重構完成，merge 前想要驗證
+
+跳過 `/debate` 的時機：
+
+- 改 typo、config 值、字串更新
+- 你已經有紮實的、有證據支撐的理由支持這個做法
+- 同一個 session 裡已經有 security review agent 覆蓋這段程式碼
+
+更深的觀點：一個 AI 有訓練資料盲點，而這些盲點對它自己是不可見的，定義上就是如此。兩個來自不同公司、在不同語料訓練的 AI，有不同的盲點。它們在置信度上的重疊之處，你有更強的訊號。它們分歧的地方，你有一個值得回答的問題。
+
+---
+
+## 下一步
+
+目前的實作是可用的，但是手動的。下一步是把 `/debate` 整合成 pre-merge workflow 的自動步驟——觸發在碰到特定高風險路徑的 PR 上，而不是每次手動呼叫。MCP 層和 skill 結構需要針對那個使用情境做優化，特別是 context 管理和成本的部分。
+
+在那之前，on-demand 版本在最重要的場合跑得很好。
+
+---
+
+*同系列：[Claude Code Mandatory Instructions：Hook 與合規模式](/zh-TW/blog/claude-code-mandatory-instructions)*

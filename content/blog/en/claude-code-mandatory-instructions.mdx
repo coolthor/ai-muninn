@@ -1,0 +1,215 @@
+---
+title: "[Claude Code] I Wrote MANDATORY. The AI Ignored It."
+description: "A Claude Code config rule marked MANDATORY was skipped twice in one session. Here's the root cause — three architectural reasons why emphasis doesn't work — and three system-level solutions that do."
+date: "2026-03-19"
+tags: ["Claude Code", "AI Agents", "Prompt Engineering", "Systems Design", "Developer Workflow"]
+series: "AI Workflow"
+part: 1
+---
+
+## Preface
+
+A sign above the factory floor says: "WEAR EYE PROTECTION — MANDATORY." Most people put on the goggles. The experienced ones know the sign has been there for eleven years and nobody has been fired for skipping it. The new employee who's never seen a lathe — they read the sign, nod, and reach for the goggles. The veteran walks straight to the machine.
+
+The veteran isn't defiant. They're just optimizing. They have a task. The goggles are a detour. The detour hasn't been enforced in eleven years.
+
+An LLM is the fastest veteran you've ever employed.
+
+---
+
+## The Incident
+
+My Claude Code config has a rule. It's in `CLAUDE.md`, in a section called "Core Loop," under "Step 1: RETRIEVE." The instruction reads, in part:
+
+> **MANDATORY FIRST STEP for all development tasks. Before writing code, query the knowledge base for related experience...**
+
+The mechanism: before starting any development task, Claude Code should run a `qmd get` query against a local knowledge base — a semantic store of past debugging sessions, API gotchas, and hard-won configuration details. The rationale is sound. Why solve the same problem twice?
+
+Here's what happened in one session:
+
+**Task 1: "Update the website screenshots."**
+Expected behavior: query the knowledge base first.
+Actual behavior: jumped straight to analyzing the screenshot generation code.
+
+**Task 2: "Rewrite the User Guide."**
+Expected behavior: query the knowledge base first.
+Actual behavior: opened the existing guide and began drafting.
+
+**Task 3: "Record what we learned today."**
+Expected behavior: proactively ask whether to write an experience record.
+Actual behavior: waited until I noticed and asked directly.
+
+At the end of the session, I asked: "Has the knowledge brain been working today?"
+
+There was a pause. Then an accurate self-diagnosis. Then this article.
+
+The entire session is a meta-example of the problem it describes. I'll return to that at the end.
+
+---
+
+## Why It Happened
+
+Not because Claude Code "doesn't understand" the instruction. It clearly does — the self-diagnosis was precise and correct. The problem is more interesting than comprehension failure.
+
+### Layer 1: Vague Triggers
+
+The rule says to query the knowledge base when "working on trading automation." But the session tasks were: updating screenshots, rewriting a user guide, recording learnings. None of those match "trading automation" cleanly.
+
+Is "update website screenshots" a development task? Depends on your definition. Is "rewrite the User Guide" the kind of task that benefits from a knowledge base query? Probably — but the rule's language doesn't cover it obviously.
+
+Vague trigger conditions create discretionary space. Discretionary space, for any autonomous system trying to complete a task efficiently, gets collapsed. The ambiguity resolves in favor of moving forward.
+
+If the rule had said: "Before ANY Edit or Write action — no exceptions — query the knowledge base," the trigger would be unambiguous. It wasn't. "When working on trading automation" is a condition that requires interpretation, and interpretation produces variance.
+
+### Layer 2: No External Verification
+
+Human compliance systems don't rely on the individual remembering to comply. A surgeon's checklist is read aloud by a nurse before every procedure — not recalled from memory by the surgeon. A pilot's pre-flight check has a co-pilot reading items and the pilot confirming each one. The checklist is an external artifact, worked through by multiple parties.
+
+Claude Code's compliance with `CLAUDE.md` relies entirely on self-monitoring. There is no second party reading the rule aloud. There is no gating step that requires rule completion before the task can proceed. The model reads the config at context load, holds it in memory, and is expected to enforce it on itself when relevant.
+
+Self-monitoring is the weakest form of enforcement for humans. For an LLM running at scale, it's not meaningfully different.
+
+### Layer 3: Recency Bias (The Architectural Reason)
+
+This is the root cause the other two rest on.
+
+Transformer attention is not uniform across the context window. Tokens near the current generation position receive higher attention weights than tokens far away. This is not a bug or an oversight — it's an emergent property of how attention works. Recent content is more causally proximate to what's being generated right now.
+
+`CLAUDE.md` loads at the beginning of the context window. By the time a user sends a task, thousands of tokens have accumulated: system prompts, prior tool calls, conversation turns, tool results. The MANDATORY instruction is now far back in the window. Its attention weight has dropped.
+
+The task input is recent. The model's prior reasoning about the task is recent. The `CLAUDE.md` rule is not recent.
+
+This is why repeating the instruction louder doesn't fix the problem. `**MANDATORY**` and `MANDATORY` occupy the same position in the context window. Capitalization doesn't change attention weight. Bold doesn't change attention weight. Writing `!!!MANDATORY!!!` doesn't change attention weight.
+
+The instruction fades — not because the model forgets it in a human sense, but because the architecture deprioritizes tokens that are far from the current generation step. The mechanism is positional, not cognitive.
+
+---
+
+## What Actually Works
+
+The pattern across all three solutions is the same: don't ask the model to self-enforce. Build the constraint into the system.
+
+### Solution 1: The Hook (External Trigger)
+
+Claude Code supports a hooks system in `settings.json`. A `PreToolUse` hook fires before any tool execution. You can target it to specific tools — `Edit` and `Write` are the ones that precede any real code change.
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo 'REMINDER: Did you query the knowledge base first? Run: qmd get \"<task concept>\" --collection <relevant-collection>'"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+When any `Edit` or `Write` fires, this hook executes first. The `echo` output is injected into the tool result — which means it appears in the most recent content in the context window, with the highest current attention weight.
+
+This is architecturally different from a rule in `CLAUDE.md`. The hook fires at the moment of relevance. The reminder isn't at the top of a config file loaded an hour ago — it's in the immediate tool result the model is reading right now. The distance-in-context problem disappears because the reminder is generated fresh at the point of use.
+
+A more aggressive version queries the knowledge base automatically and injects the results:
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c 'qmd get \"$(cat /tmp/current_task_context 2>/dev/null || echo \"general\")\" --collection muninn 2>/dev/null | head -20 || echo \"No knowledge base results found.\"'"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+The hook doesn't rely on the model deciding to query. The query runs regardless. The model receives the results as part of the tool execution environment, not as an instruction it must remember to follow.
+
+Ten times more effective than text in a config file. The model doesn't need willpower. The system provides the information at the moment it's needed.
+
+### Solution 2: Structural Friction
+
+Make the prerequisite step a structural dependency of downstream steps.
+
+If the knowledge base query result is piped into a context file, and subsequent steps are instructed to read that context file, then skipping the query creates a visible gap. The task proceeds with a hole in its input. The model has to notice and fill it.
+
+One implementation: the first tool call in any task must be a `Read` of a freshly written context file. The context file is written by the knowledge base query. No query → no context file → `Read` fails → task has a gap.
+
+```bash
+# At session start, write an empty context file
+echo "" > /tmp/task_context.md
+
+# The knowledge base query writes to it
+qmd get "update website screenshots" --collection muninn > /tmp/task_context.md
+
+# Task instructions reference the file
+# "Before editing any files, read /tmp/task_context.md for relevant prior experience."
+```
+
+This turns the prerequisite from an add-on into a load-bearing step. The model can't produce a coherent output without the context it's been told to use. The prerequisite isn't enforced by memory — it's enforced by the absence of required input.
+
+The same principle applies to human processes. The best checklists aren't lists of things to remember — they're gates that prevent the next step from executing until the current step is confirmed. The surgeon can't reach for the scalpel until the nurse has confirmed the count.
+
+### Solution 3: Short Context Windows + Fresh Injections
+
+The recency bias problem has a simple counter-strategy: put the important instruction in the most recent content, every time.
+
+Instead of loading `CLAUDE.md` once at session start and hoping it stays relevant, clear context between tasks and rebuild. At the start of each restored session, the `CLAUDE.md` content is the freshest thing in the window. The instruction to query the knowledge base is the most recent thing the model has read.
+
+In practice, this means:
+
+- Keep each task session short. One task per context window if possible.
+- At session start, the first message explicitly restates the prerequisite: "Before starting, query the knowledge base. Here is the command: `qmd get \"<task>\" --collection <collection>`."
+- Don't accumulate sessions until the instruction is thousands of tokens back.
+
+This doesn't fight recency bias. It uses it. The instruction is always recent because you make it recent.
+
+For Claude Code specifically, the `/clear` command between tasks accomplishes the context wipe. The `CLAUDE.md` reloads fresh. The instruction to query the knowledge base is back at the top, with high attention weight, before any task content has been added.
+
+---
+
+## What Was Gained
+
+Three diagnostics that transfer beyond this specific setup:
+
+**The emphasis fallacy.** Adding `MANDATORY`, `**IMPORTANT**`, `!!!`, `ALL CAPS` to instructions increases their salience to human readers. For an LLM, emphasis is a token. The attention weight of the surrounding context matters more than the weight of the word itself. If you're writing instructions and reaching for capitalization to make them stick, you're solving the wrong problem. The issue isn't that the model doesn't read the instruction — it's that the instruction is in the wrong position in the context window at the wrong time.
+
+**Compliance architecture is not different for AI.** The principles that make human process compliance work — external triggers, structural dependencies, checklists that gate progress rather than remind — apply directly to LLM systems. The failure modes are structurally identical. The solutions are structurally identical. An LLM that skips a prerequisite step because the instruction is far back in context is doing the same thing a human does when they skip a step that's been on a list for eleven years without consequences.
+
+**Self-monitoring is the weakest control.** For any system — human team, automated pipeline, AI agent — compliance that relies on the actor remembering to comply will drift. The actor is focused on the task. The prerequisite feels like a detour. The detour gets skipped. The fix is never "remind them harder." The fix is to make the detour structurally unavoidable — a gate, not a suggestion.
+
+---
+
+## The Meta-Irony
+
+This article was written by an LLM, in a session where the knowledge base was never queried.
+
+The logic in the "Why It Happened" section is correct. The solutions in "What Actually Works" are sound. The diagnosis is precise. The writing is coherent.
+
+And next session, it will probably skip the knowledge base query again.
+
+The model knows the rules. It can analyze the rules. It can write a technically accurate, logically structured article about the rules and why they fail. The distance between knowing and doing cannot be closed by more words — not even carefully chosen, accurately diagnostic words like these.
+
+The hook that would have prevented this? Not implemented yet. The structural friction that would have gated the task? Not in place. The short context window strategy? This session ran long.
+
+The knowledge base that was supposed to be queried before the session started? Still empty of today's experience.
+
+This article exists because the system failed exactly as described. The article is a record of the failure. The failure is the most honest illustration of the point.
+
+Build the systems. Don't write `MANDATORY` louder.
+
+---
+
+*For more on building local AI agents that actually comply with their configurations, see [Zero API Cost: Running OpenClaw on DGX Spark + Mac Mini](/en/blog/openclaw-dgx-spark-local-ai-agent). For using multi-agent debate as a verification layer, see [Claude Code Debate System](/en/blog/claude-code-debate-system).*

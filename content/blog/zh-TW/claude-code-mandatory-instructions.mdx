@@ -1,0 +1,215 @@
+---
+title: "[Claude Code] 我寫了 MANDATORY。AI 還是沒跑。"
+description: "設定檔裡標了 MANDATORY 的規則，同一個 session 裡被跳過了兩次。這篇解釋三個架構原因為什麼強調沒用，以及三個真正有效的系統設計解法。"
+date: "2026-03-19"
+tags: ["Claude Code", "AI Agents", "Prompt Engineering", "Systems Design", "Developer Workflow"]
+series: "AI Workflow"
+part: 1
+---
+
+## 前言
+
+工廠牆上掛著一塊牌子：「配戴護目鏡——強制規定。」大部分人會戴。有經驗的老鳥知道這塊牌子掛了十一年，從來沒有人因為沒戴被開除過。新來的員工第一天看到牌子，點個頭，伸手去拿護目鏡。老鳥直接走向機台。
+
+老鳥不是在反抗規定。他們只是在優化。他們有任務要完成，護目鏡是繞路，這個繞路十一年來從未被強制執行過。
+
+LLM 是你僱用過最快的老鳥。
+
+---
+
+## 事發經過
+
+我的 Claude Code 設定檔裡有一條規則。它在 `CLAUDE.md` 的「Core Loop」小節，「Step 1: RETRIEVE」底下，原文大意是：
+
+> **所有開發任務的 MANDATORY 第一步。在寫任何程式碼之前，先查詢知識庫中的相關經驗...**
+
+機制是這樣的：開始任何開發任務前，Claude Code 應該先跑一個 `qmd get` query，查詢一個本地知識庫——裡面存著過去的 debug 記錄、API 踩坑、和花時間才找到的設定細節。邏輯很合理。為什麼要把同一個問題解兩次？
+
+然後同一個 session 裡發生了這些事：
+
+**任務一：「更新網站截圖。」**
+預期行為：先查詢知識庫。
+實際行為：直接開始分析截圖生成的程式碼。
+
+**任務二：「重寫 User Guide。」**
+預期行為：先查詢知識庫。
+實際行為：打開現有的 guide 開始起草。
+
+**任務三：「記錄今天學到的東西。」**
+預期行為：主動詢問是否要寫一筆 experience 記錄。
+實際行為：等我發現並主動詢問才動作。
+
+Session 結束前，我問了一句：「知識庫今天有在運作嗎？」
+
+停頓。然後是精準的自我診斷。然後是這篇文章。
+
+整個 session 本身就是它描述的問題的 meta-level 示範。這件事我留到最後再說。
+
+---
+
+## 為什麼會這樣
+
+不是因為 Claude Code「看不懂」那條規則。它顯然看得懂——自我診斷精準且正確。問題比「理解失敗」更有意思。
+
+### 第一層：觸發條件太模糊
+
+那條規則說的是，在「處理交易自動化相關工作時」要查詢知識庫。但這個 session 的任務是：更新截圖、重寫 User Guide、記錄心得。這些都不明顯符合「交易自動化」。
+
+「更新網站截圖」算開發任務嗎？看你怎麼定義。「重寫 User Guide」是那種應該先查知識庫的任務嗎？可能是——但規則的文字沒有明確涵蓋它。
+
+模糊的觸發條件製造了裁量空間。裁量空間，對任何試圖高效完成任務的自主系統來說，預設結果是往前走。模糊性在「繼續執行」這個方向收斂了。
+
+如果規則寫的是：「在任何 Edit 或 Write 動作之前——沒有例外——先查詢知識庫」，觸發條件就沒有歧義。但它沒有。「當處理交易自動化時」是需要詮釋的條件，詮釋產生變異，變異在效率優先的環境裡往前走。
+
+### 第二層：沒有外部驗證機制
+
+人類的合規系統不依賴個人去記得遵守。外科醫師的術前 checklist 是護士在每次手術前大聲念出來的——不是靠外科醫師自己從記憶中回想。機師的飛行前檢查有副駕駛念條目、機師逐一確認。Checklist 是外部的物件，由多方共同走完的流程。
+
+Claude Code 對 `CLAUDE.md` 的遵守完全依賴自我監督。沒有第二方大聲念規則，沒有要求規則完成才能繼續任務的卡關機制。模型在 context 載入時讀取設定檔，放在記憶裡，然後預期在相關時機自我執行。
+
+自我監督是人類最弱的執行形式。對大規模運作的 LLM 來說，本質上沒有差別。
+
+### 第三層：Recency Bias（架構層面的根本原因）
+
+這才是另外兩層的根基。
+
+Transformer 的 attention 在 context window 裡不是均勻分布的。靠近當前生成位置的 token 拿到更高的 attention weight，遠處的則較低。這不是 bug 或疏忽——這是 attention 機制的 emergent 特性。近期的內容在因果上更接近當前正在生成的東西。
+
+`CLAUDE.md` 在 context window 的開頭載入。等使用者送出任務，已經累積了幾千個 token：system prompt、先前的 tool call、對話輪次、tool result。那條 MANDATORY 規則現在已經遠在 window 的後方。它的 attention weight 下降了。
+
+任務輸入是最近的。模型對任務的推理是最近的。`CLAUDE.md` 的規則不是最近的。
+
+這就是為什麼把強調語氣加大並不能解決問題。`**MANDATORY**` 和 `MANDATORY` 在 context window 裡佔的位置一樣。大寫不改變 attention weight。粗體不改變 attention weight。寫成 `!!!MANDATORY!!!` 也不改變 attention weight。
+
+這條規則在逐漸淡出——不是因為模型以人類的方式「忘記」了它，而是因為架構會降低遠離當前生成步驟的 token 的優先度。這個機制是位置性的，不是認知性的。
+
+---
+
+## 真正有效的做法
+
+這三個解法共用同一個模式：不要依賴模型自我執行。把約束建進系統裡。
+
+### 解法一：Hook（外部觸發）
+
+Claude Code 的 `settings.json` 支援 hooks 系統。`PreToolUse` hook 在任何 tool 執行前觸發。你可以把它鎖定到特定 tool——`Edit` 和 `Write` 是任何真正程式碼修改之前都會出現的兩個。
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo 'REMINDER: Did you query the knowledge base first? Run: qmd get \"<task concept>\" --collection <relevant-collection>'"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+任何 `Edit` 或 `Write` 觸發時，這個 hook 先跑。`echo` 的輸出被注入到 tool result 裡——這意味著它出現在 context window 裡最新的內容中，帶著當前最高的 attention weight。
+
+這在架構上和 `CLAUDE.md` 裡的規則是不同的東西。Hook 在相關的時機點觸發。提醒不是在一小時前載入的設定檔頂端——它在模型正在讀取的、當下的 tool result 裡。距離問題消失了，因為提醒是在使用點即時生成的。
+
+更進一步的版本是自動查詢知識庫並注入結果：
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c 'qmd get \"$(cat /tmp/current_task_context 2>/dev/null || echo \"general\")\" --collection muninn 2>/dev/null | head -20 || echo \"No knowledge base results found.\"'"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+Hook 不依賴模型決定要不要查詢。查詢無論如何都會跑。模型以 tool 執行環境的一部分接收結果，而不是作為它必須記得遵守的指令。
+
+比設定檔裡的文字有效十倍。模型不需要意志力。系統在需要的時刻提供資訊。
+
+### 解法二：結構性摩擦
+
+把前置步驟做成下游步驟的結構性依賴。
+
+如果知識庫查詢的結果被 pipe 到一個 context 檔，而後續步驟被指示要讀取這個 context 檔，那麼跳過查詢就製造了一個可見的缺口。任務帶著一個輸入的空洞繼續。模型必須注意到它並填補。
+
+一個實作方式：任何任務的第一個 tool call 必須是 `Read` 一個剛寫好的 context 檔。這個 context 檔由知識庫查詢寫入。沒有查詢 → 沒有 context 檔 → `Read` 失敗 → 任務有缺口。
+
+```bash
+# Session 開始時寫入空的 context 檔
+echo "" > /tmp/task_context.md
+
+# 知識庫查詢寫入它
+qmd get "update website screenshots" --collection muninn > /tmp/task_context.md
+
+# 任務指示引用這個檔案
+# 「在編輯任何檔案之前，讀取 /tmp/task_context.md 裡的相關過往經驗。」
+```
+
+這把前置條件從附加的東西變成承重的步驟。模型無法在沒有被要求使用的 context 的情況下產生連貫的輸出。前置條件不靠記憶執行——靠缺少必要輸入來執行。
+
+同樣的原則適用於人類流程。最好的 checklist 不是要你記住的事項清單——它們是在當前步驟確認之前阻止下一步執行的關卡。外科醫師在護士確認清點之前無法拿起手術刀。
+
+### 解法三：短 Context Window + 每次新鮮注入
+
+Recency bias 的問題有一個直接的反制策略：把重要的指令放在最新的內容裡，每次都放。
+
+不要把 `CLAUDE.md` 在 session 開始時載入一次，然後希望它保持相關性——在任務之間清空 context 並重建。每次恢復 session 的開頭，`CLAUDE.md` 的內容是 window 裡最新的東西。查詢知識庫的指令是模型剛讀過的最新東西。
+
+實際操作：
+
+- 讓每個任務 session 保持短。可以的話一個 context window 只做一個任務。
+- Session 開頭，第一則訊息明確重申前置條件：「開始之前，查詢知識庫。指令：`qmd get \"<任務>\" --collection <collection>`。」
+- 不要讓 session 堆積到指令已經跑到幾千個 token 之後。
+
+這不是在對抗 recency bias。這是在利用它。指令永遠是最近的，因為你讓它是最近的。
+
+在 Claude Code 裡，任務之間的 `/clear` 指令完成 context 清空。`CLAUDE.md` 重新載入，新鮮。查詢知識庫的指令回到頂端，帶著高 attention weight，在任何任務內容加進來之前。
+
+---
+
+## 可帶走的診斷
+
+三個超出這個特定設定的通用診斷：
+
+**強調謬誤。** 對指令加上 `MANDATORY`、`**重要**`、`!!!`、全大寫，會提高它對人類讀者的顯著性。對 LLM 來說，強調是一個 token。周圍 context 的 attention weight 比那個詞本身的重量更重要。如果你在寫指令時伸手去加大寫字母讓它更有份量，你在解錯問題。問題不是模型沒有讀那條指令——問題是那條指令在錯的時間在 context window 的錯誤位置。
+
+**AI 的合規架構和人類沒有本質不同。** 讓人類流程合規真正有效的原則——外部觸發、結構性依賴、卡住進度而非提醒的 checklist——直接適用於 LLM 系統。失敗模式在結構上是一樣的。解法在結構上也是一樣的。一個因為指令遠在 context 後方而跳過前置步驟的 LLM，和一個員工因為清單掛了十一年沒有後果而跳過步驟，做的是同一件事。
+
+**自我監督是最弱的控制。** 對任何系統——人類團隊、自動化管道、AI agent——依賴執行者記得遵守的合規機制會隨時間漂移。執行者專注在任務上。前置條件感覺像繞路。繞路被跳過了。解法永遠不是「提醒得更大聲」。解法是讓繞路在結構上無法跳過——做成關卡，不是建議。
+
+---
+
+## Meta-Irony
+
+這篇文章是 LLM 寫的，在一個沒有查詢過知識庫的 session 裡寫的。
+
+「為什麼會這樣」那一節的邏輯是正確的。「真正有效的做法」裡的解法是紮實的。診斷是精準的。文字是連貫的。
+
+下一個 session 裡，它很可能還是會跳過知識庫查詢。
+
+模型知道規則。它可以分析規則。它可以寫出一篇技術上精準、邏輯上嚴密、關於規則和規則如何失敗的文章——就像這篇。「知道」和「做到」之間的距離，不能被更多文字填補。就算是像這樣精心選擇、診斷準確的文字也一樣。
+
+那個本應防止這一切的 hook？還沒實作。那個應該把任務卡住的結構性摩擦？還沒到位。那個短 context window 策略？這個 session 跑太長了。
+
+那個本應在 session 開始前就查詢的知識庫？今天的經驗還沒寫進去。
+
+這篇文章的存在，是因為系統照著描述的方式失敗了。這篇文章是那個失敗的記錄。那個失敗是論點最誠實的示範。
+
+把系統建起來。不要把 MANDATORY 寫得更大聲。
+
+---
+
+*更多關於建立真正照設定運作的本地 AI Agent，參見[零 API 成本：用 DGX Spark + Mac Mini 跑 OpenClaw](/zh-TW/blog/openclaw-dgx-spark-local-ai-agent)。關於用多 agent 辯論做為驗證層，參見 [Claude Code Debate System](/zh-TW/blog/claude-code-debate-system)。*

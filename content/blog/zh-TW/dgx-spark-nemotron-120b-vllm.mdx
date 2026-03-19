@@ -1,0 +1,217 @@
+---
+title: "[vLLM] 單顆 GB10 跑 Nemotron-3-Super-120B：一天的除錯記錄"
+description: "在 ASUS GX10（SM121，128GB）上跑 NVIDIA Nemotron-3-Super-120B-NVFP4。四個 SM121 專屬坑、一個沒有任何作用的環境變數，以及最終可用的 docker 指令。"
+date: "2026-03-13"
+tags: ["DGX Spark", "GB10", "SM121", "Nemotron", "vLLM", "NVFP4", "Blackwell", "LLM Serving"]
+series: "DGX Spark"
+part: 4
+---
+
+## 前言
+
+同一座工廠，不同的生產線。GB10 和 B200 都是 Blackwell。它們共享製程、共享行銷家族，但在 kernel 層面幾乎沒有相容性。讓某個 model 在 SM121 上跑起來，不代表下一個 model 能用同樣的方式跑——甚至不代表能跑。
+
+這篇是讓 [Nemotron-3-Super-120B-NVFP4](https://huggingface.co/nvidia/Nemotron-3-Super-120B-Instruct-NVFP4) 在 ASUS GX10（NVIDIA GB10，SM121，128GB unified memory）上跑起來的記錄。整整一天的 debug。五個坑。最後附上可用的 docker 指令。
+
+SM121 的基礎問題在[第一篇](/zh-TW/blog/part1-why-your-dgx-spark-says-exclamation-marks)已經涵蓋——那篇解釋了為什麼 SM121 和 SM100 在 kernel 層面會分叉，以及症狀長什麼樣。這篇接著那篇繼續——專注於 Nemotron 在 SM121 基線問題之上額外增加的那些坑。
+
+---
+
+## 關於這個 Model
+
+Nemotron-3-Super-120B-NVFP4 是 NVIDIA 的 reasoning model——120B 參數，NVFP4 量化格式，分成 17 個 shard。它為長 context 任務設計，強調結構化推理。
+
+在 memory 裡的大小：~108GB。這會佔滿整個 128GB 系統。其他 model 無法同時運行。啟動前的第一步永遠是把 Ollama 裡的 model 都卸載：
+
+```bash
+curl -X POST http://localhost:11434/api/generate \
+  -d '{"model": "MODEL_NAME", "keep_alive": 0}'
+```
+
+用 `curl -s http://localhost:11434/api/ps` 確認後再繼續。Ollama 預設的 `KEEP_ALIVE` 是 2 小時。如果你最近跑過 model，它還在記憶體裡。
+
+載入時間：~8 分鐘（17 個 shard）。這不是一個你可以隨便重啟的 model。
+
+---
+
+## 核心問題：SM121 ≠ SM100
+
+GB10 的 compute capability 是 SM121。B200 的是 SM100。兩者都是 Blackwell，但 ISA 不相容。
+
+大多數優化過的 CUDA kernel 以 SM100 為目標，並假設所有 Blackwell 晶片使用相同的指令集。事實並非如此。在 SM121 上執行 SM100-targeted kernel 會觸發 `cudaErrorIllegalInstruction`。CPU 的類比：在只支援 AVX2 的處理器上執行 AVX-512 指令。
+
+對 Nemotron——一個 NVFP4 MoE model——失敗模式很具體：MoE routing kernel 呼叫 FLASHINFER_CUTLASS，以及 nightly image 裡的 `torch.compile`，兩者在 SM121 上都會失敗，方式不是立刻顯而易見。
+
+SM121 NVFP4 的根本原因在[第一篇](/zh-TW/blog/part1-why-your-dgx-spark-says-exclamation-marks)有深入說明。這篇只記錄 Nemotron 額外增加的部分。
+
+---
+
+## 坑一：Nightly Image 在 SM121 上會 Crash
+
+在[跑 Qwen3.5-35B](/zh-TW/blog/dgx-spark-vllm-qwen35-setup) 時，建議是用 `cu130-nightly`——stable image 在 GB10 上不支援它。跑 Nemotron 時，建議相反。
+
+`cu130-nightly` image 有一個 SM121 專屬的 `torch.compile` bug。它在 warmup 階段才會觸發，不是 startup，所以 container 看起來正常啟動，然後在第一個真實請求上 crash：
+
+```
+RuntimeError: CUDA error: an illegal instruction was encountered
+```
+
+修法：用 stable image。
+
+```bash
+vllm/vllm-openai:v0.17.1-cu130
+```
+
+這跟 Qwen3.5 那篇的建議相反。差異是 model-specific，不是 hardware-specific。Nemotron 的 kernel path 在 nightly 裡觸發 SM121 的 `torch.compile` bug；Qwen3.5 不會，但 Qwen3.5 因為其他原因需要 nightly。把 image 版本和 serve 指令一起記錄，不要把它當成跨 model 可以互換的東西。
+
+---
+
+## 坑二：MoE Kernel——那個沒有任何作用的環境變數
+
+Nemotron 是 MoE model。vLLM 在 SM121 上的預設 MoE routing 使用 FLASHINFER_CUTLASS，它不支援 SM121。修法是改用 Marlin 來處理 MoE layer。
+
+用環境變數的方式：
+
+```bash
+# 這沒有用。這個變數在 vLLM source code 裡不存在。
+export VLLM_NVFP4_MOE_BACKEND=marlin
+```
+
+`VLLM_NVFP4_MOE_BACKEND` 在 vLLM 0.17.1 裡根本沒有定義。設了它不會報錯、不會警告、也不會有任何效果。vLLM 回退到自動選擇，自動選擇挑 FLASHINFER_CUTLASS，model 在第一次使用時 crash。
+
+正確的修法是 CLI flag：
+
+```bash
+--moe-backend marlin
+```
+
+這必須作為命令列參數傳給 vLLM serve。沒有對應的環境變數。如果你是從其他來源改寫 serve script，裡面有 `VLLM_NVFP4_MOE_BACKEND=marlin`，把它刪掉，改成 `--moe-backend marlin`。
+
+*（注意：對 MXFP4 model 如 gpt-oss，類似的修法使用 `VLLM_MXFP4_BACKEND=marlin`——那是針對不同量化格式的不同變數。見 [gpt-oss 那篇](/zh-TW/blog/part2-gpt-oss-120b-serve-script)。Nemotron 用 NVFP4，不是 MXFP4。）*
+
+---
+
+## 坑三：FP4 Backend 環境變數
+
+Nemotron 的 NVFP4 GEMM 在 SM121 上還需要另外兩個環境變數：
+
+```bash
+VLLM_USE_FLASHINFER_MOE_FP4=0
+VLLM_NVFP4_GEMM_BACKEND=marlin
+```
+
+`VLLM_USE_FLASHINFER_MOE_FP4=0` 停用 FlashInfer FP4 MoE path——和 FLASHINFER_CUTLASS 一樣，它在 SM121 上不能用。
+
+`VLLM_NVFP4_GEMM_BACKEND=marlin` 強制 NVFP4 矩陣乘法走 Marlin。這是 NVFP4-specific（變數名裡的 `NVFP4` 前綴有意義）。它跟 `VLLM_MXFP4_BACKEND` 不同，後者針對 MXFP4 量化。兩種格式用不同的 kernel path，對應不同的環境變數。
+
+另外：
+
+```bash
+VLLM_MARLIN_USE_ATOMIC_ADD=1
+```
+
+這修了 SM121 上 Marlin 的 atomic race condition。沒有它，Marlin 在 GB10 並發負載下偶爾會產生錯誤輸出。這個 flag 啟用較慢但正確的 atomic add path。
+
+確認 backend 有效：在 startup log 裡找：
+
+```
+[NVFP4] Using backend: marlin
+```
+
+如果看到的是 `Auto-selected: CUTLASS_FP4`，代表這些環境變數有某個沒有被讀到。
+
+---
+
+## 坑四：Parser 名稱必須精確
+
+Nemotron 有 thinking 輸出格式。Reasoning parser flag 是：
+
+```bash
+--reasoning-parser nemotron_v3
+```
+
+不是 `super_v3`，不是 `nemotron`，不是 `nemotron_super`。就是 `nemotron_v3`。
+
+Parser 名稱錯了，vLLM 在 startup 時不會報錯。Model 正常載入和運行。Thinking token 的 routing 會出錯——可能吞掉真正的回應，或產生格式錯誤的輸出。失敗是靜默的，直到你用會走 reasoning path 的請求去測試才會發現。
+
+用測試請求確認回應出現在正確的 field。
+
+---
+
+## 坑五：Context Window 和 System Prompt 大小
+
+大多數 serve script 給 Nemotron 的預設 `max_model_len` 是 32768 token。如果你用長 system prompt——agent 部署 24K token 的 system prompt 不是稀奇的事——剩下只有 8K token 給真正的對話。這對大多數實際任務來說不夠。
+
+設 `max_model_len=200000`。在這個 context 長度下，vLLM 分配約 35GB 給 KV cache（fp8，0.85 utilization），理論並發是 7.48x。
+
+Qwen3.5 那篇提到的 SSM 參數耦合問題在這裡也適用：`--max-num-batched-tokens` 必須 >= `block_size`。200K context 時，`block_size = ceil(200000 / N) ≈ 2096`。設 `--max-num-batched-tokens 4096` 來滿足這個條件並留有餘裕。
+
+---
+
+## 性能
+
+| 指標 | 數值 |
+|------|------|
+| 載入時間 | ~8 分鐘（17 個 shard）|
+| 記憶體佔用 | ~108GB |
+| Decode 速度（thinking 關閉）| 13-16 tok/s |
+| 最大 context | 200K tokens |
+| KV cache（fp8，0.85 util）| ~35GB / ~450K tokens |
+
+參考：Qwen3.5-35B 在相同硬體上跑 ~47 tok/s。Nemotron 慢了 3 倍。它的 active 參數也大了約 3 倍。數字是一致的——GB10 是 bandwidth-bound，更多參數代表每個 token 需要更多 memory load。
+
+實際含義：Nemotron 不適合當 agent 的主要 inference backend。13-16 tok/s 的速度，call latency 對互動式 agent 工作負載太高。它更適合 batch 任務、深度分析，或輸出品質足以抵消吞吐量成本的場景。
+
+---
+
+## 得到了什麼
+
+Nemotron 在 GB10 上跑起來了。200K context window 在長 system prompt 下可以正常使用。SM121 專屬的修法組合（Marlin backend、正確的環境變數、stable image）對這個 model 有效。
+
+這次 debug 可以遷移的教訓：在 SM121 上，在得出「硬體不相容」的結論之前，先確認 kernel path。失敗症狀——`cudaErrorIllegalInstruction` 或靜默的錯誤輸出——看起來像硬體問題。它不是。它是 kernel targeting 問題。修法通常只差一個 flag。
+
+具體的診斷：在 startup log 找 `[NVFP4] Using backend: marlin`。如果看到的是 `Auto-selected`，代表你的 configuration 有某個東西沒有被讀到。NVFP4 的環境變數（`VLLM_NVFP4_GEMM_BACKEND`）跟 MXFP4 的環境變數（`VLLM_MXFP4_BACKEND`）不同，不能互換。MoE backend 必須用 CLI flag 設定（`--moe-backend marlin`），沒有對應的環境變數。
+
+---
+
+## 可用的指令
+
+```bash
+# 先停掉 qwen35——128GB 只裝得下一個大 model
+docker stop qwen35
+
+docker run -d --name nemotron --restart unless-stopped \
+  --gpus all --ipc host --shm-size 16g -p 8002:8000 \
+  -v /home/coolthor/models/nemotron-nvfp4:/models/nemotron \
+  -e VLLM_NVFP4_GEMM_BACKEND=marlin \
+  -e VLLM_MARLIN_USE_ATOMIC_ADD=1 \
+  -e VLLM_USE_FLASHINFER_MOE_FP4=0 \
+  vllm/vllm-openai:v0.17.1-cu130 \
+  --model /models/nemotron \
+  --served-model-name nemotron \
+  --dtype auto \
+  --kv-cache-dtype fp8 \
+  --moe-backend marlin \
+  --tensor-parallel-size 1 \
+  --trust-remote-code \
+  --gpu-memory-utilization 0.85 \
+  --max-model-len 200000 \
+  --max-num-batched-tokens 4096 \
+  --reasoning-parser nemotron_v3 \
+  --enable-auto-tool-choice \
+  --tool-call-parser qwen3_coder \
+  --enable-prefix-caching
+```
+
+跟 Qwen3.5 指令的主要差異：
+- Stable image（`v0.17.1-cu130`）而不是 nightly
+- `--moe-backend marlin` 是 CLI flag（沒有環境變數可以替代）
+- 三個 NVFP4-specific 環境變數
+- Port 8002（8000 是 qwen35 跑起來時用的 port）
+- `--shm-size 16g` 已足夠；Nemotron 不需要 64g
+
+不要加 `--enforce-eager`。測試過，它會在 MoE autotuner 階段導致 startup crash。
+
+---
+
+*本系列相關文章：[為什麼你的 DGX Spark 只輸出「!!!!!」：SM121 上的 NVFP4 除錯](/zh-TW/blog/part1-why-your-dgx-spark-says-exclamation-marks) · [gpt-oss-120B 跑出 59 tok/s：6 個坑和一個可用的 Serve Script](/zh-TW/blog/part2-gpt-oss-120b-serve-script) · [在 DGX Spark 上將 Qwen3.5 從 Ollama 遷移到 vLLM](/zh-TW/blog/dgx-spark-vllm-qwen35-setup)*

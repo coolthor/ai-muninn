@@ -1,0 +1,198 @@
+---
+title: "[Benchmark] DGX Spark 跑 8 個模型：找出最適合 AI Agent 的組合"
+description: "在 NVIDIA GB10（128GB 統一記憶體）上，用 7 個任務類別評測 8 個本地 LLM。量化的意外結論、一個連 JSON 都出錯的 120B 模型，以及把整個 token budget 用來思考的 thinking model。"
+date: "2026-03-05"
+tags: ["DGX Spark", "GB10", "Ollama", "Benchmark", "LLM", "AI Agent", "Blackwell"]
+series: "DGX Spark"
+part: 2
+---
+
+## 前言
+
+出發前先選武器。不是所有武器都適合所有戰鬥——這件事通常要進了第一個地牢才會發現，當你以為萬能的劍碰到酸液就融掉的時候。
+
+這篇文章就是這個過程，套用在本地 LLM 上。
+
+在[搞定 SM121 + vLLM](/zh-TW/blog/part1-why-your-dgx-spark-says-exclamation-marks)之後，最直接的問題變成：*這台機器上哪些模型值得跑，適合哪些任務？* 那時我手上有一台 128GB 統一記憶體的 [ASUS Ascent GX10](https://www.asus.com/servers-workstations/mini-pc/ascent-gx10/)，正在用 [Ollama](https://ollama.com) — 還沒遷移到 vLLM 之前 — 我評測了八個模型、七個任務類別，目標是找出最適合 AI coding agent 的組合。
+
+以下是結論。
+
+---
+
+## 硬體
+
+ASUS Ascent GX10，NVIDIA GB10 Grace Blackwell Superchip，128GB 統一記憶體，273 GB/s 頻寬，SM121 compute capability。
+
+硬體背景故事——SM121 跟 GB200 有什麼不同、為什麼對 kernel 選擇有影響——在[第一篇文章](/zh-TW/blog/part1-why-your-dgx-spark-says-exclamation-marks)有完整說明。這篇把硬體當作已知條件，聚焦在哪些模型跑得好。
+
+重點：128GB 讓你可以跑在其他地方需要多 GPU 的模型。這次 benchmark 充分利用了這個優勢。
+
+---
+
+## 測試方法
+
+七個任務類別，各自測試不同能力：
+
+1. **邏輯推理** — 多步驟推導、約束滿足
+2. **程式碼生成** — 根據規格寫出可執行的函數
+3. **翻譯** — 英繁互譯，評估自然度和準確性
+4. **數學** — 從算術到代數，要求顯示計算過程
+5. **摘要** — 壓縮長文件，同時保留關鍵內容
+6. **除錯** — 找出並解釋給定程式碼中的 bug
+7. **Tool calling** — 生成符合指定函數簽名的有效 JSON
+
+Tool calling 需要特別說明。在 AI agent 框架中，模型透過生成結構化 JSON 來呼叫工具，格式大概像這樣：
+
+```json
+{
+  "function": "search_web",
+  "arguments": {
+    "query": "NVIDIA GB10 specs",
+    "max_results": 5
+  }
+}
+```
+
+如果模型生成了無效的 JSON，agent 框架要麼直接 crash，要麼靜默失敗。這個類別是二元的通過/失敗，不是品質梯度。對生產環境的 agent 來說，這是最重要的能力之一。
+
+所有測試都透過 [Ollama](https://ollama.com) 的 `/api/generate` 和 `/api/chat` endpoint 進行。兩個 endpoint 為什麼都重要，在第三個發現裡會說明。
+
+---
+
+## 結果
+
+### 速度
+
+| 模型 | 格式 | 速度（tok/s）|
+|---|---|---|
+| qwen3-vl:30b | native（raw mode）| 78.5 |
+| qwen3-vl:30b | thinking mode | 76–79 |
+| qwen3-coder-next | q4\_K\_M | 47.0 |
+| gpt-oss:120b | MXFP4 | 42.4 |
+| qwen3-coder-next | q8\_0 | 36.1 |
+| glm-4.7-flash | bf16 | 27.5 |
+
+### VRAM
+
+| 模型 | VRAM 用量 |
+|---|---|
+| qwen3-vl:30b | ~19 GB |
+| qwen3-coder-next q4\_K\_M | ~20 GB（估算）|
+| qwen3-coder-next q8\_0 | ~33 GB（估算）|
+| gpt-oss:120b | ~60 GB（估算）|
+| glm-4.7-flash bf16 | ~30 GB（估算）|
+
+*q4\_K\_M 和 q8\_0 的 VRAM 數字是根據模型參數量和量化格式估算的。qwen3-vl:30b 的 19 GB 是直接觀測值。*
+
+補充：qwen3-coder-next q4\_K\_M 和 q8\_0 在 Ollama 中共用 blob 儲存空間——同一個模型的兩種量化版本不會讓磁碟用量翻倍。
+
+---
+
+## 發現一：量化比你想的影響更小
+
+重點比較：qwen3-coder-next q4\_K\_M 對 q8\_0，跨七個任務類別。
+
+速度差距是真實的：**47.0 tok/s 對 36.1 tok/s**，差了 23%。VRAM 差距也很明顯：q4 大概少用 33GB。但在七個任務裡，品質差異幾乎看不出來。
+
+我找到的具體差異：
+
+- **翻譯**：q8 偶爾會有略微更自然的措辭——那種人工能感覺到、BLEU score 看不出來的差距
+- **除錯**：q8 的解釋偶爾稍微更詳細，在根因分析周圍多了一兩句補充
+
+其他的——邏輯、程式碼生成、數學、摘要、tool calling——兩種量化在功能上完全相同。
+
+實際結論：**q4\_K\_M 在幾乎所有情境下都是正確選擇。** 你獲得 23% 更高的吞吐量，釋放 33GB 給其他模型（或更大的 context），而在 agent 工作負載中重要的任務上幾乎沒有品質損失。
+
+這個原則的底層邏輯：對 32B+ 的模型，4-bit 量化保留了足夠的精度，品質下限由模型的訓練和架構決定，而不是量化等級。如果你讀過量化相關的論文，這不意外——只是在直接測試之前不夠直觀。
+
+---
+
+## 發現二：更大不一定更好
+
+gpt-oss:120b 是一個 120B 的模型。它的 tool calling 測試失敗了。
+
+不是「比較差」。是失敗。在 tool calling 測試中生成了無效的 JSON——對任何依賴結構化輸出的 agent 框架來說，這是硬傷。對於輸出格式本身是關鍵的任務，一個不能穩定產出有效 JSON 的模型，不管其他 benchmark 分數多高都沒有用。
+
+冗長的問題是獨立的，但同樣一致。在翻譯和摘要任務上，gpt-oss:120b 的輸出量是 qwen3-coder-next 的 5–6 倍，但沒有對應的品質提升。多出來的輸出不是在增加精度或細節——只是填充。對於程式化處理模型輸出的 agent 工作流來說，沒有內容的冗長就是延遲稅。
+
+gpt-oss:120b 的速度是 42.4 tok/s，已經比 qwen3-coder-next q4 慢了。在 5 倍冗長、structured output 更差的情況下，把它當 agent 主力的理由很難成立。
+
+這裡的教訓：參數量是能力的代理指標，不是保證。Tool calling 特別依賴微調和 RLHF 的重點，而不是原始模型大小。一個調得好的 32B 模型，在結構化輸出任務上每次都會贏過一個調得差的 120B 模型。
+
+---
+
+## 發現三：Thinking Model 需要不同的 API 呼叫
+
+這個陷阱非常真實。
+
+glm-4.7-flash 和 qwen3-vl 用標準的 `/api/generate` endpoint 呼叫時，都會返回**空回應**。模型看起來在跑——token 在生成、請求需要時間——但返回的 `response` 欄位是空的。
+
+發生什麼事：這些模型把輸出路由到內部的「thinking」channel。實際回應在一個 `/api/generate` 不會暴露的欄位裡。你必須用 `/api/chat`：
+
+```bash
+# Thinking model 用這個會得到空回應：
+curl http://<your-gx10-ip>:11434/api/generate \
+  -d '{"model": "glm-4.7-flash", "prompt": "翻譯：Hello world", "stream": false}'
+
+# 這個才能正常使用：
+curl http://<your-gx10-ip>:11434/api/chat \
+  -d '{
+    "model": "glm-4.7-flash",
+    "messages": [{"role": "user", "content": "翻譯：Hello world"}],
+    "stream": false
+  }'
+```
+
+第二個呼叫會在 `message.content` 欄位返回實際輸出。思考過程在另一個欄位——你可以檢查它，也可以直接忽略。
+
+qwen3-vl 的情況還有另一個值得單獨記錄的失敗模式。
+
+### 7,094 字元思考事件
+
+qwen3-vl:30b 在 thinking mode 下，可以把整個 token budget 全部用在內部推理上，然後輸出零個字元的實際結果。
+
+在一個測試中——一個單句翻譯——模型花了 7,094 個字元的 thinking token 把這句翻譯想透徹，然後返回了空回應。不是截斷，不是錯誤。就是沒有。思考過程很完整，輸出完全缺席。
+
+這不完全算 bug——這是 thinking model 分配 budget 的方式造成的後果。當思考過程填滿了 context，就沒有空間給輸出了。對於模型過度思考的短任務，你會得到最大推理深度和最小輸出。
+
+實際解法：對簡單任務，用 qwen3-vl 的 raw mode（不開 thinking）。保留 thinking mode 給那些推理深度真的有價值的任務——複雜的多步驟分析，不是翻譯。
+
+---
+
+## 我用的 Stack
+
+三個角色，三個模型：
+
+**主力：qwen3-coder-next q4\_K\_M** — 47.0 tok/s，tool calling 穩定，七個任務類別表現全面。對需要大量呼叫工具、生成程式碼、做邏輯推理的 AI coding agent 來說，這是主力。q4 量化帶來的速度和記憶體餘裕，讓它可以跟其他模型同時跑。
+
+**視覺：qwen3-vl:30b** — 只用 19GB，這意味著可以跟主力模型同時執行還有大量餘裕。支援圖像輸入。對直接的任務——翻譯、描述、提取——用 raw mode，不開 thinking。把 thinking mode 留給你真的需要它、而且任務夠複雜到值得冒 token budget 風險的場合。
+
+**深度推理：glm-4.7-flash** — 需要徹底分析而不是快速回應的時候用。速度 27.5 tok/s 比較慢，但 thinking channel 在需要深度的任務上能加分。把它當成深思熟慮的選擇用在複雜推理任務上，不要當一般用途模型。
+
+同時跑 qwen3-coder-next q4（~20GB）和 qwen3-vl（~19GB），大概用掉 **71GB**，128GB 的一半多一點。這台機器連半滿都沒到。這個餘裕是有用的——意味著可以為特定任務載入額外模型、保持 context 熱載入，或在配置之間切換而不需要等待模型重新載入。
+
+---
+
+## 這次學到什麼
+
+幾個從這次 benchmark 可以帶走的原則：
+
+**VRAM 算術比模型數量重要。** 128GB 聽起來很多，直到你開始跑 60GB 的模型。這次 benchmark 的洞察：兩個較小的專用模型，在實際 agent 任務上通常優於一個大型通用模型，用更少記憶體，也給了你更多操作彈性。兩個模型跑起來只用了 71GB，剩下的不是浪費——是刻意的餘裕。
+
+**冗長不等於品質。** gpt-oss:120b 在摘要和翻譯任務上 5–6 倍的輸出量沒有帶來對應的品質提升。對程式化處理模型輸出的工作流——也就是 AI agent 大部分在做的事——較短、準確的回應比較長、有填充的回應更好。Benchmark 要衡量每個 token 的輸出品質，而不只是輸出品質。
+
+**API endpoint 是模型介面合約的一部分。** Thinking model 透過 `/api/generate` 靜默返回空回應不算 bug——但它們也不會告訴你你用錯了 endpoint。如果一個模型在 Ollama UI 裡能用，但在你的程式碼裡返回空回應，先檢查你用的是 `/api/generate` 還是 `/api/chat`。這個差異在文件裡不夠顯眼。
+
+**Tool calling 是品質門檻，不是品質梯度。** 對 agent 框架來說，一個偶爾生成無效 JSON 的模型，跟一個永遠失敗的模型在操作上是等價的。這個應該最先測試，不是最後 benchmark。如果結構化輸出失敗了，對那個使用場景來說模型其他所有的品質都不重要。
+
+---
+
+## 這之後發生了什麼
+
+這次 benchmark 推動了從 Ollama 遷移到 vLLM 的決定。具體動機：重複系統提示的 prefix caching（對有長 tool schema 的 agent 工作流影響顯著）、每次呼叫開始時更低的 TTFT，以及對 KV cache 管理更細緻的控制。
+
+在 GB10/SM121 上的 vLLM 遷移有自己的一套問題——在這個系列的其他文章裡有說明。
+
+---
+
+*相關：[為什麼你的 DGX Spark 只輸出「!!!!!」：SM121 上 NVFP4 的完整除錯記錄](/zh-TW/blog/part1-why-your-dgx-spark-says-exclamation-marks)*

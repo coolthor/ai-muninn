@@ -1,0 +1,173 @@
+---
+title: "[Claude Code] Testing iOS Apps with Claude Code: 81% Context Reduction"
+description: "How I replaced screenshot-heavy iOS test runs with ui_describe_all-first testing in Claude Code, cutting context usage by 81% for BPS Tracker. Plus Fastlane integration for App Store automation."
+date: "2026-03-19"
+tags: ["Claude Code", "iOS", "Swift", "Testing", "Fastlane", "BPS Tracker"]
+series: "AI Workflow"
+part: 2
+---
+
+## Preface
+
+Using an LLM to test an iOS app is like asking someone to navigate a building by taking a photo of every room. It works, but the photos are expensive, and after the fifteenth one you start wondering if words would have been faster.
+
+That intuition turned out to be correct. This article covers how I restructured Claude Code's iOS testing behavior for BPS Tracker — an options management iOS app for tracking Bull Put Spread positions — to cut context consumption by 81% while making test runs faster and more reliable. It also covers the Fastlane integration that handles the screenshot and App Store upload pipeline.
+
+For how I set up the Claude Code compliance layer that enforces these patterns via CLAUDE.md and hooks, see [Claude Code Mandatory Instructions](/en/blog/claude-code-mandatory-instructions).
+
+---
+
+## The Problem
+
+BPS Tracker is a SwiftUI app with a nontrivial UI: a list of active spreads, an entry screen with several input fields, a settings screen, and a subscription paywall. Testing it with Claude Code and the iOS Simulator MCP meant Claude was doing something like this on every step:
+
+1. Tap a button
+2. Take a screenshot
+3. Analyze the screenshot
+4. Decide on the next action
+5. Repeat
+
+Each screenshot sent to the model is raw image data — significantly larger than text. A test run touching ten screens, two state transitions each, produced roughly 81,290 KB of context. Most of that was screenshots that contained no information beyond what an accessibility label would have described in thirty characters.
+
+The feedback loop was also slow. Image uploads take time. Analysis takes more. For iterative testing where you're running the same flow ten times to verify a fix, the latency compounds.
+
+---
+
+## The Solution
+
+### Rule 1: ui_describe_all First
+
+The iOS Simulator MCP exposes a set of tools:
+
+- `mcp__ios-simulator__ui_describe_all` — returns the full accessibility tree of the current screen as text
+- `mcp__ios-simulator__screenshot` — captures a PNG of the current screen
+- `mcp__ios-simulator__ui_tap` — taps a coordinate or accessibility element
+- `mcp__ios-simulator__ui_type` — types into a focused field
+- `mcp__ios-simulator__ui_swipe` — swipes in a direction
+- `mcp__ios-simulator__ui_view` — returns UI hierarchy for a specific region
+
+The insight: `ui_describe_all` returns the accessibility tree as structured text. For state verification — "is this button enabled?", "what text is in this label?", "does this modal appear?" — the text description is complete and precise. A screenshot of the same state is the same information wrapped in a PNG that costs ten times as much context to process.
+
+I added this rule to the project's CLAUDE.md:
+
+```
+## iOS Testing Policy
+
+When testing iOS UI with the simulator MCP:
+- PREFER ui_describe_all for state verification (is element present, is value correct, is button enabled)
+- RESERVE screenshot for: visual layout bugs, color/animation issues, cases where accessibility labels are absent or incorrect
+- Do NOT take a screenshot after every tap. Take one only when the above conditions apply.
+```
+
+That single rule dropped context usage from ~81,290 KB to ~15,215 KB per equivalent test run — an 81% reduction. The test speed increased proportionally, because the model spends less time processing image data and more time acting.
+
+### The Coordinate Cache Pattern
+
+The first time Claude runs a test on a new screen, it calls `ui_describe_all`, identifies the relevant elements, and maps out their positions. On subsequent runs, it should be able to skip that discovery phase.
+
+The pattern I settled on: after each test run, Claude writes a coordinate snapshot to a file in the project:
+
+```json
+// .claude/ui-coordinates.json
+{
+  "spread_list_screen": {
+    "add_spread_button": { "x": 374, "y": 812, "label": "Add Spread" },
+    "first_spread_row": { "x": 187, "y": 240, "label": "NVDA 480/470 Put" }
+  },
+  "spread_entry_screen": {
+    "ticker_field": { "x": 187, "y": 320, "label": "Ticker Symbol" },
+    "short_strike_field": { "x": 187, "y": 400, "label": "Short Strike" },
+    "submit_button": { "x": 187, "y": 680, "label": "Add Spread" }
+  }
+}
+```
+
+Subsequent test sessions start by reading this file. If the coordinates are still valid (confirmed with a single `ui_describe_all`), Claude skips the full element discovery phase and jumps directly to execution. If the layout has changed — after a UI refactor, for example — the cache is invalidated and rebuilt.
+
+The instruction in CLAUDE.md:
+
+```
+After completing a test run, update .claude/ui-coordinates.json with any element coordinates observed.
+At the start of a test run, read .claude/ui-coordinates.json and use stored coordinates
+if the current ui_describe_all output confirms the labels still match.
+```
+
+This saves several seconds on every test run and noticeably improves behavior consistency across sessions.
+
+### Fastlane Integration
+
+The App Store submission process for BPS Tracker involves screenshot generation across multiple device sizes, metadata updates, and binary upload. Fastlane handles all of it.
+
+The relevant lanes in the project's `Fastfile`:
+
+```ruby
+lane :screenshots do
+  capture_ios_screenshots(
+    scheme: "BPSTracker",
+    devices: ["iPhone 16 Pro Max", "iPhone 16 Pro", "iPhone SE (3rd generation)"],
+    languages: ["en-US", "zh-TW"],
+    output_directory: "./fastlane/screenshots"
+  )
+end
+
+lane :upload_metadata do
+  deliver(
+    submit_for_review: false,
+    force: true,
+    skip_binary_upload: true,
+    skip_screenshots: false,
+    screenshots_path: "./fastlane/screenshots"
+  )
+end
+
+lane :release do
+  build_ios_app(
+    scheme: "BPSTracker",
+    export_method: "app-store"
+  )
+  deliver(
+    submit_for_review: false,
+    force: true
+  )
+end
+```
+
+What's automated: screenshot generation across device sizes and locales, metadata updates from `./fastlane/metadata/`, binary upload to App Store Connect. Claude can invoke these lanes directly via Bash.
+
+What still needs attention: `fastlane screenshots` runs UI tests in the simulator, and Claude occasionally gets into a loop if an intermediate assertion fails — it retries the lane instead of diagnosing the failure. The fix is explicit: add a `max_retries: 0` convention in the CLAUDE.md rule for Fastlane, and require Claude to read the error output before any retry. This is a work in progress.
+
+---
+
+## What Was Gained
+
+**The numbers:**
+
+| Metric | Screenshot-first | ui_describe_all-first |
+|--------|-----------------|----------------------|
+| Context per full test run | ~81,290 KB | ~15,215 KB |
+| Reduction | — | 81% |
+| Subjective test speed | Slow | Noticeably faster |
+
+**Transferable patterns:**
+
+The screenshot-vs-describe tradeoff applies anywhere you have an MCP tool that returns text representations of UI state. The principle is the same: use the cheapest representation that contains the information you need. Images are only necessary when the information is genuinely visual — color, layout, animation.
+
+The coordinate cache pattern transfers to any automation workflow that involves repeated navigation through a stable UI. Write coordinates once, read them back. The cost is a single JSON file and a few lines in CLAUDE.md.
+
+**What still doesn't work well:**
+
+Layout validation still requires screenshots. If a SwiftUI view renders incorrectly — wrong padding, clipped text, overlapping elements — `ui_describe_all` won't catch it. The accessibility tree describes what the elements are and their values, not how they're positioned visually. For layout regression testing, screenshots remain necessary.
+
+Loop detection in Fastlane is unreliable. Claude will sometimes retry a failed lane without reading the error, and the next retry fails the same way. The pattern needs a stronger CLAUDE.md rule that says "read the error before any retry" and treats repeated identical failures as a stop condition rather than a retry trigger.
+
+---
+
+## Conclusion
+
+The default behavior — screenshot everything — is the wrong default for iOS testing. Accessibility labels describe UI state precisely and cheaply. The rule change is one paragraph in CLAUDE.md. The 81% context reduction is not a tuning exercise; it's a consequence of using the right tool for the job.
+
+The coordinate cache pattern is optional but worth the ten minutes it takes to set up. Test runs that skip the discovery phase are faster and more predictable. Fastlane integration removes the manual steps in the App Store pipeline. The remaining rough edges — loop detection, layout validation — are known and bounded. Everything else in the workflow runs cleanly.
+
+---
+
+*Also in this series: [Claude Code Mandatory Instructions: Hooks and Compliance Patterns](/en/blog/claude-code-mandatory-instructions)*

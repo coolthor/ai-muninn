@@ -1,0 +1,188 @@
+---
+title: "[AI Agent] 零 API 成本：用 DGX Spark + Mac Mini 跑 OpenClaw"
+description: "完整的本地 AI Agent 架構：Mac Mini M4 當長駐 gateway，GX10 跑推理，Telegram 當介面。不需要訂閱，不需要雲端 API。六個部署心得。"
+date: "2026-03-03"
+tags: ["OpenClaw", "AI Agent", "DGX Spark", "Mac Mini", "Self-Hosted", "Ollama", "SearXNG"]
+series: "AI Agent"
+part: 1
+---
+
+## 前言
+
+OpenClaw 的吉祥物是一隻龍蝦。這個專案的哲學是：你要自己在家養牠——餵給它本地算力、賦予它工具，它就會成為你的私人 agent。這個比喻很貼切：龍蝦成熟的速度慢，對環境很挑剔，但一旦安頓下來，產出相當可觀。
+
+Mac Mini M4 到貨的時間點，剛好是我 iOS app 開發收尾的階段。我有硬體，我有時間，我預期這是個週末專案。事實上比週末長。
+
+這篇是部署記錄：架構長什麼樣、六個我希望在開始之前就讀到的心得。Inference 後端的遷移（Ollama → vLLM）有另一篇專門記錄——見[在 DGX Spark 上將 Qwen3.5 從 Ollama 遷移到 vLLM](/zh-TW/blog/dgx-spark-vllm-qwen35-setup)。這篇專注於 agent 層：OpenClaw、gateway、搜尋堆疊，以及讓 yui（我的 agent）真正有用的過程。
+
+---
+
+## 架構
+
+分工很直觀：Mac Mini M4 跑 gateway，GX10 跑推理，Telegram 當介面。
+
+```
+你
+ │
+ ▼ Telegram
+Mac Mini M4（長駐）
+ │  OpenClaw gateway（launchd agent）
+ │  SearXNG（Orbstack Docker）
+ │
+ ▼ Tailscale
+ASUS GX10（DGX Spark）
+ │  Ollama / vLLM
+ │  128GB unified memory
+ ▼
+Model（Qwen3.5、GLM4 等）
+```
+
+Mac Mini 24/7 低功耗運行，負責路由、tool call、搜尋和記憶體。GX10 吃 GPU、耗電，只負責推理，只在被呼叫時工作。兩者透過 Tailscale 在私有網路中連接，GX10 不需要公開 IP。
+
+這個分工對長駐 agent 很重要。如果 gateway 和 inference backend 在同一台機器上，重啟 vLLM 就會同時中斷 agent。分開部署意味著 vLLM 重啟（會發生，詳見 [Qwen3.5 那篇](/zh-TW/blog/dgx-spark-vllm-qwen35-setup)）不影響 agent 的可用性。
+
+OpenClaw gateway 在 Mac Mini 上以 launchd agent 運行（`ai.openclaw.gateway`）。Config 放在 `~/.openclaw/openclaw.json`，存檔即熱更新，不需要重啟。
+
+Log 路徑：
+```
+/tmp/openclaw/gateway-stdout.log
+/tmp/openclaw/gateway-stderr.log
+/tmp/openclaw/openclaw-YYYY-MM-DD.log
+```
+
+---
+
+## 心得一：從 Ollama 開始，之後再升級到 vLLM
+
+SGLang 的 prefill 性能出色，但設定不是新手友好。如果你剛接觸 inference framework，一開始就試圖跑 SGLang，你會花更多時間在 debug 框架本身，而不是在用 agent。
+
+從 Ollama 開始。單一 binary，一條指令，在 GB10 上開箱即用。初期部署——把 OpenClaw 連上、測試 tool、調整 system prompt——Ollama 是正確的選擇。你可以在 Ollama 跑推理的同時迭代 agent。
+
+Agent 穩定之後，再遷移到 vLLM，利用 TTFT 的改善。完整的遷移記錄在[在 DGX Spark 上將 Qwen3.5 從 Ollama 遷移到 vLLM](/zh-TW/blog/dgx-spark-vllm-qwen35-setup)。簡短版本：vLLM 的 prefix caching 把 TTFT 從 2-4 秒降到 0.12 秒——這是長駐 agent 使用固定 system prompt 每次呼叫都會命中的情境。
+
+選模型的 benchmark 在[DGX Spark 跑 8 個模型：找出 AI Agent 最佳組合](/zh-TW/blog/dgx-spark-ollama-benchmark-8-models)。結論：如果你的硬體裝得下，Qwen3.5-35B 是起點。推理品質穩定，速度合理，內建 vision。
+
+初期部署流程：GX10 跑 Ollama，連上 OpenClaw，驗證 agent end-to-end 可用。之後再遷移到 vLLM。
+
+---
+
+## 心得二：在 Gateway 上跑 Orbstack + SearXNG
+
+OpenClaw 預設的搜尋設定會呼叫外部 API。外部 API 有 rate limit、要收費、你的 query 會送到第三方。對一個每天跑幾百次搜尋的個人 agent 來說，這是錯誤的預設。
+
+解法：在 Mac Mini 上本地跑 [SearXNG](https://github.com/searxng/searxng)，接進 OpenClaw 的 config。
+
+SearXNG 是 metasearch engine——它從 DuckDuckGo、Bing、Google 等來源聚合結果，不把你的 query 暴露給任何單一提供商。一個 Docker container，零 API key，無限請求。
+
+[Orbstack](https://orbstack.dev) 是 Mac 上最合適的 Docker runtime。啟動比 Docker Desktop 快，記憶體用量少，網路整合也跟 macOS 貼合。在 Mac Mini 上跑 container，用 Orbstack。
+
+啟動 SearXNG 的指令：
+
+```bash
+docker run -d --name searxng \
+  -p 8888:8080 \
+  -v ~/.searxng:/etc/searxng \
+  --restart unless-stopped \
+  searxng/searxng:latest
+```
+
+然後在 `~/.openclaw/openclaw.json` 裡，把搜尋工具指向 `http://localhost:8888`。Config 熱更新，不需要重啟。
+
+品質差距是可量測的。SearXNG 聚合的來源比任何單一 API 都多，沒有 rate limit 意味著 yui 可以並行搜尋不需要退避。這是對 agent 輸出品質影響最高的單一改動。
+
+---
+
+## 心得三：Chrome Relay 不是可選的
+
+OpenClaw 有一個瀏覽器擴充功能叫 OpenClaw Relay，它讓 agent 能做瀏覽器自動化——導航頁面、讀取動態內容、與元素互動。沒有它，agent 的網頁能力僅限於伺服器端抓取的靜態內容。
+
+這個步驟容易被跳過，因為它不在主要的設定流程裡。你安裝 OpenClaw，它跑起來，一切看起來正常。然後你給 yui 一個需要讀取 JavaScript 渲染內容的任務，它靜默失敗。
+
+安裝 Chrome OpenClaw Relay 擴充功能，啟用它，重新載入瀏覽器。一個步驟。網頁能力的提升相當顯著。
+
+---
+
+## 心得四：先裝最少的 Skill
+
+ClawHub 有越來越多的社群 skill。第一次登入時，很容易把所有看起來有用的 skill 都裝上。這是個錯誤。
+
+每個 skill 都會增加 agent context 和 tool list 的表面積。沒有在用的 skill 會在每個 system prompt 裡增加 token，並提高 tool 選擇錯誤的機率。隨著 tool list 超過實際使用量，agent 的連貫性會下降。
+
+從兩個開始：
+
+- **qmd** — 本地知識庫和語意搜尋。讓 agent 可以跨 session 儲存和取回結構化知識。這是讓 yui 的記憶真正有效的 skill，而不只是依賴對話歷史。
+- **SearXNG** — 上面描述的本地搜尋工具。
+
+前兩週就這樣。觀察 yui 實際在處理什麼任務，再根據觀察到的缺口增加 skill，不是根據 ClawHub 裡什麼看起來有趣。
+
+擴展策略：一次加一個 skill，之間間隔一週觀察對行為的影響。
+
+---
+
+## 心得五：SSH 存取改變了一切
+
+Mac Mini 的系統偏好設定裡有 SSH 和螢幕共享。兩個都開。然後鎖好：只透過 Tailscale 接受連線，不對公開網路暴露。
+
+SSH 開通之後，你可以用 Claude Code 或 Codex 遠端進入 Mac Mini，協助設定、debug 和擴展 OpenClaw。工作流程：
+
+```bash
+ssh mac-mini
+# Claude Code 或 Codex 從這裡接手
+```
+
+Agent 設定的 debug 循環通常是：改設定 → 存 config → 在 Telegram 測試 → 觀察 → 重複。有遠端存取，這個循環可以在不實際碰 Mac Mini 的情況下進行。你也可以從 Tailscale 網路上的任何地方做設定工作——從 GX10 本身、從筆電、從任何地方。
+
+安全要求：不要在公開 port 暴露 SSH。所有流量走 Tailscale。Tailscale 上的攻擊面是你的 Tailscale 帳號，不是 SSH daemon。
+
+---
+
+## 心得六：Inference Backend 比 Model 更重要
+
+對互動式聊天 session，model 是主要因素。對一個每小時呼叫 model 幾十次的長駐 agent，backend 是主要因素。
+
+具體問題是 TTFT——time to first token。用 Ollama 沒有 prefix cache，一個 500 token 的 system prompt 每次呼叫都從頭重算。每次呼叫 2-4 秒，累積起來很可觀。yui 產生的呼叫量，等待時間在結構上和單使用者聊天 session 是不同等級的。
+
+vLLM 的 prefix caching 改變了這件事。緩存的 system prompt prefix 從 KV cache 取回，不需要重算。cache hit 的 TTFT 降到 0.12 秒。對固定 system prompt 的 agent，第一次呼叫之後每次都是 cache hit。
+
+從遷移來的數字：
+
+| 指標 | Ollama | vLLM（prefix cache）|
+|------|--------|----------------------|
+| TTFT（暖機，長 system prompt）| 2-4s | 0.12s |
+| Decode 速度 | ~46 tok/s | ~47 tok/s |
+| 設定複雜度 | 低 | 較高 |
+
+Decode 速度幾乎相同。TTFT 差距是 agent 工作負載遷移的理由。完整細節在[在 DGX Spark 上將 Qwen3.5 從 Ollama 遷移到 vLLM](/zh-TW/blog/dgx-spark-vllm-qwen35-setup)。
+
+結論：如果你在跑長駐 agent，先把 inference backend 調好，再優化其他東西。比 backend 慢的更快模型，不如 backend 調好的稍慢模型。
+
+---
+
+## 得到了什麼
+
+成本：零 API 費用。沒有訂閱、沒有 per-token 計費、沒有 rate limit。Mac Mini idle 功耗不到 20W；GX10 耗電多，但只在推理時工作。硬體已經買了。跑 yui 的邊際成本是電費。
+
+yui 在做的事：市場研究、指定主題的每日摘要、結構化分析 pipeline。qmd skill 讓她在 session 之間保有持久記憶，這改變了輸出的品質——她能在先前的研究基礎上繼續，而不是每次都從零開始。
+
+架構上的關鍵洞察：Mac Mini 當 gateway、GX10 當推理是個人 agent 的正確分工。Gateway 便宜、長駐、處理除了 model 推理之外的一切。GPU 機器只處理需要 GPU 的部分。分開部署意味著可以獨立維護和重啟。
+
+yui 自從這套架構建好後就持續運行。這不是玩具部署——她處理真實的研究任務，跑在我自己的硬體上，沒有雲端依賴。
+
+---
+
+## 最終堆疊
+
+| 層次 | 元件 |
+|------|------|
+| Gateway | Mac Mini M4，OpenClaw（`ai.openclaw.gateway` launchd agent）|
+| Container | Orbstack + SearXNG on Mac Mini |
+| 網路 | Tailscale（Mac Mini ↔ GX10）|
+| 推理 | ASUS GX10（GB10，128GB）+ Ollama 或 vLLM |
+| 介面 | Telegram |
+| 記憶體 | qmd（ClawHub skill）|
+
+無雲端依賴。推理和搜尋都不需要 API key。完整堆疊跑在你自己的硬體上。
+
+---
+
+*本系列相關文章：[DGX Spark 跑 8 個模型：找出 AI Agent 最佳組合](/zh-TW/blog/dgx-spark-ollama-benchmark-8-models) · [在 DGX Spark 上將 Qwen3.5 從 Ollama 遷移到 vLLM](/zh-TW/blog/dgx-spark-vllm-qwen35-setup)*

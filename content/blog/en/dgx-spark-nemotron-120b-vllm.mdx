@@ -1,0 +1,217 @@
+---
+title: "[vLLM] Nemotron-3-Super-120B on a Single GB10: Full Day Debug Log"
+description: "Getting NVIDIA's Nemotron-3-Super-120B-NVFP4 running on an ASUS GX10 (SM121, 128GB). Four SM121-specific pitfalls, the env-var-that-does-nothing, and a working docker command."
+date: "2026-03-13"
+tags: ["DGX Spark", "GB10", "SM121", "Nemotron", "vLLM", "NVFP4", "Blackwell", "LLM Serving"]
+series: "DGX Spark"
+part: 4
+---
+
+## Preface
+
+Same factory, different assembly line. GB10 and B200 are both Blackwell. They share a manufacturing process, a marketing family, and almost no kernel-level compatibility. Getting one model working on SM121 does not mean the next one works the same way — or at all.
+
+This is the record of getting [Nemotron-3-Super-120B-NVFP4](https://huggingface.co/nvidia/Nemotron-3-Super-120B-Instruct-NVFP4) running on an ASUS GX10 (NVIDIA GB10, SM121, 128GB unified memory). One full day of debugging. Five pitfalls. A working docker command at the end.
+
+The SM121 fundamentals are covered in [Part 1](/en/blog/part1-why-your-dgx-spark-says-exclamation-marks). That post explains why SM121 and SM100 diverge at the kernel level and what the symptoms look like. This post picks up there — and covers what Nemotron specifically adds on top of the SM121 baseline issues.
+
+---
+
+## The Model
+
+Nemotron-3-Super-120B-NVFP4 is NVIDIA's reasoning model — 120B parameters, quantized in NVFP4 format, distributed as 17 shards. It's designed for extended context tasks with an emphasis on structured reasoning.
+
+At rest: ~108GB. This monopolizes the full 128GB system. No other model runs alongside it. The first step before starting is always unloading whatever Ollama has in memory:
+
+```bash
+curl -X POST http://localhost:11434/api/generate \
+  -d '{"model": "MODEL_NAME", "keep_alive": 0}'
+```
+
+Verify with `curl -s http://localhost:11434/api/ps` before proceeding. Ollama's default `KEEP_ALIVE` is 2 hours. If you ran a model recently, it's still there.
+
+Load time: ~8 minutes (17 shards). This is not a model you restart casually.
+
+---
+
+## The Core Problem: SM121 ≠ SM100
+
+GB10's compute capability is SM121. The B200's is SM100. Both are Blackwell. They are not ISA-compatible.
+
+Most optimized CUDA kernels target SM100 and are written with the assumption that all Blackwell chips use the same instruction set. They don't. Running SM100-targeted kernels on SM121 triggers `cudaErrorIllegalInstruction`. The CPU equivalent would be running AVX-512 instructions on a processor that implements AVX2.
+
+For Nemotron — an NVFP4 MoE model — the failure modes are specific: MoE routing kernels that invoke FLASHINFER_CUTLASS, and `torch.compile` in the nightly image, both fail on SM121 in ways that aren't immediately obvious.
+
+The SM121 NVFP4 root cause is covered in depth in [Part 1](/en/blog/part1-why-your-dgx-spark-says-exclamation-marks). This post focuses on what Nemotron adds on top.
+
+---
+
+## Pitfall 1: The Nightly Image Breaks on SM121
+
+For [Qwen3.5-35B](/en/blog/dgx-spark-vllm-qwen35-setup), the recommendation is `cu130-nightly` — the stable image doesn't support it on GB10. For Nemotron, the recommendation is the opposite.
+
+The `cu130-nightly` image has a `torch.compile` bug specific to SM121. It surfaces during warmup, not startup, which means the container appears to start correctly and then crashes on the first real request. The error:
+
+```
+RuntimeError: CUDA error: an illegal instruction was encountered
+```
+
+The fix: use the stable image.
+
+```bash
+vllm/vllm-openai:v0.17.1-cu130
+```
+
+This is the opposite of what the Qwen3.5 article recommends. The difference is model-specific, not hardware-specific. Nemotron's kernel path in nightly hits the SM121 `torch.compile` bug; Qwen3.5's doesn't but requires nightly for other reasons. Document your image version alongside your serve command and don't treat it as interchangeable across models.
+
+---
+
+## Pitfall 2: MoE Kernel — The Env Var That Does Nothing
+
+Nemotron is a MoE model. vLLM's default MoE routing on SM121 uses FLASHINFER_CUTLASS, which doesn't support SM121. The fix is to route MoE layers through Marlin instead.
+
+The env var approach:
+
+```bash
+# This does nothing. The variable does not exist in vLLM's source.
+export VLLM_NVFP4_MOE_BACKEND=marlin
+```
+
+`VLLM_NVFP4_MOE_BACKEND` is not defined anywhere in vLLM 0.17.1. Setting it produces no error, no warning, and no effect. vLLM falls back to auto-selection, auto-selection picks FLASHINFER_CUTLASS, and the model crashes on first use.
+
+The correct fix is a CLI flag:
+
+```bash
+--moe-backend marlin
+```
+
+This must be passed as a command-line argument to the vLLM serve command. There is no env var equivalent. If you're adapting a serve script from another source and it has `VLLM_NVFP4_MOE_BACKEND=marlin`, remove it and add `--moe-backend marlin` instead.
+
+*(Note: for MXFP4 models like gpt-oss, the analogous fix uses `VLLM_MXFP4_BACKEND=marlin`. That's a different variable for a different quantization format. See [the gpt-oss article](/en/blog/part2-gpt-oss-120b-serve-script) for that distinction. Nemotron uses NVFP4, not MXFP4.)*
+
+---
+
+## Pitfall 3: FP4 Backend Env Vars
+
+Two additional env vars are required for Nemotron's NVFP4 GEMM operations on SM121:
+
+```bash
+VLLM_USE_FLASHINFER_MOE_FP4=0
+VLLM_NVFP4_GEMM_BACKEND=marlin
+```
+
+`VLLM_USE_FLASHINFER_MOE_FP4=0` disables the FlashInfer FP4 MoE path — which, like FLASHINFER_CUTLASS, doesn't work on SM121.
+
+`VLLM_NVFP4_GEMM_BACKEND=marlin` forces Marlin for NVFP4 matrix multiplications. This is NVFP4-specific (the `NVFP4` prefix in the variable name is meaningful). It's different from `VLLM_MXFP4_BACKEND`, which targets MXFP4 quantization. The two formats use different kernel paths and different env vars.
+
+Additionally:
+
+```bash
+VLLM_MARLIN_USE_ATOMIC_ADD=1
+```
+
+This fixes a Marlin atomic race condition on SM121. Without it, Marlin occasionally produces incorrect output on GB10 under concurrent load. The flag enables a slower but correct atomic add path.
+
+Confirm the backend is active by checking the startup log for:
+
+```
+[NVFP4] Using backend: marlin
+```
+
+If you see `Auto-selected: CUTLASS_FP4` instead, one of these env vars isn't being picked up.
+
+---
+
+## Pitfall 4: Parser Name Is Exact
+
+Nemotron uses a thinking output format. The reasoning parser flag is:
+
+```bash
+--reasoning-parser nemotron_v3
+```
+
+Not `super_v3`. Not `nemotron`. Not `nemotron_super`. Exactly `nemotron_v3`.
+
+If the parser name is wrong, vLLM does not error at startup. The model loads and runs. Thinking tokens get routed incorrectly — either swallowing the actual response or producing malformed output. The failure is silent until you test with a request that exercises the reasoning path.
+
+Verify by checking that a test request returns content in the correct field.
+
+---
+
+## Pitfall 5: Context Window vs System Prompt Size
+
+The default `max_model_len` for Nemotron in most serve scripts is 32768 tokens. If you use a long system prompt — 24K tokens is not unusual for agent deployments — you have 8K tokens left for the actual conversation. That's not enough for most real tasks.
+
+Set `max_model_len=200000`. At this context length, vLLM allocates ~35GB for KV cache (fp8, 0.85 utilization), with a theoretical concurrency of 7.48x.
+
+The SSM-related parameter coupling from the Qwen3.5 article applies here too: `--max-num-batched-tokens` must be >= `block_size`. At 200K context, `block_size = ceil(200000 / N) ≈ 2096`. Set `--max-num-batched-tokens 4096` to satisfy the constraint with headroom.
+
+---
+
+## Performance
+
+| Metric | Value |
+|--------|-------|
+| Load time | ~8 min (17 shards) |
+| Memory footprint | ~108GB |
+| Decode speed (thinking disabled) | 13-16 tok/s |
+| Max context | 200K tokens |
+| KV cache (fp8, 0.85 util) | ~35GB / ~450K tokens |
+
+For reference, Qwen3.5-35B on the same hardware runs at ~47 tok/s. Nemotron is 3x slower. It's also roughly 3x larger in active parameters. The arithmetic is consistent — GB10 is bandwidth-bound, and more parameters means more memory loads per token.
+
+The practical implication: Nemotron is not an agent's primary inference backend. At 13-16 tok/s, call latency is too high for interactive agent workloads. It's more appropriate for batch jobs, deep analysis tasks, or situations where output quality justifies the throughput cost.
+
+---
+
+## What Was Gained
+
+Nemotron runs on GB10. The 200K context window is functional with a long system prompt. The SM121-specific fix set (Marlin backend, correct env vars, stable image) works for this model.
+
+The transferable lesson from this debugging session: on SM121, always verify the kernel path before concluding hardware incompatibility. The failure symptom — `cudaErrorIllegalInstruction` or silent wrong output — looks like a hardware problem. It isn't. It's a kernel targeting problem. The fix is usually one flag away.
+
+The specific diagnostic: check the startup log for `[NVFP4] Using backend: marlin`. If you see `Auto-selected`, something in your configuration isn't being read. The env var for NVFP4 (`VLLM_NVFP4_GEMM_BACKEND`) is different from the env var for MXFP4 (`VLLM_MXFP4_BACKEND`). They are not interchangeable. The MoE backend must be set via CLI flag (`--moe-backend marlin`), not env var.
+
+---
+
+## The Working Command
+
+```bash
+# Stop qwen35 first — 128GB only fits one large model
+docker stop qwen35
+
+docker run -d --name nemotron --restart unless-stopped \
+  --gpus all --ipc host --shm-size 16g -p 8002:8000 \
+  -v /home/coolthor/models/nemotron-nvfp4:/models/nemotron \
+  -e VLLM_NVFP4_GEMM_BACKEND=marlin \
+  -e VLLM_MARLIN_USE_ATOMIC_ADD=1 \
+  -e VLLM_USE_FLASHINFER_MOE_FP4=0 \
+  vllm/vllm-openai:v0.17.1-cu130 \
+  --model /models/nemotron \
+  --served-model-name nemotron \
+  --dtype auto \
+  --kv-cache-dtype fp8 \
+  --moe-backend marlin \
+  --tensor-parallel-size 1 \
+  --trust-remote-code \
+  --gpu-memory-utilization 0.85 \
+  --max-model-len 200000 \
+  --max-num-batched-tokens 4096 \
+  --reasoning-parser nemotron_v3 \
+  --enable-auto-tool-choice \
+  --tool-call-parser qwen3_coder \
+  --enable-prefix-caching
+```
+
+Notable differences from the Qwen3.5 command:
+- Stable image (`v0.17.1-cu130`) not nightly
+- `--moe-backend marlin` as a CLI flag (no env var substitute)
+- Three NVFP4-specific env vars
+- Port 8002 (8000 is qwen35's port when running)
+- `--shm-size 16g` is sufficient; Nemotron doesn't need 64g
+
+Do not add `--enforce-eager`. It was tested and causes a startup crash at the MoE autotuner stage.
+
+---
+
+*Also in this series: [Why Your DGX Spark Only Says "!!!!!": Debugging NVFP4 on SM121](/en/blog/part1-why-your-dgx-spark-says-exclamation-marks) · [gpt-oss-120B at 59 tok/s: 6 Pitfalls and a Working Serve Script](/en/blog/part2-gpt-oss-120b-serve-script) · [Migrating Qwen3.5 from Ollama to vLLM on DGX Spark](/en/blog/dgx-spark-vllm-qwen35-setup)*
