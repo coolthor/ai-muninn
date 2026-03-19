@@ -1,10 +1,10 @@
 ---
 title: "gpt-oss-120B at 59 tok/s: 6 Pitfalls and a Working Serve Script"
-description: "Getting Microsoft's gpt-oss-120B running on a DGX Spark (SM121, GB10) with vLLM. Six bugs, one wrong environment variable that silently did nothing, a tiktoken file hidden behind a SHA1 hash, and the real reason Qwen3.5-122B runs but stays at 14 tok/s."
+description: "Getting Microsoft's gpt-oss-120B running on a DGX Spark (SM121, GB10) with vLLM. Six bugs, one wrong environment variable that silently did nothing, a tiktoken file hidden behind a SHA1 hash, and a repetition loop that took longer to find than all the rest combined."
 date: "2026-03-19"
 tags: ["DGX Spark", "SM121", "vLLM", "gpt-oss", "MXFP4", "Blackwell", "LLM Serving"]
-series: "Running 120B on a DGX Spark"
-part: 2
+series: "gpt-oss-120B on DGX Spark"
+part: 1
 ---
 
 [Part 1](/en/blog/part1-why-your-dgx-spark-says-exclamation-marks) covered the four bugs that cause any NVFP4 model to output `!!!!!` on SM121. Fix those first. This post picks up after Qwen3.5-122B is running — and covers what happens when you try to serve gpt-oss-120B, a completely different model format with its own set of landmines.
@@ -217,24 +217,6 @@ The arithmetic: GB10 has 273 GB/s memory bandwidth. 120B × 4-bit ≈ 60 GB. At 
 
 ---
 
-## Sidebar: Qwen3.5-122B Runs, But Stays at 14 tok/s
-
-After getting gpt-oss working, the obvious question: does Qwen3.5-122B (NVFP4) also run well? After applying the fixes from [Part 1](/en/blog/part1-why-your-dgx-spark-says-exclamation-marks), it runs without errors.
-
-Speed: **14 tok/s**.
-
-This is not a configuration problem. There are no flags to tune. The cause is architectural.
-
-Qwen3.5-122B is a hybrid architecture: standard Transformer attention layers combined with **GDN (Gated Delta Network)** SSM layers. The GDN layers must stay in BF16 (hence the `SupportsQuant` fix from Part 1 — without it, they get quantized and the model produces garbage).
-
-The problem: Marlin has no specialized kernel for GDN layers. Each GDN GEMM falls back to a generic path. On GB10's 273 GB/s bandwidth, the fallback is slow enough that 14 tok/s is roughly where you end up with 122B parameters and no kernel support for half the architecture.
-
-This is a software gap, not a hardware limitation. The compute capability is there. The Marlin kernel for GDN is not. When it lands, expect ~30 tok/s or better.
-
-For now: gpt-oss-120B at 59 tok/s is the working option. Qwen3.5-122B at 14 tok/s runs but is too slow for interactive use.
-
----
-
 ## Summary: The Ordered Checklist
 
 If you're serving gpt-oss-120B on SM121:
@@ -251,4 +233,4 @@ The diagnostic for bug 6: if you're getting repetition loops and you think you'v
 
 ---
 
-*Part 3: [CUTLASS FP4 on SM121: When the Kernel Doesn't Exist, Write Your Own](/en/blog/part3-cutlass-fp4-sm121-custom-kernel)*
+*Also in this series: [Qwen3.5-122B Runs. But at 14 tok/s — the GDN Kernel Gap](/en/blog/part2-qwen-122b-14-toks-gdn-kernel-gap)*

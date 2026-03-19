@@ -1,0 +1,70 @@
+---
+title: "Qwen3.5-122B 跑起來了。但只有 14 tok/s。"
+description: "修完四個 SM121 NVFP4 bug 之後，Qwen3.5-122B 能跑、輸出正確。然後你看了速度：14 tok/s。沒有 flag 能修它。為什麼——以及在等什麼。"
+date: "2026-03-19"
+tags: ["DGX Spark", "SM121", "Qwen3.5-122B", "vLLM", "NVFP4", "Marlin", "GDN", "LLM Serving"]
+series: "Qwen3.5-122B on DGX Spark"
+part: 2
+---
+
+[第一篇](/zh-TW/blog/part1-why-your-dgx-spark-says-exclamation-marks)講的是讓 Qwen3.5-122B 不再只輸出 `!!!!!`。四個 bug，SM121 特有，全部可修。修完之後，模型正常啟動，輸出正確。
+
+然後你看了速度。
+
+**14 tok/s。**
+
+這篇講的是這個數字為什麼在這裡，以及為什麼沒有任何 flag 可以改變它。
+
+---
+
+## 我想做什麼
+
+目標很單純：用 Qwen3.5-122B-A12B-NVFP4 當 DGX Spark 的主力模型。122B 參數，NVFP4 量化，128 GB 統一記憶體——紙面上 GB10 應該完全能跑。算法沒問題：122B × 4-bit ≈ 61 GB，剩下的空間給 KV cache。
+
+gpt-oss-120B 能跑到 [59 tok/s](/zh-TW/blog/part2-gpt-oss-120b-serve-script)，所以對 122B NVFP4 的預期也在這個量級。也許稍微慢一點——模型更大、架構略有不同。但不是 14 tok/s。
+
+---
+
+## 我做了什麼
+
+套用第一篇的修法（SM121 PTX 路徑、Marlin thread race、SupportsQuant、排除 CUTLASS_FP4）之後，模型載入正常，輸出正確。前幾個 token 出得很快。然後吞吐量穩定下來。
+
+把能調的都試了：
+
+- **拿掉 `--enforce-eager`** — 本來就沒有，不是這個問題
+- **KV cache dtype** — fp8，跟 gpt-oss 一樣，沒有差別
+- **`--max-num-batched-tokens`** — 上下調整，幾乎沒有影響
+- **`VLLM_MXFP4_BACKEND=marlin`** — 已設定
+- **`--moe-backend marlin`** — 已設定
+- **GPU 記憶體使用率** — 0.90，標準值
+
+什麼都沒用。14 tok/s 就是 14 tok/s，不管怎麼調。
+
+---
+
+## 問題真正在哪
+
+Qwen3.5-122B-A12B 是**混合架構**。它不是標準 Transformer。它把兩種層混在一起：
+
+- **標準 attention 層** — 一般的 Transformer MHA/MLA，Marlin 對這個有完整支援
+- **GDN（Gated Delta Network）層** — SSM 風格的遞迴層，必須保持 BF16
+
+GDN 層就是問題所在。Marlin 對標準 linear 層和 MoE expert GEMM 有特化的 kernel（可以理解為：針對這個計算形狀特別最佳化過的程式碼）。但對 GDN，**沒有**。每個 GDN GEMM 都走 generic fallback 路徑——就像用通用扳手去鎖一個需要專用工具的螺絲，能鎖，但慢。
+
+在 GB10（273 GB/s 記憶體頻寬）上，generic fallback 夠慢，讓它主導了整個 decode 時間。Attention 層跑在正常速度；GDN 層爬行。你看到的吞吐量是「快速 Marlin 路徑」和「慢速 generic 路徑」的調和平均——對 122B 參數的模型來說，14 tok/s 就是這個平均值的結果。
+
+這也解釋了第一篇的 `SupportsQuant` 修法：沒有它，GDN 層會被量化成 NVFP4，遞迴 hidden state 損壞，輸出垃圾。修法讓 GDN 保持 BF16——這是正確的——但代價是 GDN 跑在沒有特化 kernel 的路徑上。
+
+**頻寬算法：** 273 GB/s 下，搬動 61 GB 的 weights 一次需要約 0.22 秒。GB10 上 122B NVFP4 的理論 decode 上限約 ~30 tok/s。要達到這個上限，每一層都需要高效的 kernel。當一半的架構 fallback 到 generic 路徑，你大概得到上限的一半——接近 14 tok/s 的位置。
+
+---
+
+## 結論
+
+修完第一篇的修法之後，Qwen3.5-122B 在 SM121 上跑得正確。輸出沒有問題。模型能用。
+
+14 tok/s 不是 config 問題。它是軟體缺口：Marlin 目前沒有 GDN 層的特化 kernel。等這個 kernel 到來——無論是在 Marlin、vLLM 還是 Triton 路徑上——吞吐量應該能回到理論上限的 ~30 tok/s 附近。
+
+目前，如果你需要在 DGX Spark 上能互動使用的速度：用 gpt-oss-120B（59 tok/s）。Qwen3.5-122B 的輸出正確，但 14 tok/s 太慢，沒辦法互動使用。
+
+如果你是因為 Qwen 跑很慢才找到這篇：你沒有漏掉任何 flag。你已經到達上限了。

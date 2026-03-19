@@ -1,10 +1,10 @@
 ---
 title: "gpt-oss-120B 跑到 59 tok/s：六個坑與一份可用的 Serve Script"
-description: "在 DGX Spark（SM121、GB10）上用 vLLM 跑 Microsoft gpt-oss-120B。六個 bug、一個靜默失效的錯誤環境變數、一個藏在 SHA1 hash 後面的 tiktoken 檔案，以及 Qwen3.5-122B 跑起來卻只有 14 tok/s 的真實原因。"
+description: "在 DGX Spark（SM121、GB10）上用 vLLM 跑 Microsoft gpt-oss-120B。六個 bug、一個靜默失效的錯誤環境變數、一個藏在 SHA1 hash 後面的 tiktoken 檔案，以及一個重複迴圈 bug 比其他所有加起來還難找。"
 date: "2026-03-19"
 tags: ["DGX Spark", "SM121", "vLLM", "gpt-oss", "MXFP4", "Blackwell", "LLM Serving"]
-series: "Running 120B on a DGX Spark"
-part: 2
+series: "gpt-oss-120B on DGX Spark"
+part: 1
 ---
 
 [第一篇](/zh-TW/blog/part1-why-your-dgx-spark-says-exclamation-marks)講的是讓任何 NVFP4 模型在 SM121 上不輸出 `!!!!!` 的四個 bug。先把那些修完。這篇從 Qwen3.5-122B 能跑之後開始，講試著跑 gpt-oss-120B 的過程——一個完全不同的模型格式，有它自己的一套地雷。
@@ -217,24 +217,6 @@ exec vllm serve /home/username/models/gpt-oss-120b \
 
 ---
 
-## 附記：Qwen3.5-122B 跑起來了，但只有 14 tok/s
-
-搞定 gpt-oss 之後，一個自然的問題：Qwen3.5-122B（NVFP4）是否也能跑得好？套用[第一篇](/zh-TW/blog/part1-why-your-dgx-spark-says-exclamation-marks)的修法後，它能跑，沒有 error。
-
-速度：**14 tok/s**。
-
-這不是 config 問題。沒有可以調的 flag。原因是架構。
-
-Qwen3.5-122B 是混合架構：標準 Transformer attention 層加上 **GDN（Gated Delta Network）** SSM 層。GDN 層必須保持 BF16（這就是第一篇的 `SupportsQuant` fix 的原因——沒有它，GDN 層會被量化，模型輸出垃圾）。
-
-問題：Marlin 對 GDN 層沒有特化的 kernel。每個 GDN GEMM 都走 generic fallback 路徑。在 GB10 的 273 GB/s 頻寬下，fallback 夠慢，加上 122B 參數和一半架構缺乏 kernel 支援，14 tok/s 就是結果。
-
-這是軟體缺口，不是硬體限制。計算能力夠，Marlin 的 GDN kernel 還沒來。等它來了，預期 ~30 tok/s 以上。
-
-目前：gpt-oss-120B 59 tok/s 是可用的選項。Qwen3.5-122B 14 tok/s 跑得起來但太慢，沒辦法互動使用。
-
----
-
 ## 總結：有順序的檢查清單
 
 在 SM121 上跑 gpt-oss-120B：
@@ -251,4 +233,4 @@ Qwen3.5-122B 是混合架構：標準 Transformer attention 層加上 **GDN（Ga
 
 ---
 
-*第 3 篇：[在 SM121 上自己寫 CUTLASS FP4 Kernel：當 Kernel 不存在的時候](/zh-TW/blog/part3-cutlass-fp4-sm121-custom-kernel)*
+*同系列：[Qwen3.5-122B 跑起來了。但只有 14 tok/s——GDN Kernel 缺口](/zh-TW/blog/part2-qwen-122b-14-toks-gdn-kernel-gap)*
