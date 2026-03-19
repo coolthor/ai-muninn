@@ -1,0 +1,125 @@
+---
+title: "[vLLM] Don't Add --enable-chunked-prefill to SSM Models"
+description: "Adding --enable-chunked-prefill to a Qwen3.5-35B (SSM+MoE hybrid) dropped throughput from 47 tok/s to 5.7 tok/s. Why SSM recurrence and chunked prefill are fundamentally incompatible."
+date: "2026-03-06"
+tags: ["vLLM", "SSM", "Qwen", "DGX Spark", "LLM Serving", "Performance"]
+series: "OpenClaw"
+part: 2
+---
+
+## Preface
+
+A conveyor belt makes assembly faster — unless the thing you're assembling requires each station to hand a physical object to the next one in sequence. Then you've turned a line into a bottleneck.
+
+That's what `--enable-chunked-prefill` does to an SSM model. The flag is a documented throughput optimization for Transformer models. For hybrid SSM+MoE architectures like Qwen3.5-35B-A3B, it is the opposite of an optimization. This post covers the [OpenClaw agent stack](/en/blog/openclaw-dgx-spark-local-ai-agent) running Qwen3.5-35B on vLLM — specifically the one configuration mistake that cut throughput by 8x before I understood what had happened.
+
+---
+
+## The Incident
+
+The [vLLM migration for Qwen3.5-35B](/en/blog/dgx-spark-vllm-qwen35-setup) was already done. The model was running at ~47 tok/s. I was trying to squeeze out more throughput for concurrent agent workloads and went looking for flags to tune.
+
+`--enable-chunked-prefill` is listed in vLLM's documentation as a way to improve GPU utilization during prefill by interleaving prefill and decode operations. It sounds like a safe thing to try. I added it.
+
+Throughput dropped from **47 tok/s to 5.7 tok/s**.
+
+That is an 8.2x regression. Not a margin. Not measurement noise. A complete collapse of useful throughput, from comfortably interactive to slower than a CPU could produce.
+
+The flag didn't crash vLLM. It didn't produce an error. The server started, accepted requests, and returned responses — just at 5.7 tok/s. If you're not measuring throughput, you might not notice until you have actual users (or in this case, an agent) waiting on responses.
+
+---
+
+## Root Cause
+
+Qwen3.5-35B-A3B is an SSM+MoE hybrid architecture. The "A3B" in the name refers to its use of DeltaNet — a state space model architecture alongside the mixture-of-experts layers. This is not a standard Transformer.
+
+Here's the difference that matters:
+
+**Transformer attention** is parallel. Every token in the sequence can be processed in any order — attention is computed over the full sequence as a matrix operation. Chunking this into segments is fine because the attention computation doesn't care about order; it just needs all the tokens to be present.
+
+**SSM (State Space Model) layers** maintain a recurrent hidden state `h_t`. Each step's state depends on the previous step's state:
+
+```
+h_t = f(h_{t-1}, x_t)
+```
+
+This is recurrence. It is inherently sequential. You cannot process token 100 without first having processed tokens 1 through 99, because `h_100` depends on `h_99`, which depends on `h_98`, and so on through the entire sequence.
+
+Chunked prefill splits the prompt into segments and processes them in interleaved batches. For a pure Transformer, this is fine — segments don't depend on each other's intermediate states. For SSM layers, each chunk needs to receive the recurrent hidden state from the end of the previous chunk, then produce a new state to hand to the next chunk. This inter-chunk state passing isn't free — it happens at each segment boundary, and the overhead compounds as sequence length grows.
+
+On a long sequence with many chunk boundaries, the cumulative overhead of passing hidden state across every boundary overwhelms any parallelism gains. The throughput floor is reached quickly. In the measured case: 5.7 tok/s from a machine capable of 47 tok/s.
+
+---
+
+## Which Models Are Affected
+
+Any model with recurrent layers (SSM, Mamba, DeltaNet, Mamba2, RWKV, or similar) is affected. The key identifier is the model architecture, not the name:
+
+- **Qwen3.5-35B-A3B** — SSM+MoE hybrid (DeltaNet layers) — affected
+- **qwen3-coder-next 79.7B** — SSM+MoE hybrid — affected
+- **GLM-4.7-Flash** — pure MoE, standard attention — safe to use chunked prefill
+- **Standard Llama/Qwen/Mistral** — pure Transformer — safe to use chunked prefill
+
+If you're unsure, check the model card or config.json. Look for any of: `mamba`, `ssm`, `deltanet`, `state_space`, or `recurrent` in the architecture description. If those words appear, do not add `--enable-chunked-prefill`.
+
+---
+
+## The Fix
+
+Remove the flag. That's it. The working serve command for Qwen3.5-35B-A3B-FP8 does not include `--enable-chunked-prefill`:
+
+```bash
+docker run -d --name qwen35 --restart unless-stopped \
+  --gpus all --ipc host --shm-size 64gb -p 8000:8000 \
+  -v /home/coolthor/models/qwen35-35b-hf:/models/qwen35 \
+  vllm/vllm-openai:cu130-nightly \
+  --model /models/qwen35 \
+  --served-model-name qwen3.5-35b \
+  --max-model-len 200000 \
+  --gpu-memory-utilization 0.90 \
+  --kv-cache-dtype fp8 \
+  --calculate-kv-scales \
+  --max-num-batched-tokens 4096 \
+  --enable-prefix-caching \
+  --reasoning-parser qwen3 \
+  --enable-auto-tool-choice \
+  --tool-call-parser qwen3_coder
+  # NOTE: --enable-chunked-prefill is absent
+```
+
+Also verify that vLLM isn't enabling it automatically. Some vLLM versions enable chunked prefill by default for certain configurations. Check startup logs:
+
+```bash
+docker logs qwen35 2>&1 | grep -i "chunked"
+```
+
+You want to see either no output, or `Chunked prefill: disabled`. If you see `Chunked prefill: enabled` and you didn't put it there, add `--disable-chunked-prefill` explicitly to force it off.
+
+---
+
+## What Was Gained
+
+The diagnostic pattern here is transferable: **throughput collapses without errors, investigate flags before the model.**
+
+When vLLM's throughput is catastrophically low but the server appears healthy, the first suspects are configuration flags — not the model, not the hardware, not CUDA. The model is doing what you told it to do. The question is what you told it to do.
+
+Checklist for "why is my SSM model slow on vLLM":
+
+1. Check if `--enable-chunked-prefill` is in the serve command (or enabled in logs)
+2. Check if Ollama has models loaded in shared GPU memory (see [Ollama KEEP_ALIVE conflict](/en/blog/openclaw-ollama-vllm-gpu-conflict))
+3. Check `--max-num-batched-tokens` against the SSM block size requirement
+4. Check if `enable_thinking` is false per-request (thinking tokens burn through apparent throughput)
+
+The 8x regression from a single flag is the kind of thing that doesn't make the documentation because it's a flag interaction with architecture type rather than a bug. The flag works exactly as designed — it's just designed for a different class of model.
+
+---
+
+## Conclusion
+
+Before adding any vLLM throughput flags, look up the model's architecture type. If it has any recurrent state (SSM, Mamba, DeltaNet, RWKV), treat `--enable-chunked-prefill` as off-limits. The flag will not produce an error. It will not warn you. It will simply reduce throughput by one order of magnitude and leave the server running, quietly, at 5.7 tok/s.
+
+The only way to catch it is to measure before and after any flag change.
+
+---
+
+*Also in this series: [Migrating Qwen3.5 from Ollama to vLLM on DGX Spark](/en/blog/dgx-spark-vllm-qwen35-setup) · [Ollama KEEP_ALIVE Is Silently Eating Your vLLM Headroom](/en/blog/openclaw-ollama-vllm-gpu-conflict) · [Pure MoE vs SSM Hybrid: Context Decay and Why It Matters for Agents](/en/blog/openclaw-moe-ssm-context-decay)*

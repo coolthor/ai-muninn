@@ -1,0 +1,219 @@
+---
+title: "[AI Agent] OpenClaw Config Hot-Reload: No Restart Needed"
+description: "Spent weeks restarting the OpenClaw gateway for every config change. Then discovered the file watcher. What hot-reloads instantly, what still needs a restart, and how to tell auth failures from transient network errors."
+date: "2026-02-25"
+tags: ["AI Agent", "OpenClaw", "Configuration", "Developer Workflow"]
+series: "OpenClaw"
+part: 6
+---
+
+## Preface
+
+The slowest part of any development loop is the part you don't know you can skip. I spent weeks adding 30 seconds to every config change before I read the right line in the logs.
+
+This picks up from [Zero API Cost: Running OpenClaw on DGX Spark + Mac Mini](/en/blog/openclaw-dgx-spark-local-ai-agent), which covers the full OpenClaw deployment. This post is narrower: the config hot-reload behavior, what it covers, and how it changes the debugging workflow once you know it exists.
+
+---
+
+## The Problem
+
+Early OpenClaw development involves a lot of config iteration. You're swapping model endpoints, adjusting generation parameters, testing Telegram bot configurations, tuning skill settings. Each change needs to be verified before you move to the next one.
+
+The config file is `~/.openclaw/openclaw.json`. Without knowing about hot-reload, the update cycle for every change looked like this:
+
+```bash
+# 1. Edit the config
+nano ~/.openclaw/openclaw.json
+
+# 2. Stop the service
+launchctl stop ai.openclaw.gateway
+
+# 3. Wait for it to fully stop (~5 seconds)
+
+# 4. Start the service
+launchctl start ai.openclaw.gateway
+
+# 5. Wait for it to initialize (~10-15 seconds)
+
+# 6. Check logs to confirm it came up correctly
+tail -f /tmp/openclaw/gateway-stdout.log
+
+# 7. Test the change
+```
+
+Thirty seconds per iteration. Conservative estimate. During active development with back-to-back config changes, the restart loop is the dominant time cost.
+
+It is also unnecessary.
+
+---
+
+## The Discovery
+
+OpenClaw gateway has a built-in file watcher on `~/.openclaw/openclaw.json`. Save the file, and the gateway reloads the changed values within one to two seconds. No restart. The service stays running, active sessions are not interrupted, and the new config is live immediately.
+
+The confirmation is in the logs:
+
+```bash
+tail -f /tmp/openclaw/gateway-stdout.log
+# Look for: "Config reloaded" within 1-2 seconds of saving
+```
+
+The line appears without any restart entries above it. The service PID does not change. The gateway is genuinely reloading in-process, not doing a fast restart that looks like a reload.
+
+This is not a minor convenience. It's the difference between a 30-second iteration loop and a 2-second one.
+
+---
+
+## What Hot-Reloads
+
+These fields reload immediately on file save:
+
+**Telegram channel configuration:**
+```json
+{
+  "channels": {
+    "telegram": {
+      "accounts": {
+        "default": {
+          "botToken": "your-new-token-here"
+        }
+      }
+    }
+  }
+}
+```
+
+**Model endpoint and primary model:**
+```json
+{
+  "model": {
+    "primary": "vllm/qwen3.5-35b"
+  }
+}
+```
+
+**Generation parameters:**
+```json
+{
+  "model": {
+    "params": {
+      "temperature": 0.7,
+      "max_tokens": 4096,
+      "chat_template_kwargs": {
+        "enable_thinking": false
+      }
+    }
+  }
+}
+```
+
+**Skill definitions, memory paths, agent behavior settings** — all hot-reload.
+
+In practice: anything in the JSON that configures how the agent behaves or where it connects. If you're adjusting the agent's operational configuration, you can iterate without restarts.
+
+---
+
+## What Does Not Hot-Reload
+
+Some things still require a full service restart:
+
+```bash
+launchctl stop ai.openclaw.gateway && launchctl start ai.openclaw.gateway
+```
+
+- **Port bindings** — the gateway binds ports at startup; changing the port requires a restart to bind the new one
+- **Service-level environment variables** — variables set in the launchd plist, not in `openclaw.json`
+- **The file watcher itself** — if you somehow break the watcher configuration, you need a restart to restore it
+
+For everything else: save the file, watch the logs, proceed.
+
+---
+
+## The Telegram Token Incident
+
+The discovery came from a specific situation: a Telegram bot token needed rotation. Bot tokens get rotated for several reasons — permission changes, security precautions, the bot being regenerated in BotFather for a different configuration.
+
+The expected workflow was:
+1. Get new token from BotFather
+2. Update the config
+3. Stop the gateway
+4. Start the gateway
+5. Wait for initialization
+6. Test
+
+The actual workflow, once I tried it without the restart:
+1. Get new token from BotFather
+2. Update `channels.telegram.accounts.default.botToken` in `openclaw.json`
+3. Save
+4. Send a test message
+
+It worked. The gateway had already picked up the new token. What looked like a 5-minute operation with careful sequencing took 30 seconds, and most of that was copying the token from BotFather.
+
+---
+
+## Error Classification After Hot-Reload
+
+Once you know that config changes apply immediately, the error space becomes cleaner. When something fails after a config edit, the question is not "did the service pick up the change" — it did. The question is whether the new config value is correct.
+
+Three error categories for Telegram delivery failures:
+
+```
+undici "Network request for 'X' failed!"
+→ Transient network error. The request failed in transit.
+  Recoverable. The gateway will retry. No action needed.
+
+401 Unauthorized
+→ The token in the config is invalid.
+  Hot-reload applied the bad token immediately.
+  Fix: update botToken in openclaw.json, save again.
+  The correct token is live within 2 seconds.
+
+503 Service Unavailable
+→ The gateway service itself is not running.
+  Check: launchctl list | grep openclaw
+  Fix: launchctl start ai.openclaw.gateway
+```
+
+The `undici` transient errors are worth calling out because they look alarming and are not. The gateway's HTTP client logs network failures as they happen — on a home network with a local Mac Mini, occasional transient failures are normal. They're logged, retried, and resolved without intervention. Don't let them send you into the config.
+
+The `401` is the one that warrants action. And the action is: fix the token in the config, save, done.
+
+---
+
+## The Revised Iteration Loop
+
+With hot-reload known:
+
+```bash
+# 1. Edit the config
+nano ~/.openclaw/openclaw.json
+
+# 2. Save
+
+# 3. Confirm reload
+tail -n 5 /tmp/openclaw/gateway-stdout.log
+# Should show: "Config reloaded"
+
+# 4. Test
+```
+
+Five seconds, not thirty. Across a development session with twenty config changes, that's eight minutes recovered. Across weeks of active development, it's more significant.
+
+The other change is psychological. A 30-second restart loop introduces enough friction that you batch config changes — edit several things at once, restart once, test multiple things together. This makes it harder to isolate what changed when something breaks. A 2-second hot-reload loop removes the batching incentive. You change one thing, verify it, move to the next. Debugging becomes easier as a side effect.
+
+---
+
+## What to Check First
+
+If the agent's behavior doesn't match your config after a save:
+
+1. Check the logs for "Config reloaded" — confirm the reload actually happened
+2. Verify the JSON is valid — a syntax error in `openclaw.json` will prevent the reload (the gateway logs the parse error)
+3. Confirm you edited the right file — `~/.openclaw/openclaw.json`, not a backup or a copy in another location
+4. If none of the above: restart the service and check whether the behavior changes
+
+In practice, step 2 is the most common issue. A trailing comma or a missing brace in the JSON is enough to silently fail the reload. The gateway logs the parse error, so check the logs first, not the service status.
+
+---
+
+*Also in this series: [Zero API Cost: Running OpenClaw on DGX Spark + Mac Mini](/en/blog/openclaw-dgx-spark-local-ai-agent)*

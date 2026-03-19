@@ -1,0 +1,176 @@
+---
+title: "[vLLM] Ollama 的 KEEP_ALIVE 在偷吃你的 vLLM 記憶體空間"
+description: "128GB 統一記憶體的機器 vLLM 重啟時 OOM。原因：Ollama KEEP_ALIVE=2h 把 19-51GB 壓在 GPU 上。診斷指令、手動 unload 方式、以及為什麼要把 KEEP_ALIVE 改成 0。"
+date: "2026-03-07"
+tags: ["vLLM", "Ollama", "GPU Memory", "DGX Spark", "GB10", "LLM Serving"]
+series: "OpenClaw"
+part: 3
+---
+
+## 前言
+
+128 個車位的停車場空間很夠，除非其中 40 個停的是兩小時前就辦完事、但沒人叫他們走的車。
+
+這就是 Ollama 的 `KEEP_ALIVE` 對 unified memory 機器做的事。這個問題在 [OpenClaw agent 架構](/zh-TW/blog/openclaw-dgx-spark-local-ai-agent) 重啟 vLLM 時反覆出現，診斷花的時間比應該花的更長，因為失敗的表象 — 128GB 機器 OOM — 在理解實際記憶體狀況之前看起來不可能發生。這台機器在切換到 vLLM 之前跑過的 model benchmark 記錄在 [DGX Spark 上的 8 個 Model 評測](/zh-TW/blog/dgx-spark-ollama-benchmark-8-models)。
+
+---
+
+## 事故經過
+
+GX10 上每次重啟 vLLM container，大概有一半的機率在 model 載入時 OOM。這台機器有 128GB unified memory。[Qwen3.5-35B-A3B-FP8](https://huggingface.co/Qwen/Qwen3.5-35B-A3B-FP8) 的 weights 需要大約 35GB。用 `--gpu-memory-utilization 0.90` 搭配 fp8 KV cache，vLLM startup 時想要的總量大概是 115GB。
+
+128GB 減 35GB 是 93GB。空間應該夠。但 vLLM 在 OOM。
+
+診斷指令：
+
+```bash
+curl -s http://localhost:11434/api/ps
+```
+
+這會回傳 Ollama 目前載在記憶體裡的東西：
+
+```json
+{
+  "models": [
+    {
+      "name": "glm-4.7-flash:latest",
+      "size": 19456000000,
+      "size_vram": 19456000000,
+      ...
+    }
+  ]
+}
+```
+
+GLM-4.7-Flash，19GB，待在記憶體裡。沒有人要求它在那裡。它在那裡是因為 `KEEP_ALIVE=2h` 代表 Ollama 在 model 最後一次使用後，把它留在記憶體裡兩小時 — 假設你很快又會問它什麼。
+
+這個假設在 vLLM 是主要 serving 路徑的時候是錯的。Ollama 閒置著，佔用 ~19-51GB（視最後使用的 model 而定），vLLM 嘗試啟動，撞上的是「紙面上 128GB」和「128GB 減去 Ollama 停在那邊的部分」之間的差距。
+
+---
+
+## 為什麼 KEEP_ALIVE=2h 存在
+
+在批評這個預設值之前，值得先理解它為什麼這樣設計。
+
+當 Ollama 是你的主要 model server 時，`KEEP_ALIVE=2h` 是合理的。在這台硬體上，model 載入需要 15-25 秒，視 model 大小而定。如果你在不同任務之間切換不同 model — 用快速 MoE model 聊天，用大一點的 model 做複雜分析 — 保持最後一個 model 熱啟動代表你的第二個 request 會立即回來，而不是等完整的載入週期。
+
+這個預設值是為互動式使用設計的：發 request、得到 response、想一下、發下一個 request。兩小時涵蓋了大多數工作時段。
+
+問題在你把 vLLM 加到同一台機器上之後。現在有兩個 model server 在競爭同一個 unified memory pool，Ollama 的「我先把它留著，萬一你還需要」行為開始和 vLLM 的「我要盡量分配這個 memory pool」行為衝突。
+
+---
+
+## 手動修法
+
+當 vLLM 需要重啟、而 Ollama 有東西載在記憶體裡時，先把它 unload：
+
+```bash
+# 1. 確認 Ollama 目前載了什麼
+curl -s http://localhost:11434/api/ps
+
+# 2. Unload 特定 model（換成實際的 model 名稱）
+curl -X POST http://localhost:11434/api/generate \
+  -d '{"model": "glm-4.7-flash:latest", "keep_alive": 0}'
+
+# 3. 確認已經清掉了
+curl -s http://localhost:11434/api/ps
+# 應該回傳：{"models": []}
+
+# 4. 這時才重啟 vLLM
+docker stop qwen35
+docker start qwen35
+docker logs -f qwen35
+```
+
+在 API call 裡設 `keep_alive: 0` 是立即驅逐，不是「把 TTL 設為零之後的新 request 才生效」，而是「現在立即 unload 這個 model」。這是手動清除 Ollama 記憶體的正確 API。
+
+較大的 model 也是一樣的流程：
+
+```bash
+# 對 50GB 的 model，例如 qwen3-coder-next
+curl -X POST http://localhost:11434/api/generate \
+  -d '{"model": "qwen3-coder-next:latest", "keep_alive": 0}'
+```
+
+---
+
+## 永久修法
+
+如果 vLLM 是你的主要 serving 路徑，Ollama 只是備用，把 `KEEP_ALIVE` 全域設成 `0`：
+
+```ini
+# /etc/systemd/system/ollama.service.d/override.conf
+[Service]
+Environment="OLLAMA_FLASH_ATTENTION=1"
+Environment="OLLAMA_KV_CACHE_TYPE=q8_0"
+Environment="OLLAMA_KEEP_ALIVE=0"  # ← request 結束後立即 unload
+```
+
+套用變更：
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl restart ollama
+```
+
+設成 `KEEP_ALIVE=0` 之後，Ollama 在 request 完成時立即 unload model，記憶體馬上釋放給 vLLM 用。代價是每次 Ollama request 都要承擔完整的 model 載入時間（大約 20 秒 cold load）。對「Ollama 偶爾備用」的工作流來說，這是可以接受的。
+
+**什麼情況保持 KEEP_ALIVE=2h：**
+- Ollama 是你唯一的 model server
+- 你頻繁地在短暫間隔之間切換 Ollama request
+- 沒有 vLLM container 在競爭同一塊記憶體
+
+**什麼情況改成 KEEP_ALIVE=0：**
+- vLLM 是你的主要 serving 路徑
+- Ollama 只是偶爾用或當 fallback
+- 你需要 vLLM 重啟時有可預期的記憶體可用量
+
+---
+
+## nvidia-smi 的死路
+
+在 GPU 機器上，第一個直覺是跑 `nvidia-smi` 看記憶體用量。在 GB10 上這沒用：
+
+```bash
+nvidia-smi --query-gpu=memory.used --format=csv
+# 回傳：N/A
+```
+
+GB10 使用 unified memory — CPU 和 GPU 共用同一個實體記憶體池，沒有獨立的 VRAM 分配。`nvidia-smi` 預期的是一個獨立的 VRAM 分配。那個分配不存在，query 回傳 `N/A`，你什麼都學不到。
+
+替代方案：
+
+```bash
+# Ollama 目前載了什麼
+curl -s http://localhost:11434/api/ps
+
+# vLLM 的 KV cache 分配（vLLM 跑起來之後）
+curl -s http://localhost:8000/metrics | grep kv_cache
+
+# 系統記憶體總覽（包含 GPU 使用的 shared pool）
+free -h
+```
+
+`free -h` 顯示的是整個系統記憶體，包含 GPU 操作分配的部分 — 在 unified memory 架構上，這就是全部。沒有 `nvidia-smi` 乾淨，但這是有效的資訊來源。
+
+---
+
+## 換來了什麼
+
+診斷模式：vLLM 在理論上有足夠記憶體的機器上 OOM，先查還有什麼東西在佔記憶體，再假設設定有問題。設定可能完全正確，只是有別的東西蹲在那個 pool 裡。
+
+在 unified memory 機器上，每個分配記憶體的 process — Ollama、Docker container、系統 process — 都從同一個 pool 拿。沒有硬體邊界保護 vLLM 的分配不被其他 process 影響。
+
+這帶來的操作習慣：每次 vLLM 重啟前，先跑 `curl -s http://localhost:11434/api/ps`。一秒鐘。vLLM startup 時 OOM 要 2-3 分鐘才能診斷出來，因為失敗發生在 model 載入過程中而不是啟動瞬間，所以你要看著 log 等兩分鐘才會看到 error。
+
+---
+
+## 結語
+
+如果你在同一台機器上同時跑 Ollama 和 vLLM，`KEEP_ALIVE=2h` 早晚會咬你。這不是 bug — 這是一個為單一 server 互動式使用優化的設計決策，和 co-hosted 多 server 部署產生衝突。每次 vLLM 重啟前先確認 Ollama 載了什麼。如果你已經把 vLLM 當成主要後端，就把 `KEEP_ALIVE=0` 設好，接受 Ollama 偶爾使用時的 cold load 延遲。
+
+症狀是「應該有足夠記憶體的機器 OOM」。原因永遠是「那個記憶體裡已經有別的東西了」。在這台硬體上，那個別的東西通常是 Ollama。
+
+---
+
+*同系列其他文章：[DGX Spark 上的 8 個 Model 評測](/zh-TW/blog/dgx-spark-ollama-benchmark-8-models) · [SSM 模型不能加 --enable-chunked-prefill](/zh-TW/blog/openclaw-chunked-prefill-ssm-trap) · [純 MoE vs SSM Hybrid：Context Decay 與為什麼 Agent 要在乎](/zh-TW/blog/openclaw-moe-ssm-context-decay)*

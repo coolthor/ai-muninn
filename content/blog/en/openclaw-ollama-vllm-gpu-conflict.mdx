@@ -1,0 +1,176 @@
+---
+title: "[vLLM] Ollama's KEEP_ALIVE Is Silently Eating Your vLLM Headroom"
+description: "vLLM OOMed on restart despite 128GB unified memory. Cause: Ollama's KEEP_ALIVE=2h was holding 19-51GB in GPU. Diagnosis command, manual unload fix, and why to set KEEP_ALIVE=0 once vLLM is your primary stack."
+date: "2026-03-07"
+tags: ["vLLM", "Ollama", "GPU Memory", "DGX Spark", "GB10", "LLM Serving"]
+series: "OpenClaw"
+part: 3
+---
+
+## Preface
+
+A parking lot with 128 spaces sounds like it has plenty of room. It doesn't, if 40 of those spaces are occupied by cars that finished their errands two hours ago and nobody told them they could leave.
+
+That's what Ollama's `KEEP_ALIVE` does to GPU memory on a unified-memory machine. This came up repeatedly when restarting vLLM for the [OpenClaw agent stack](/en/blog/openclaw-dgx-spark-local-ai-agent), and took longer to diagnose than it should have because the failure mode — OOM on a 128GB machine — seems impossible until you understand what's actually in memory. A full benchmark of what was running on this machine before vLLM is at [8 Models on DGX Spark](/en/blog/dgx-spark-ollama-benchmark-8-models).
+
+---
+
+## The Incident
+
+Every vLLM container restart on the GX10 had about a 50% chance of failing with an OOM error during model load. The machine has 128GB of unified memory. [Qwen3.5-35B-A3B-FP8](https://huggingface.co/Qwen/Qwen3.5-35B-A3B-FP8) needs roughly 35GB for weights. With `--gpu-memory-utilization 0.90` and fp8 KV cache, vLLM wants about 115GB total at startup.
+
+128GB minus 35GB is 93GB. There should be room. But vLLM was OOMing.
+
+The diagnosis command:
+
+```bash
+curl -s http://localhost:11434/api/ps
+```
+
+This returns what Ollama currently has loaded in memory:
+
+```json
+{
+  "models": [
+    {
+      "name": "glm-4.7-flash:latest",
+      "size": 19456000000,
+      "size_vram": 19456000000,
+      ...
+    }
+  ]
+}
+```
+
+GLM-4.7-Flash, 19GB, sitting in memory. Nobody asked it to be there. It was there because `KEEP_ALIVE=2h` means Ollama keeps any model in memory for two hours after its last use, on the assumption that you'll probably ask it something again soon.
+
+That assumption is wrong when vLLM is your primary serving path. Ollama sits idle, holding ~19-51GB depending on which model was last used, while vLLM tries to start up and runs into the difference between "128GB on paper" and "128GB minus whatever Ollama decided to park."
+
+---
+
+## Why KEEP_ALIVE=2h Exists
+
+This is worth understanding before dismissing the default as stupid.
+
+When Ollama is your primary model server, `KEEP_ALIVE=2h` makes sense. Model loading on this hardware takes 15-25 seconds depending on model size. If you're switching between models for different tasks — fast MoE model for chat, larger model for complex analysis — keeping the last model warm means your second request comes back instantly instead of waiting for a full load cycle.
+
+The default was designed for interactive use where you make a request, get a response, think for a bit, and make another request. Two hours covers most working sessions.
+
+It becomes a problem once you add vLLM to the same machine. Now you have two model servers competing for the same unified memory pool, and Ollama's "I'll keep this warm in case you need it" behavior starts conflicting with vLLM's "I need to allocate as much of this pool as I can" behavior.
+
+---
+
+## The Manual Fix
+
+When vLLM needs a restart and Ollama has something loaded, unload it first:
+
+```bash
+# 1. Check what Ollama has in memory
+curl -s http://localhost:11434/api/ps
+
+# 2. Unload specific model (replace with actual model name)
+curl -X POST http://localhost:11434/api/generate \
+  -d '{"model": "glm-4.7-flash:latest", "keep_alive": 0}'
+
+# 3. Verify it's gone
+curl -s http://localhost:11434/api/ps
+# Should return: {"models": []}
+
+# 4. Now restart vLLM
+docker stop qwen35
+docker start qwen35
+docker logs -f qwen35
+```
+
+Setting `keep_alive: 0` in the API call is an immediate eviction — not "set TTL to zero going forward," but "unload this model right now." This is the correct API for manually clearing Ollama's memory.
+
+For models with larger footprints, the sequence is the same:
+
+```bash
+# For a 50GB model like qwen3-coder-next
+curl -X POST http://localhost:11434/api/generate \
+  -d '{"model": "qwen3-coder-next:latest", "keep_alive": 0}'
+```
+
+---
+
+## The Permanent Fix
+
+If vLLM is your primary serving path and Ollama is a secondary/backup, set `KEEP_ALIVE=0` globally:
+
+```ini
+# /etc/systemd/system/ollama.service.d/override.conf
+[Service]
+Environment="OLLAMA_FLASH_ATTENTION=1"
+Environment="OLLAMA_KV_CACHE_TYPE=q8_0"
+Environment="OLLAMA_KEEP_ALIVE=0"  # ← unload immediately after use
+```
+
+Apply the change:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl restart ollama
+```
+
+With `KEEP_ALIVE=0`, Ollama unloads a model as soon as the request completes. The memory is immediately available for vLLM. The tradeoff is that every Ollama request now incurs the full model load time (~20 seconds cold). For a workflow where Ollama is a backup that runs occasionally, this is acceptable.
+
+**When to keep KEEP_ALIVE at 2h:**
+- Ollama is your only model server
+- You frequently alternate between Ollama requests with short pauses
+- No vLLM container competing for memory
+
+**When to set KEEP_ALIVE=0:**
+- vLLM is your primary serving path
+- Ollama is used occasionally or as a fallback
+- You need predictable memory availability for vLLM restarts
+
+---
+
+## The nvidia-smi Dead End
+
+One natural debugging instinct on a GPU machine is to run `nvidia-smi` and look at memory usage. On GB10, this doesn't work:
+
+```bash
+nvidia-smi --query-gpu=memory.used --format=csv
+# Returns: N/A
+```
+
+GB10 uses unified memory — CPU and GPU share the same physical memory pool. `nvidia-smi` expects a dedicated VRAM allocation to query. There is no separate VRAM. The query returns `N/A` and you learn nothing.
+
+The alternatives:
+
+```bash
+# What Ollama has loaded
+curl -s http://localhost:11434/api/ps
+
+# vLLM's KV cache allocation (once running)
+curl -s http://localhost:8000/metrics | grep kv_cache
+
+# System memory overview (shared pool)
+free -h
+```
+
+`free -h` shows total system memory including what's been allocated to GPU operations, which on unified memory means everything. It's not as clean as `nvidia-smi`, but it's what's available.
+
+---
+
+## What Was Gained
+
+The diagnostic pattern: when vLLM OOMs on a machine with ostensibly enough memory, check what else is holding memory before assuming the configuration is wrong. The configuration might be fine. Something else might be squatting in the pool.
+
+On unified memory machines, every process that allocates memory — Ollama, Docker containers, system processes — pulls from the same pool. There's no hardware boundary that protects vLLM's allocation from other processes.
+
+The operational consequence: before any vLLM restart, run `curl -s http://localhost:11434/api/ps` as a habit. It takes one second. A vLLM OOM on startup takes 2-3 minutes to diagnose, because the failure happens during model load rather than at startup, so you watch the logs for two minutes before seeing the error.
+
+---
+
+## Conclusion
+
+If you're running Ollama and vLLM on the same machine, `KEEP_ALIVE=2h` will eventually bite you. It's not a bug — it's a design choice optimized for single-server interactive use that conflicts with co-hosted multi-server deployment. Check what Ollama has loaded before any vLLM restart. If you're committed to vLLM as your primary backend, set `KEEP_ALIVE=0` and accept the cold load latency for Ollama's occasional use.
+
+The symptom is OOM on a machine that should have plenty of memory. The cause is always something else already in that memory. On this hardware, that something is usually Ollama.
+
+---
+
+*Also in this series: [8 Models on DGX Spark: Finding the Best Stack for AI Agents](/en/blog/dgx-spark-ollama-benchmark-8-models) · [Don't Add --enable-chunked-prefill to SSM Models](/en/blog/openclaw-chunked-prefill-ssm-trap) · [Pure MoE vs SSM Hybrid: Context Decay and Why It Matters for Agents](/en/blog/openclaw-moe-ssm-context-decay)*

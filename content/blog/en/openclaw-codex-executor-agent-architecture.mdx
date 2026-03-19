@@ -1,0 +1,198 @@
+---
+title: "[AI Agent] The Codex-Executor Pattern: Keeping Agent Sessions Small"
+description: "Why we stopped having the OpenClaw agent orchestrate multi-step tasks directly, and started spawning Codex subprocesses instead. The pattern that keeps agent context minimal and tasks reliable."
+date: "2026-03-16"
+tags: ["AI Agent", "Claude Code", "Codex", "Agent Architecture", "OpenClaw"]
+series: "OpenClaw"
+part: 5
+---
+
+## Preface
+
+A project manager who also does all the drafting, formatting, and filing ends up doing nothing well. The session fills with half-finished artifacts, and by the time the final output is needed, the context is a mess of intermediate state. The same thing happens to an AI agent when you make it orchestrate every step of a long task directly.
+
+This picks up where [Zero API Cost: Running OpenClaw on DGX Spark + Mac Mini](/en/blog/openclaw-dgx-spark-local-ai-agent) left off. That post covered the deployment architecture. This one covers a pattern that emerged during actual use — after the agent started getting long tasks that degraded partway through.
+
+---
+
+## The Problem
+
+The initial design was straightforward: the OpenClaw agent handles everything. A task like `daily-reflexion` — the agent's daily self-analysis routine — would proceed step by step:
+
+1. Read `/memory/today.md`
+2. Read `/memory/prediction-ledger.md`
+3. Call an external model for a bull-case critique
+4. Write that critique to a temp file
+5. Write a bear-case critique itself
+6. Synthesize both
+7. Update `market-beliefs.md`
+8. Send a Telegram summary
+
+Eight tool calls. Each one adds to the agent's context window. The agent has to hold all the intermediate state — file contents, model responses, in-progress synthesis — in its active session while it works through the sequence.
+
+This is fine for short tasks. It is not fine for tasks with six, eight, or ten steps where each step produces output that feeds the next one.
+
+What happened in practice: sessions would degrade. The agent would complete most of a task and then produce malformed output on the final step, or write partial content to a file, or send a truncated Telegram message. Not every time, but often enough that `daily-reflexion` couldn't be trusted to run unattended.
+
+The pattern was consistent: tasks that required reading multiple files, calling external tools, and writing outputs — in sequence — were fragile at scale.
+
+---
+
+## The Insight
+
+The agent is good at deciding what to do. It is bad at maintaining coherent state across many tool calls in a long session.
+
+Codex (invoked via `codex exec`) is structured differently. It runs as a separate subprocess with its own fresh context window. You give it a complete task description, it executes the entire sequence from start to finish, and returns a single result. The intermediate state lives inside Codex's subprocess — it never touches the agent's session.
+
+The agent's job becomes: describe the task clearly, spawn the subprocess, read the result, act on it.
+
+This is the Codex-executor pattern.
+
+---
+
+## The Pattern
+
+Instead of the agent doing:
+
+```
+read file A
+→ read file B
+→ call external model with A + B
+→ read model response
+→ synthesize A, B, response
+→ write output to disk
+→ notify via Telegram
+```
+
+The agent does:
+
+```
+codex exec "Read A and B, call the model, synthesize, write output to /tmp/result.md"
+→ read /tmp/result.md
+→ notify via Telegram
+```
+
+The agent makes two tool calls instead of seven. All the complexity lives inside the Codex subprocess, which has its own full context window and exits cleanly when done.
+
+The handoff point is the filesystem. The subprocess writes its output to a predictable path. The agent reads that path. Simple, explicit, testable.
+
+---
+
+## Concrete Example: daily-reflexion
+
+Here is what `daily-reflexion` looked like before and after the change.
+
+**Before — agent orchestrates directly:**
+
+```javascript
+// Agent does all 8 steps in its own session
+const today = await readFile('/memory/today.md')
+const ledger = await readFile('/memory/prediction-ledger.md')
+
+const bullCritique = await callGemini(
+  `Critique these predictions from a bull perspective:\n${today}\n${ledger}`
+)
+await writeFile('/tmp/gemini-critique.md', bullCritique)
+
+const bearCritique = await callCodex(
+  `Write a bear-case critique of these predictions:\n${today}\n${ledger}`
+)
+await writeFile('/tmp/codex-critique.md', bearCritique)
+
+const synthesis = await synthesize(bullCritique, bearCritique)
+await writeFile('/memory/market-beliefs.md', synthesis.beliefs)
+await writeFile('/memory/prediction-ledger.md', synthesis.ledgerUpdate)
+
+await sendTelegram(synthesis.summary)
+
+// Result: 8+ tool calls in the agent's session
+// Context grows with each step
+// Failure at step 7 means partial writes to disk
+```
+
+**After — Codex-executor:**
+
+```javascript
+// Agent spawns one subprocess with a complete task description
+await execCodex(`
+  You are running the daily-reflexion routine.
+
+  1. Read /memory/today.md and /memory/prediction-ledger.md
+  2. Call gemini --yolo with the contents and ask for a bull-case critique of the predictions
+     Write the critique to /tmp/gemini-critique.md
+  3. Write your own bear-case critique to /tmp/codex-critique.md
+  4. Synthesize both critiques. Update:
+     - /memory/market-beliefs.md (revised beliefs based on critique)
+     - /memory/prediction-ledger.md (add resolution notes for today's predictions)
+  5. Write a 3-5 sentence summary of what changed to /tmp/reflexion-summary.md
+`)
+
+// Agent context: still minimal
+const summary = await readFile('/tmp/reflexion-summary.md')
+await sendTelegram(summary)
+
+// Result: 2 tool calls in the agent's session
+// All intermediate state is in Codex's subprocess
+// If something fails, the agent gets an error from execCodex — not a partial write
+```
+
+---
+
+## Measured Results (2026-03-15)
+
+The first end-to-end run of the refactored `daily-reflexion`:
+
+- **Files updated**: `market-beliefs.md`, `prediction-ledger.md`, `today.md` — all three, completely
+- **Telegram delivery**: confirmed, messageId=4030
+- **Agent session size**: stayed minimal throughout; no context overflow
+- **Total agent tool calls**: 2 (execCodex + sendTelegram)
+
+The subprocess ran for about 90 seconds. During that time, the agent's context was idle. When the subprocess finished, the agent read the result and sent the notification. Clean.
+
+---
+
+## What Was Gained
+
+**Reliability.** When the agent orchestrates many steps directly, a failure mid-sequence leaves the filesystem in a partial state. With Codex-executor, failure is atomic from the agent's perspective — the subprocess either completes the full task or returns an error. No partial writes.
+
+**Debugging clarity.** When something goes wrong, you know where to look. If the agent's two-line session fails, check the subprocess invocation. If the subprocess fails, check its output log. The scope of investigation is bounded.
+
+**Transferable diagnostics.** Any task that matches this shape is a candidate for the pattern:
+- Multiple file reads as inputs
+- One or more external model calls
+- Multiple file writes as outputs
+- A final notification or action
+
+If your task has more than three sequential steps with intermediate state, the subprocess version is likely more reliable than the direct version.
+
+---
+
+## When to Use It
+
+Use Codex-executor when:
+
+- The task involves reading multiple files, calling external tools, and writing outputs — in sequence
+- Intermediate state matters (a failure mid-task would leave things in a broken state)
+- The task can be fully specified upfront as a complete instruction to a subprocess
+- You want the agent's session to stay small regardless of task complexity
+
+Do not use it when:
+
+- The task is a single tool call (just do it directly)
+- You need to respond to intermediate results before proceeding to the next step
+- The task is under three steps and has no significant intermediate state
+- The task requires interactive back-and-forth that the subprocess can't anticipate
+
+---
+
+## The Rule
+
+If you can write the task as a single complete instruction that a capable agent could execute from start to finish without checking in — that's a Codex-executor task.
+
+If the task requires conditional branching based on intermediate results that only the orchestrating agent can evaluate — keep it in the agent's session.
+
+The goal is to move complexity out of the agent's context window and into bounded subprocesses. The agent stays the decision-maker. Codex does the work.
+
+---
+
+*Also in this series: [Zero API Cost: Running OpenClaw on DGX Spark + Mac Mini](/en/blog/openclaw-dgx-spark-local-ai-agent)*

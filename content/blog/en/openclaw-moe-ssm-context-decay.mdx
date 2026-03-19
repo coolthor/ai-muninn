@@ -1,0 +1,122 @@
+---
+title: "[Benchmark] Pure MoE vs SSM Hybrid: Context Decay and Why It Matters for Agents"
+description: "GLM-4.7-Flash hits 57.8 tok/s on short context but drops to 42 tok/s at 8K. Qwen3.5-35B SSM hybrid: 56 tok/s at short, 56 tok/s at 8K. Why agents with long system prompts should care about this difference."
+date: "2026-03-01"
+tags: ["Benchmark", "SSM", "MoE", "DGX Spark", "GB10", "LLM Serving", "AI Agents"]
+series: "OpenClaw"
+part: 4
+---
+
+## Preface
+
+A sports car that handles city traffic well but loses speed on highways is not better than a slightly slower car that maintains speed everywhere — if your commute is mostly highway.
+
+The same logic applies to token throughput. A model that benchmarks well at zero-shot short context and collapses under real agent workloads is not the right model for an agent, even if its headline number looks impressive. This is the benchmark that preceded the model selection for the [OpenClaw agent stack](/en/blog/openclaw-dgx-spark-local-ai-agent). Full raw data is at [8 Models on DGX Spark](/en/blog/dgx-spark-ollama-benchmark-8-models).
+
+---
+
+## The Numbers
+
+Measured on ASUS Ascent GX10 (NVIDIA GB10, 128GB unified memory, 273 GB/s bandwidth) via Ollama, March 3, 2026.
+
+| Model | Architecture | Short ctx | 8K ctx | Decay |
+|-------|-------------|-----------|--------|-------|
+| GLM-4.7-Flash (30B-A3B) | Pure MoE | 57.8 tok/s | 42.0 tok/s | −27% |
+| Qwen3.5-35B-A3B | SSM+MoE hybrid | 56.1 tok/s | 56.4 tok/s | ~0% |
+| qwen3-coder-next (79.7B) | SSM+MoE hybrid | 46.5 tok/s | 45.7 tok/s | ~0% |
+
+"Short ctx" here is a minimal prompt (under 500 tokens). "8K ctx" is a realistic agent context: long system prompt plus several turns of conversation history.
+
+GLM-4.7-Flash starts fast and loses a quarter of its speed by 8K tokens. The two SSM hybrid models are essentially flat. The gap isn't measurement noise — it was consistent across repeated runs.
+
+---
+
+## Why Pure MoE Decays
+
+MoE (Mixture of Experts) doesn't change the fundamental attention mechanism. The MoE part routes each token through a subset of expert layers instead of all of them, which reduces compute cost. But the attention computation — the part that scales with context length — is standard Transformer attention.
+
+Standard Transformer attention is O(n²) in compute and O(n) in memory access per decode step. As the sequence grows, so does the KV cache. Each new token generated needs to load the entire KV cache from memory — all previous keys and values — to compute attention scores. This is a memory bandwidth problem.
+
+On GB10 with 273 GB/s bandwidth, the KV cache load dominates decode time as context grows. At 1K tokens: a small cache, fast load. At 8K tokens: 8x larger cache, proportionally slower load. At 32K tokens: the throughput curve keeps descending.
+
+This is not a bug in GLM-4.7-Flash. It's a consequence of Transformer attention being fundamentally context-size-sensitive. GLM-4.7-Flash implements this correctly. The performance characteristics follow from the architecture.
+
+---
+
+## Why SSM Doesn't Decay
+
+SSM (State Space Model) architectures replace some or all of the attention layers with a recurrent state mechanism. The key property of the hidden state `h_t` is that it has **fixed size** regardless of sequence length.
+
+```
+h_t = A * h_{t-1} + B * x_t    # state update
+y_t = C * h_t                   # output projection
+```
+
+The matrices A, B, C are fixed-size. `h_t` is fixed-size. Computing `y_t` from `h_t` and `x_t` does not require loading any previous tokens from memory — everything from the past is already compressed into `h_t`.
+
+At decode time:
+- Each step loads `h_t` (fixed size, ~few MB)
+- Each step computes `y_t` (fixed compute, independent of sequence length)
+- Memory bandwidth per step: constant
+
+This is why the 8K throughput matches the short-context throughput. The memory access pattern doesn't change as the sequence grows. There is no KV cache to load for SSM layers. The state compression is lossy — SSM layers can't perfectly recall arbitrary tokens from 10K steps ago the way attention can — but for the typical agent workload pattern, this trade-off is favorable.
+
+Qwen3.5-35B-A3B and qwen3-coder-next are hybrid architectures: they use both SSM layers and attention layers. The attention layers do have a KV cache, but the SSM layers' flat scaling characteristic dominates the throughput curve at realistic context lengths.
+
+---
+
+## What an Agent's Context Actually Looks Like
+
+The OpenClaw agent runs with this approximate prompt structure:
+
+```
+System prompt:    ~2,000 tokens  (skills, identity, memory injections)
+Tool definitions: ~500 tokens    (available tools and schemas)
+Conversation:     grows per session
+  - Turn 1:       ~200 tokens in / ~379 tokens out
+  - Turn 2:       ~600 tokens in (accumulated)
+  - Turn 5:       ~2,000+ tokens in (accumulated)
+Average session:  4K-8K total context by end of session
+```
+
+A single short-context benchmark does not model this. The first message of a session hits the short-context regime. By message three or four, you're at 3K-5K tokens. By message eight, you're comfortably in the range where GLM-4.7-Flash has lost 27% of its throughput.
+
+At 8K context: GLM-4.7-Flash at 42 tok/s, Qwen3.5-35B at 56 tok/s. That's a 33% throughput advantage for Qwen3.5, at the context length an agent actually reaches during normal operation. The headline benchmark numbers (57.8 vs 56.1) pointed in the wrong direction.
+
+---
+
+## The GX10 Bandwidth Constraint
+
+The 273 GB/s figure for GB10's unified memory bandwidth is important context. This is lower than dedicated GPU memory bandwidth (H100 SXM has ~3.35 TB/s). The GB10 is a power-efficient workstation chip, not a data center card.
+
+Lower bandwidth means memory-bandwidth-bound workloads hit their ceiling sooner. Transformer attention at long context is memory-bandwidth-bound. This is why the context decay on pure MoE is more pronounced here than on higher-bandwidth hardware — the bandwidth ceiling is lower, so you hit it at shorter context lengths.
+
+SSM hybrid models are less affected by bandwidth constraints because they don't scale their memory access with context length. On low-bandwidth hardware, the advantage of SSM architectures is larger, not smaller.
+
+If you're running on higher-bandwidth hardware (H100, H200, B200), the decay curve for pure MoE is flatter. The cross-over point where SSM hybrid wins is at longer context. But for workstation-class hardware with unified memory — DGX Spark, GB200 NVL2, similar form factors — the context decay happens sooner and the SSM advantage materializes earlier.
+
+---
+
+## What Was Gained
+
+The diagnostic question for model selection for agent workloads: **what is the throughput at 4K-8K tokens, not at zero-shot?**
+
+Benchmark databases and model cards typically report short-context performance. This is not what an agent experiences. If a model's throughput drops 25% between short context and operational context, that drop is effectively permanent — agents don't use short context once a session is underway.
+
+Secondary finding: on bandwidth-constrained hardware (unified memory workstations), SSM hybrid architectures have a larger absolute advantage than they would on data center hardware. The bandwidth constraints that make these machines less ideal for heavy throughput also make them more sensitive to context-length scaling.
+
+The choice here was Qwen3.5-35B-A3B over GLM-4.7-Flash. The headline numbers were nearly identical. The operational numbers pointed clearly to Qwen3.5. The switch to vLLM for [prefix caching benefits](/en/blog/dgx-spark-vllm-qwen35-setup) reinforced the choice further — prefix caching effectively zeroes out TTFT for repeated system prompt context, which the SSM's flat decode performance then compounds.
+
+---
+
+## Conclusion
+
+Before selecting a model for an always-on agent, run a context-length scaling benchmark. Pick the longest context your agent will realistically reach in a session — for most setups, 6K-10K tokens — and measure throughput there, not at 200 tokens.
+
+On unified-memory hardware with bandwidth constraints, pure MoE models show significant context decay. SSM hybrid models do not. The difference is not cosmetic at typical agent context lengths — it's 25-30% throughput. If you're choosing between a model that benchmarks slightly faster on short context and one that benchmarks slightly slower but holds steady, the second model is the right choice for an agent workload.
+
+Check both the short-context number and the 8K number. They tell different stories.
+
+---
+
+*Also in this series: [8 Models on DGX Spark: Finding the Best Stack for AI Agents](/en/blog/dgx-spark-ollama-benchmark-8-models) · [Don't Add --enable-chunked-prefill to SSM Models](/en/blog/openclaw-chunked-prefill-ssm-trap) · [Ollama KEEP_ALIVE Is Silently Eating Your vLLM Headroom](/en/blog/openclaw-ollama-vllm-gpu-conflict)*

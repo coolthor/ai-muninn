@@ -1,0 +1,219 @@
+---
+title: "[AI Agent] OpenClaw Config 熱重載：不需要重啟"
+description: "花了好幾週每次改設定都重啟 gateway。後來才發現有 file watcher。哪些東西可以立即熱重載、哪些還是要重啟、還有怎麼區分 auth 失敗和短暫網路錯誤。"
+date: "2026-02-25"
+tags: ["AI Agent", "OpenClaw", "Configuration", "Developer Workflow"]
+series: "OpenClaw"
+part: 6
+---
+
+## 前言
+
+開發迴圈裡最慢的部分，是你不知道可以跳過的那部分。我在 log 裡讀到正確那行之前，花了好幾週，每次改設定都多加 30 秒。
+
+這篇接續[零 API 成本：用 DGX Spark + Mac Mini 跑 OpenClaw](/zh-TW/blog/openclaw-dgx-spark-local-ai-agent)，那篇涵蓋完整的 OpenClaw 部署。這篇更窄：config 熱重載的行為、它涵蓋什麼、以及一旦知道它存在後，除錯工作流程會怎麼改變。
+
+---
+
+## 問題所在
+
+早期 OpenClaw 開發需要大量的 config 迭代。你在換模型端點、調整生成參數、測試 Telegram bot 設定、調整 skill 設定。每次改動都需要在進入下一個之前驗證。
+
+Config 檔案是 `~/.openclaw/openclaw.json`。在知道熱重載之前，每次改動的更新循環看起來是這樣：
+
+```bash
+# 1. 編輯 config
+nano ~/.openclaw/openclaw.json
+
+# 2. 停止服務
+launchctl stop ai.openclaw.gateway
+
+# 3. 等它完全停止（~5 秒）
+
+# 4. 啟動服務
+launchctl start ai.openclaw.gateway
+
+# 5. 等它初始化（~10-15 秒）
+
+# 6. 確認它正確啟動
+tail -f /tmp/openclaw/gateway-stdout.log
+
+# 7. 測試改動
+```
+
+每次迭代 30 秒。保守估計。在密集開發、連續改 config 的情況下，重啟循環是主要的時間成本。
+
+它也是不必要的。
+
+---
+
+## 發現
+
+OpenClaw gateway 對 `~/.openclaw/openclaw.json` 有內建的 file watcher。儲存檔案，gateway 在一到兩秒內重載改動的值。不需要重啟。服務持續運行，進行中的 session 不受影響，新的 config 立即生效。
+
+Log 裡可以確認：
+
+```bash
+tail -f /tmp/openclaw/gateway-stdout.log
+# 看：儲存後 1-2 秒內出現 "Config reloaded"
+```
+
+這行出現時，上面沒有任何重啟記錄。服務的 PID 沒有改變。Gateway 是真的 in-process 重載，不是看起來像重載的快速重啟。
+
+這不是小小的便利。這是 30 秒迭代迴圈和 2 秒迴圈之間的差距。
+
+---
+
+## 什麼可以熱重載
+
+這些欄位在儲存時立即重載：
+
+**Telegram channel 設定：**
+```json
+{
+  "channels": {
+    "telegram": {
+      "accounts": {
+        "default": {
+          "botToken": "your-new-token-here"
+        }
+      }
+    }
+  }
+}
+```
+
+**模型端點和 primary model：**
+```json
+{
+  "model": {
+    "primary": "vllm/qwen3.5-35b"
+  }
+}
+```
+
+**生成參數：**
+```json
+{
+  "model": {
+    "params": {
+      "temperature": 0.7,
+      "max_tokens": 4096,
+      "chat_template_kwargs": {
+        "enable_thinking": false
+      }
+    }
+  }
+}
+```
+
+**Skill 定義、memory 路徑、agent 行為設定**——全部熱重載。
+
+實際上：JSON 裡任何設定 agent 行為或連線目標的欄位都適用。如果你在調整 agent 的操作設定，可以在不重啟的情況下迭代。
+
+---
+
+## 什麼不能熱重載
+
+有些東西還是需要完整的服務重啟：
+
+```bash
+launchctl stop ai.openclaw.gateway && launchctl start ai.openclaw.gateway
+```
+
+- **Port 綁定**——gateway 在啟動時綁定 port；改 port 需要重啟才能綁定新的
+- **服務層級的環境變數**——在 launchd plist 裡設定的變數，不是 `openclaw.json` 裡的
+- **File watcher 本身**——如果不知為何破壞了 watcher 設定，需要重啟才能恢復
+
+其他所有東西：存檔、看 log、繼續。
+
+---
+
+## Telegram Token 事件
+
+這個發現來自一個具體的情況：需要輪換一個 Telegram bot token。Bot token 因多種原因需要輪換——權限變更、安全預防、在 BotFather 重新生成不同設定的 bot。
+
+原本預期的流程：
+1. 從 BotFather 取得新 token
+2. 更新 config
+3. 停止 gateway
+4. 啟動 gateway
+5. 等待初始化
+6. 測試
+
+實際流程，在嘗試不重啟的情況下：
+1. 從 BotFather 取得新 token
+2. 更新 `openclaw.json` 裡的 `channels.telegram.accounts.default.botToken`
+3. 存檔
+4. 發送測試訊息
+
+成功了。Gateway 已經取得新 token。一個看起來需要仔細排程、費時五分鐘的操作，花了 30 秒，而且大部分時間是在從 BotFather 複製 token。
+
+---
+
+## 熱重載後的錯誤分類
+
+一旦知道 config 改動即時生效，錯誤空間就清晰多了。Config 編輯後有什麼失敗，問題不是「服務有沒有讀到改動」——它有。問題是新的 config 值是否正確。
+
+Telegram 送達失敗的三種錯誤類別：
+
+```
+undici "Network request for 'X' failed!"
+→ 短暫網路錯誤。請求在傳輸中失敗。
+  可恢復。Gateway 會重試。不需要採取行動。
+
+401 Unauthorized
+→ Config 裡的 token 無效。
+  熱重載立即套用了錯誤的 token。
+  修法：在 openclaw.json 裡更新 botToken，再次存檔。
+  正確的 token 在 2 秒內生效。
+
+503 Service Unavailable
+→ Gateway 服務本身沒有在跑。
+  確認：launchctl list | grep openclaw
+  修法：launchctl start ai.openclaw.gateway
+```
+
+`undici` 短暫錯誤值得特別提一下，因為它看起來很驚悚，但實際上不是。Gateway 的 HTTP client 在發生時記錄網路失敗——在家用網路上的本地 Mac Mini，偶發性短暫失敗是正常的。它們會被記錄、重試，不需要介入。別讓它們把你帶進 config 裡翻找。
+
+`401` 才是需要採取行動的。行動是：修好 config 裡的 token，存檔，完成。
+
+---
+
+## 修訂後的迭代迴圈
+
+知道熱重載之後：
+
+```bash
+# 1. 編輯 config
+nano ~/.openclaw/openclaw.json
+
+# 2. 存檔
+
+# 3. 確認重載
+tail -n 5 /tmp/openclaw/gateway-stdout.log
+# 應該看到："Config reloaded"
+
+# 4. 測試
+```
+
+五秒，不是三十秒。在一個有二十次 config 改動的開發 session 裡，回收了八分鐘。在好幾週的密集開發裡，影響更顯著。
+
+另一個改變是心理層面的。30 秒重啟迴圈帶來足夠的摩擦，讓你傾向批量改動——一次改多個東西，重啟一次，一起測試多個東西。當有東西出問題時，這讓隔離原因變得更難。2 秒熱重載迴圈消除了批量的誘因。你改一件事，確認它，進入下一個。除錯因此變得更容易，這是附帶效果。
+
+---
+
+## 出問題時先檢查什麼
+
+如果存檔後 agent 的行為和你的 config 不符：
+
+1. 檢查 log 裡有沒有 "Config reloaded"——確認重載確實發生了
+2. 驗證 JSON 是否合法——`openclaw.json` 裡的語法錯誤會阻止重載（gateway 會記錄 parse error）
+3. 確認你編輯的是正確的檔案——`~/.openclaw/openclaw.json`，不是其他地方的備份或副本
+4. 如果以上都沒問題：重啟服務，看行為是否改變
+
+實際上，第 2 步是最常見的問題。JSON 裡多一個逗號或少一個大括號，就足以讓重載靜默失敗。Gateway 會記錄 parse error，所以先看 log，不是服務狀態。
+
+---
+
+*本系列相關文章：[零 API 成本：用 DGX Spark + Mac Mini 跑 OpenClaw](/zh-TW/blog/openclaw-dgx-spark-local-ai-agent)*

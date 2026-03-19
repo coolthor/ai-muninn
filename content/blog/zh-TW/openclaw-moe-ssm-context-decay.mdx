@@ -1,0 +1,122 @@
+---
+title: "[Benchmark] 純 MoE vs SSM Hybrid：Context Decay 與為什麼 Agent 要在乎"
+description: "GLM-4.7-Flash 短 context 57.8 tok/s，但 8K 時掉到 42 tok/s。Qwen3.5-35B SSM hybrid：短 56 tok/s，8K 仍 56 tok/s。為什麼有長 system prompt 的 agent 應該在乎這個差距。"
+date: "2026-03-01"
+tags: ["Benchmark", "SSM", "MoE", "DGX Spark", "GB10", "LLM Serving", "AI Agents"]
+series: "OpenClaw"
+part: 4
+---
+
+## 前言
+
+一台在市區路段表現很好、但上高速公路就掉速的車，不比一台在市區稍慢但全程維持速度的車更適合日常通勤 — 如果你的通勤大部分是高速公路的話。
+
+Token throughput 也一樣。一個短 context benchmark 數字好看、但在真實 agent 工作負載下速度崩掉的 model，不是正確的 agent 選擇，即使它的標題數字更漂亮。這是為 [OpenClaw agent 架構](/zh-TW/blog/openclaw-dgx-spark-local-ai-agent) 選 model 之前做的 benchmark。原始數據來源是 [DGX Spark 上的 8 個 Model 評測](/zh-TW/blog/dgx-spark-ollama-benchmark-8-models)。
+
+---
+
+## 數字
+
+測量環境：ASUS Ascent GX10（NVIDIA GB10，128GB unified memory，273 GB/s 頻寬），透過 Ollama，2026-03-03 實測。
+
+| Model | 架構 | 短 ctx | 8K ctx | 衰退 |
+|-------|------|--------|--------|------|
+| GLM-4.7-Flash（30B-A3B） | 純 MoE | 57.8 tok/s | 42.0 tok/s | −27% |
+| Qwen3.5-35B-A3B | SSM+MoE hybrid | 56.1 tok/s | 56.4 tok/s | ~0% |
+| qwen3-coder-next（79.7B） | SSM+MoE hybrid | 46.5 tok/s | 45.7 tok/s | ~0% |
+
+「短 ctx」是最小 prompt，500 token 以下。「8K ctx」是實際 agent context：長 system prompt 加上幾輪對話歷史。
+
+GLM-4.7-Flash 一開始最快，到 8K token 時已經掉了四分之一的速度。兩個 SSM hybrid model 幾乎持平。這個差距不是測量誤差 — 多次重複測量結果一致。
+
+---
+
+## 為什麼純 MoE 會衰退
+
+MoE（Mixture of Experts）不改變底層的 attention 機制。MoE 的部分是把每個 token 路由到 expert 層的一個子集而不是全部，藉此降低計算量。但 attention 計算 — 那個隨 context 長度 scaling 的部分 — 是標準的 Transformer attention。
+
+標準 Transformer attention 的計算是 O(n²)，記憶體存取是每個 decode 步驟 O(n)。隨著序列增長，KV cache 也增長。每次生成一個新 token 都需要從記憶體載入整個 KV cache — 所有之前的 key 和 value — 來計算 attention score。這是一個記憶體頻寬問題。
+
+GB10 的 273 GB/s 頻寬，隨著 context 增長，KV cache 載入成為 decode 時間的主導因素。1K token：cache 小，載入快。8K token：cache 大了 8 倍，載入比例放慢。32K token：throughput 曲線繼續往下。
+
+這不是 GLM-4.7-Flash 的 bug。這是 Transformer attention 的性質 — 對 context 大小本質上是敏感的。GLM-4.7-Flash 的實作完全正確，效能特性就是從架構本身推導出來的。
+
+---
+
+## 為什麼 SSM 不衰退
+
+SSM（State Space Model）架構把部分或全部的 attention 層換成 recurrent state 機制。Hidden state `h_t` 的關鍵性質是，不管序列長度，它的大小是**固定的**。
+
+```
+h_t = A * h_{t-1} + B * x_t    # state 更新
+y_t = C * h_t                   # output projection
+```
+
+矩陣 A、B、C 是固定大小的。`h_t` 是固定大小的。從 `h_t` 和 `x_t` 計算 `y_t` 不需要從記憶體載入任何之前的 token — 過去的所有資訊已經被壓縮進 `h_t`。
+
+在 decode 時：
+- 每一步載入 `h_t`（固定大小，幾 MB）
+- 每一步計算 `y_t`（固定計算量，和序列長度無關）
+- 每一步的記憶體存取：常數
+
+這就是為什麼 8K throughput 和短 context throughput 一樣。記憶體存取模式不隨序列增長而改變。SSM 層沒有需要載入的 KV cache。State 壓縮是有損的 — SSM 層沒辦法像 attention 那樣完美回溯 10K 步之前的任意 token — 但對典型 agent 工作負載的使用模式，這個取捨是有利的。
+
+Qwen3.5-35B-A3B 和 qwen3-coder-next 都是 hybrid 架構：同時使用 SSM 層和 attention 層。Attention 層確實有 KV cache，但在實際 context 長度下，SSM 層的平坦 scaling 特性主導了 throughput 曲線。
+
+---
+
+## Agent 的 Context 實際上長什麼樣
+
+OpenClaw agent 的 prompt 結構大概是這樣：
+
+```
+System prompt：    ~2,000 token   （skills、identity、memory injection）
+Tool definitions： ~500 token     （可用 tool 和 schema）
+Conversation：     每個 session 增長
+  - 第 1 輪：     ~200 token in / ~379 token out
+  - 第 2 輪：     ~600 token in（累積）
+  - 第 5 輪：     ~2,000+ token in（累積）
+一般 session 結束時：4K-8K total context
+```
+
+單一短 context benchmark 無法模擬這個。Session 的第一則訊息落在短 context 範圍。第三、四輪訊息時，你已經在 3K-5K token。第八輪時，你舒舒服服地待在 GLM-4.7-Flash 已經掉了 27% throughput 的範圍裡。
+
+8K context 時：GLM-4.7-Flash 42 tok/s，Qwen3.5-35B 56 tok/s。Qwen3.5 在 agent 實際到達的 context 長度下，有 33% 的 throughput 優勢。標題 benchmark 數字（57.8 vs 56.1）指向了錯誤的方向。
+
+---
+
+## GX10 頻寬限制的影響
+
+GB10 unified memory 頻寬 273 GB/s 是重要的背景資訊。這比專用 GPU 記憶體頻寬低很多（H100 SXM 約 3.35 TB/s）。GB10 是一個省電的工作站晶片，不是資料中心卡。
+
+頻寬越低，記憶體頻寬瓶頸的工作負載就越早遇到天花板。長 context 的 Transformer attention 是記憶體頻寬瓶頸型工作負載。這就是為什麼純 MoE 的 context decay 在這台機器上比高頻寬硬體更明顯 — 頻寬天花板更低，更短的 context 就會碰到。
+
+SSM hybrid model 受頻寬限制影響較小，因為它們的記憶體存取不隨 context 長度 scaling。在低頻寬硬體上，SSM 架構的優勢是更大的，不是更小的。
+
+如果你跑在更高頻寬的硬體上（H100、H200、B200），純 MoE 的衰退曲線會比較平坦，SSM hybrid 獲勝的 cross-over point 在更長的 context。但對工作站等級的 unified memory 機器 — DGX Spark、GB200 NVL2 這類形式的硬體 — context decay 出現得更早，SSM 優勢也更早顯現。
+
+---
+
+## 換來了什麼
+
+為 agent 工作負載選 model 的診斷問題：**throughput 在 4K-8K token 時是多少，不是在 zero-shot 時。**
+
+Benchmark 資料庫和 model card 通常報告短 context 效能，這不是 agent 實際面對的情況。如果一個 model 在短 context 和操作 context 之間 throughput 掉了 25%，那個衰退實際上是永久性的 — agent 一旦 session 進行到中途就不會回到短 context。
+
+次要發現：在頻寬受限的硬體（unified memory 工作站）上，SSM hybrid 架構有比資料中心硬體更大的絕對優勢。讓這些機器整體 throughput 不理想的頻寬限制，同時也讓它們對 context 長度 scaling 更敏感。
+
+這裡的選擇是 Qwen3.5-35B-A3B 而不是 GLM-4.7-Flash。標題數字幾乎相同。操作數字清楚地指向 Qwen3.5。後來切換到 vLLM 的 [prefix caching 效益](/zh-TW/blog/dgx-spark-vllm-qwen35-setup) 進一步強化了這個選擇 — prefix caching 把重複出現的 system prompt context 的 TTFT 降到接近零，SSM 的平坦 decode 效能在這之上繼續疊加。
+
+---
+
+## 結語
+
+在為 always-on agent 選 model 之前，跑一個 context 長度 scaling benchmark。找出你的 agent 在一個 session 裡實際會到達的最長 context — 對大多數設定來說，6K-10K token — 在那個長度量 throughput，而不是在 200 token。
+
+在 unified memory、頻寬受限的硬體上，純 MoE model 有明顯的 context decay；SSM hybrid model 沒有。在典型 agent context 長度下，這個差距不是可以忽略的 — 是 25-30% throughput。如果你在一個短 context 稍快、但無法維持速度的 model，和一個稍慢但全程持平的 model 之間選擇，後者是 agent 工作負載的正確選擇。
+
+兩個數字都要看：短 context 數字和 8K 數字。它們說的是不同的故事。
+
+---
+
+*同系列其他文章：[DGX Spark 上的 8 個 Model 評測](/zh-TW/blog/dgx-spark-ollama-benchmark-8-models) · [SSM 模型不能加 --enable-chunked-prefill](/zh-TW/blog/openclaw-chunked-prefill-ssm-trap) · [Ollama 的 KEEP_ALIVE 在偷吃你的 vLLM 記憶體空間](/zh-TW/blog/openclaw-ollama-vllm-gpu-conflict)*

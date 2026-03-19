@@ -1,0 +1,198 @@
+---
+title: "[AI Agent] Codex-Executor 模式：讓 Agent Session 保持輕量"
+description: "為什麼我們停止讓 OpenClaw agent 直接編排多步驟任務，改成派生 Codex subprocess。這個模式讓 agent context 保持輕量、任務執行更可靠。"
+date: "2026-03-16"
+tags: ["AI Agent", "Claude Code", "Codex", "Agent Architecture", "OpenClaw"]
+series: "OpenClaw"
+part: 5
+---
+
+## 前言
+
+一個同時要負責起草、排版、歸檔的專案經理，到頭來什麼都做不好。Session 被半成品的中間產物塞滿，等到需要最終輸出的時候，context 已經是一團亂。AI agent 直接編排長任務的每個步驟時，同樣的事情會發生。
+
+這篇接續[零 API 成本：用 DGX Spark + Mac Mini 跑 OpenClaw](/zh-TW/blog/openclaw-dgx-spark-local-ai-agent)。那篇涵蓋部署架構，這篇記錄一個在實際使用中浮現的模式——在 agent 開始接到長任務、中途降級的情況出現之後。
+
+---
+
+## 問題所在
+
+最初的設計很直覺：OpenClaw agent 親自處理一切。像 `daily-reflexion`——agent 的每日自我分析例程——會一步一步執行：
+
+1. 讀取 `/memory/today.md`
+2. 讀取 `/memory/prediction-ledger.md`
+3. 呼叫外部模型做多頭批評
+4. 把批評寫進暫存檔
+5. 自己寫空頭批評
+6. 綜合兩者
+7. 更新 `market-beliefs.md`
+8. 發送 Telegram 摘要
+
+八次 tool call。每次都在 agent 的 context window 裡堆積。Agent 必須在整個流程中持有所有中間狀態——檔案內容、模型回應、進行中的綜合分析——全在同一個 session 裡。
+
+短任務沒問題。六步、八步、十步、每步的輸出都要餵給下一步的任務，就不行了。
+
+實際發生的狀況：session 會降級。Agent 會完成大部分任務，然後在最後一步產出格式錯誤的輸出，或者寫入不完整的檔案內容，或者發出截斷的 Telegram 訊息。不是每次，但頻率足以讓 `daily-reflexion` 無法在無人看管的情況下可靠執行。
+
+規律很一致：需要讀取多個檔案、呼叫外部工具、依序寫入輸出的任務，在規模下是脆弱的。
+
+---
+
+## 洞察
+
+Agent 擅長決定要做什麼。它不擅長在長 session 中跨越大量 tool call 維持連貫的狀態。
+
+Codex（透過 `codex exec` 呼叫）的結構不同。它以獨立的 subprocess 運行，有自己全新的 context window。你給它一個完整的任務描述，它從頭到尾執行整個流程，回傳單一結果。中間狀態活在 Codex 的 subprocess 裡——永遠不會碰到 agent 的 session。
+
+Agent 的工作變成：把任務描述清楚、派生 subprocess、讀取結果、採取行動。
+
+這就是 Codex-executor 模式。
+
+---
+
+## 模式本身
+
+不讓 agent 這樣做：
+
+```
+讀取檔案 A
+→ 讀取檔案 B
+→ 用 A + B 呼叫外部模型
+→ 讀取模型回應
+→ 綜合 A、B、回應
+→ 把輸出寫到磁碟
+→ 用 Telegram 通知
+```
+
+而是讓 agent 這樣做：
+
+```
+codex exec "讀取 A 和 B，呼叫模型，綜合，把輸出寫到 /tmp/result.md"
+→ 讀取 /tmp/result.md
+→ 用 Telegram 通知
+```
+
+Agent 執行兩次 tool call，而不是七次。所有複雜度都活在 Codex subprocess 裡，它有自己完整的 context window，完成後乾淨退出。
+
+交接點是 filesystem。Subprocess 把輸出寫到可預測的路徑。Agent 讀取那個路徑。簡單、明確、可測試。
+
+---
+
+## 具體例子：daily-reflexion
+
+`daily-reflexion` 在改動前後的對比。
+
+**改動前——agent 直接編排：**
+
+```javascript
+// Agent 在自己的 session 裡執行全部 8 個步驟
+const today = await readFile('/memory/today.md')
+const ledger = await readFile('/memory/prediction-ledger.md')
+
+const bullCritique = await callGemini(
+  `從多頭角度批評這些預測：\n${today}\n${ledger}`
+)
+await writeFile('/tmp/gemini-critique.md', bullCritique)
+
+const bearCritique = await callCodex(
+  `寫出這些預測的空頭批評：\n${today}\n${ledger}`
+)
+await writeFile('/tmp/codex-critique.md', bearCritique)
+
+const synthesis = await synthesize(bullCritique, bearCritique)
+await writeFile('/memory/market-beliefs.md', synthesis.beliefs)
+await writeFile('/memory/prediction-ledger.md', synthesis.ledgerUpdate)
+
+await sendTelegram(synthesis.summary)
+
+// 結果：agent session 裡 8+ 次 tool call
+// Context 隨每個步驟成長
+// 第 7 步失敗意味著磁碟上有不完整的寫入
+```
+
+**改動後——Codex-executor：**
+
+```javascript
+// Agent 派生一個 subprocess，帶完整的任務描述
+await execCodex(`
+  你正在執行 daily-reflexion 例程。
+
+  1. 讀取 /memory/today.md 和 /memory/prediction-ledger.md
+  2. 用 gemini --yolo 呼叫，帶入這些內容，請它從多頭角度批評預測
+     把批評寫到 /tmp/gemini-critique.md
+  3. 自己寫空頭批評，寫到 /tmp/codex-critique.md
+  4. 綜合兩份批評。更新：
+     - /memory/market-beliefs.md（根據批評修訂的信念）
+     - /memory/prediction-ledger.md（為今天的預測加上結果註記）
+  5. 把改變了什麼寫成 3-5 句摘要，寫到 /tmp/reflexion-summary.md
+`)
+
+// Agent context：全程保持輕量
+const summary = await readFile('/tmp/reflexion-summary.md')
+await sendTelegram(summary)
+
+// 結果：agent session 裡 2 次 tool call
+// 所有中間狀態都在 Codex subprocess 裡
+// 如果有什麼失敗，agent 從 execCodex 拿到 error，不是不完整的寫入
+```
+
+---
+
+## 實測結果（2026-03-15）
+
+重構後的 `daily-reflexion` 第一次 end-to-end 執行：
+
+- **更新的檔案**：`market-beliefs.md`、`prediction-ledger.md`、`today.md`——三個都完整更新
+- **Telegram 送達**：確認，messageId=4030
+- **Agent session 大小**：全程保持輕量，沒有 context overflow
+- **Agent 總 tool call 次數**：2（execCodex + sendTelegram）
+
+Subprocess 跑了約 90 秒。這段時間裡，agent 的 context 是閒置的。Subprocess 完成後，agent 讀取結果並發送通知。乾淨。
+
+---
+
+## 得到了什麼
+
+**可靠性。** Agent 直接編排多個步驟時，中途失敗會讓 filesystem 處於部分完成的狀態。有了 Codex-executor，從 agent 的角度看，失敗是原子性的——subprocess 要麼完整完成任務，要麼回傳 error。不會有半途寫入。
+
+**除錯清晰度。** 出問題時，你知道去哪找。Agent 的兩行 session 失敗，檢查 subprocess 的呼叫方式。Subprocess 失敗，檢查它的輸出 log。調查範圍是有邊界的。
+
+**可遷移的診斷方式。** 任何符合這個形狀的任務都是這個模式的候選：
+- 多個檔案讀取作為輸入
+- 一次或多次外部模型呼叫
+- 多個檔案寫入作為輸出
+- 最終的通知或行動
+
+如果你的任務有超過三個依序步驟加上中間狀態，subprocess 版本可能比直接版本更可靠。
+
+---
+
+## 什麼時候用
+
+用 Codex-executor 的時機：
+
+- 任務需要依序讀取多個檔案、呼叫外部工具、寫入輸出
+- 中間狀態很重要（任務中途失敗會讓東西處於損壞狀態）
+- 任務可以事前作為完整指令完全規格化，交給 subprocess 執行
+- 你希望 agent session 無論任務複雜度都保持輕量
+
+不用的時機：
+
+- 任務是單次 tool call（直接做就好）
+- 你需要在進入下一步之前先回應中間結果
+- 任務不到三個步驟，且沒有顯著的中間狀態
+- 任務需要 subprocess 無法預期的互動式來回
+
+---
+
+## 判斷準則
+
+如果你能把任務寫成一個完整的指令，讓一個有能力的 agent 能從頭到尾執行而不需要中途確認——那就是 Codex-executor 的任務。
+
+如果任務需要根據中間結果做條件分支，而那個判斷只有編排的 agent 能做——就留在 agent 的 session 裡。
+
+目標是把複雜度從 agent 的 context window 移出去，放進有邊界的 subprocess。Agent 仍然是決策者。Codex 負責執行。
+
+---
+
+*本系列相關文章：[零 API 成本：用 DGX Spark + Mac Mini 跑 OpenClaw](/zh-TW/blog/openclaw-dgx-spark-local-ai-agent)*

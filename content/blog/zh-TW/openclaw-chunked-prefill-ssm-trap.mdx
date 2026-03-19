@@ -1,0 +1,125 @@
+---
+title: "[vLLM] SSM 模型不能加 --enable-chunked-prefill"
+description: "把 --enable-chunked-prefill 加到 Qwen3.5-35B（SSM+MoE hybrid）上，吞吐量從 47 tok/s 掉到 5.7 tok/s。解釋為什麼 SSM 遞迴架構和 chunked prefill 根本不相容。"
+date: "2026-03-06"
+tags: ["vLLM", "SSM", "Qwen", "DGX Spark", "LLM Serving", "Performance"]
+series: "OpenClaw"
+part: 2
+---
+
+## 前言
+
+流水線讓組裝更快，前提是每個站的東西不需要按順序交給下一站。如果需要，你就把一條生產線變成了一個瓶頸。
+
+`--enable-chunked-prefill` 加在 SSM model 上就是這樣。這個 flag 在 vLLM 文件裡記載為 Transformer model 的 throughput 優化。對 Qwen3.5-35B-A3B 這種 SSM+MoE hybrid 架構來說，它是反優化。這篇記錄的是 [OpenClaw agent 架構](/zh-TW/blog/openclaw-dgx-spark-local-ai-agent) 在 vLLM 上跑 Qwen3.5-35B 時，那個把 throughput 砍掉 8 倍的設定失誤。
+
+---
+
+## 事故經過
+
+[Qwen3.5-35B 的 vLLM 遷移](/zh-TW/blog/dgx-spark-vllm-qwen35-setup)已經完成，model 跑在 ~47 tok/s。當時在嘗試為多個 agent 並發工作負載擠出更多 throughput，翻了一下可以調整的 flag。
+
+vLLM 文件裡有提到 `--enable-chunked-prefill`：把 prefill phase 切成 chunk 和 decode 交錯執行，改善 GPU 使用率。聽起來是個安全的嘗試。加了。
+
+Throughput 從 **47 tok/s 掉到 5.7 tok/s**。
+
+這是 8.2 倍的衰退。不是誤差範圍，不是測量雜訊。是 throughput 的完全崩潰，從可以正常互動，變成比 CPU 跑還慢。
+
+Flag 沒有讓 vLLM crash，也沒有產生任何錯誤訊息。Server 啟動，接受 request，回傳 response，只是速度是 5.7 tok/s。如果沒有在量 throughput，你可能不會發現，直到 agent 真的開始等待回應。
+
+---
+
+## 根本原因
+
+Qwen3.5-35B-A3B 是 SSM+MoE hybrid 架構。名字裡的「A3B」代表它使用了 DeltaNet — 一種 state space model 架構，搭配 MoE 層一起運作。這不是標準的 Transformer。
+
+關鍵差異在這裡：
+
+**Transformer attention** 是並行的。序列裡的每個 token 可以以任何順序處理 — attention 對整個序列做矩陣運算，不在乎順序。把這個切成 chunk 完全沒問題，因為 attention 的計算不依賴任何中間狀態。
+
+**SSM（State Space Model）層**維護一個 recurrent hidden state `h_t`，每一步的狀態都依賴前一步：
+
+```
+h_t = f(h_{t-1}, x_t)
+```
+
+這是遞迴。它本質上是序列性的。你沒辦法在不處理 token 1 到 99 的情況下直接處理 token 100，因為 `h_100` 依賴 `h_99`，`h_99` 依賴 `h_98`，一路往前追溯。
+
+Chunked prefill 把 prompt 切成 segment，以交錯方式批次處理。對純 Transformer 來說沒問題 — segment 之間不互相依賴中間狀態。對 SSM 層來說，每個 chunk 都需要從前一個 chunk 的末端接收 recurrent hidden state，再把新的 state 傳給下一個 chunk。這個跨 chunk 的 state 傳遞是有代價的 — 在每個 segment 邊界都會發生，隨著序列長度增加，chunk 邊界數量增加，累積代價也隨之增加。
+
+在一個很長的序列裡，每個邊界的 hidden state 傳遞 overhead 的總和遠超過任何並行化帶來的收益。throughput 地板很快就到了。實際測量的情況：從一台能跑 47 tok/s 的機器上得到 5.7 tok/s。
+
+---
+
+## 哪些 Model 會受影響
+
+任何有 recurrent layer 的 model（SSM、Mamba、DeltaNet、Mamba2、RWKV 或類似架構）都會受影響。關鍵是 model 架構，不是名字：
+
+- **Qwen3.5-35B-A3B** — SSM+MoE hybrid（DeltaNet 層）— 受影響
+- **qwen3-coder-next 79.7B** — SSM+MoE hybrid — 受影響
+- **GLM-4.7-Flash** — 純 MoE，標準 attention — 可以安全使用 chunked prefill
+- **標準 Llama/Qwen/Mistral** — 純 Transformer — 可以安全使用 chunked prefill
+
+不確定的話，看 model card 或 config.json。如果架構描述裡出現 `mamba`、`ssm`、`deltanet`、`state_space`、`recurrent` 這些字眼，就不要加 `--enable-chunked-prefill`。
+
+---
+
+## 解法
+
+把 flag 移掉，就這樣。Qwen3.5-35B-A3B-FP8 的可用啟動指令不包含 `--enable-chunked-prefill`：
+
+```bash
+docker run -d --name qwen35 --restart unless-stopped \
+  --gpus all --ipc host --shm-size 64gb -p 8000:8000 \
+  -v /home/coolthor/models/qwen35-35b-hf:/models/qwen35 \
+  vllm/vllm-openai:cu130-nightly \
+  --model /models/qwen35 \
+  --served-model-name qwen3.5-35b \
+  --max-model-len 200000 \
+  --gpu-memory-utilization 0.90 \
+  --kv-cache-dtype fp8 \
+  --calculate-kv-scales \
+  --max-num-batched-tokens 4096 \
+  --enable-prefix-caching \
+  --reasoning-parser qwen3 \
+  --enable-auto-tool-choice \
+  --tool-call-parser qwen3_coder
+  # 注意：--enable-chunked-prefill 不在這裡
+```
+
+另外確認 vLLM 沒有自動啟用它。某些 vLLM 版本在特定設定下會預設開啟 chunked prefill。檢查啟動 log：
+
+```bash
+docker logs qwen35 2>&1 | grep -i "chunked"
+```
+
+你希望看到空的輸出，或是 `Chunked prefill: disabled`。如果看到 `Chunked prefill: enabled` 但你沒有手動加，明確加上 `--disable-chunked-prefill` 強制關閉。
+
+---
+
+## 換來了什麼
+
+這裡的診斷模式是可以推廣的：**throughput 崩潰但沒有 error 時，先查 flag 再查 model。**
+
+vLLM throughput 災難性地低、但 server 看起來正常時，第一個懷疑對象是設定 flag，不是 model、不是硬體、不是 CUDA。Model 做的是你告訴它做的事。問題是你告訴它做了什麼。
+
+「我的 SSM model 在 vLLM 上為什麼這麼慢」的 checklist：
+
+1. 確認 serve 指令裡有沒有 `--enable-chunked-prefill`（或看 log 裡有沒有被啟用）
+2. 確認 Ollama 有沒有 model 被載入到共用 GPU 記憶體裡（參見 [Ollama KEEP_ALIVE 衝突](/zh-TW/blog/openclaw-ollama-vllm-gpu-conflict)）
+3. 確認 `--max-num-batched-tokens` 是否符合 SSM block size 要求
+4. 確認每個 request 都有帶 `enable_thinking: false`（thinking token 會燒掉表觀 throughput）
+
+一個 flag 造成 8 倍衰退，這種事不會出現在文件裡，因為它是 flag 和架構類型之間的交互作用，不是 bug。Flag 完全按照設計工作 — 只是它是為另一類 model 設計的。
+
+---
+
+## 結語
+
+在加任何 vLLM throughput flag 之前，先查清楚 model 的架構類型。如果有任何 recurrent state（SSM、Mamba、DeltaNet、RWKV），就把 `--enable-chunked-prefill` 當禁區。這個 flag 不會產生錯誤，也不會警告你，只會讓 throughput 下降一個數量級，然後讓 server 繼續靜靜地跑在 5.7 tok/s。
+
+唯一能抓到這件事的方法，是在每次改 flag 前後都量一下 throughput。
+
+---
+
+*同系列其他文章：[Qwen3.5 從 Ollama 遷移到 vLLM](/zh-TW/blog/dgx-spark-vllm-qwen35-setup) · [Ollama 的 KEEP_ALIVE 在偷吃你的 vLLM 記憶體空間](/zh-TW/blog/openclaw-ollama-vllm-gpu-conflict) · [純 MoE vs SSM Hybrid：Context Decay 與為什麼 Agent 要在乎](/zh-TW/blog/openclaw-moe-ssm-context-decay)*
