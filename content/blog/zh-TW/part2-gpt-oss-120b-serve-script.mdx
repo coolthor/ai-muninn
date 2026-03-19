@@ -7,7 +7,17 @@ series: "gpt-oss-120B on DGX Spark"
 part: 1
 ---
 
-[第一篇](/zh-TW/blog/part1-why-your-dgx-spark-says-exclamation-marks)講的是讓任何 NVFP4 模型在 SM121 上不輸出 `!!!!!` 的四個 bug。先把那些修完。這篇從 Qwen3.5-122B 能跑之後開始，講試著跑 gpt-oss-120B 的過程——一個完全不同的模型格式，有它自己的一套地雷。
+## 前言
+
+同一台硬體，不同的模型，不同的問題集。[SM121 NVFP4 搞定之後](/zh-TW/blog/part1-why-your-dgx-spark-says-exclamation-marks)，下一個自然的問題是：這台機器還能跑什麼？gpt-oss-120B 是 Microsoft 的開源 120B 模型——不同的量化格式、不同的 tokenizer、以及它自己的一類靜默失敗。
+
+這篇是完整的除錯記錄：從空白的 shell 到一份可用的 serve script，中間六個 bug，最後附上腳本。
+
+用個比喻：就像搬進一間新公寓，看起來一切都是標準規格，但沒有一樣完全吻合——插座是另一個標準、冰箱用錯電壓、大樓水壓以沒有人警告過你的方式影響水管。每個問題都能修，但沒有一個是你事先知道會踩到的。
+
+---
+
+[第一篇](/zh-TW/blog/part1-why-your-dgx-spark-says-exclamation-marks)講的是讓任何 NVFP4 模型在 SM121 上不輸出 `!!!!!` 的四個 bug。先把那些修完。這篇從那之後開始，講試著跑 gpt-oss-120B 的過程——一個完全不同的模型格式，有它自己的一套地雷。
 
 目標：**59 tok/s**，131K context，單顆 GB10（128 GB 統一記憶體）。實際路徑：六個獨立的 bug，其中一個比其他所有合起來還難找。
 
@@ -214,6 +224,24 @@ exec vllm serve /home/username/models/gpt-oss-120b \
 | CUDAGraph | ✅ 已捕捉 |
 
 數學算法：GB10 有 273 GB/s 記憶體頻寬。120B × 4-bit ≈ 60 GB。在 273 GB/s 下，理論 decode 速度約 ~60 tok/s。實測 59 tok/s 幾乎完全貼到頻寬上限。這就是 GB10 上正常運作的樣子。
+
+---
+
+## 得到了什麼
+
+六個坑全部修完。59 tok/s 是結果——幾乎貼到頻寬上限，代表整個 stack 正確運作。但這些教訓值得明確寫出來，因為每一個都不直觀，而且都會再出現。
+
+**花最多時間的坑：**
+- **坑 6（錯誤環境變數）** 最難找，因為它完全隱形。沒有 error，沒有 warning。啟動 log 是唯一的訊號。在除錯任何模型行為之前，先讀啟動 log。
+- **坑 5（harmony system message）** 沒有辦法靠設定繞過——需要改原始碼。任何帶 system prompt 的 client 都會靜默踩到，如果沒有打 patch 的話。
+
+**可轉移的診斷模式：**
+- gpt-oss 出現重複迴圈 → 看啟動 log 有沒有 `Auto-selected: CUTLASS_FP4`。如果有，你的 Marlin env var 沒有被讀到。
+- response 裡 `content: null` → 要麼 reasoning parser 把輸出路由到錯誤的欄位，要麼模型在生成 reasoning token。先查 parser flag。
+- 內網機器 tokenizer 下載失敗 → tiktoken 用 SHA1 hash 當快取檔名。這個機制沒有任何文件。繞過方法是預先下載並把 `TIKTOKEN_RS_CACHE_DIR` 指向該目錄。
+
+**到處都適用的模式：**
+`--enforce-eager` 永遠不應該出現在 production serve script 裡。如果你接手了一份 script 而且速度不對，先查這個 flag。它很容易引入 2× 的速度退化，然後被忘掉。
 
 ---
 
