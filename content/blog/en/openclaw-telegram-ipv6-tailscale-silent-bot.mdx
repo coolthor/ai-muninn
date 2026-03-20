@@ -1,0 +1,377 @@
+---
+title: "[AI Agent] openclaw: Why the Bot Went Silent — Tailscale, IPv6, and a Node.js Happy Eyeballs Trap"
+description: "The bot process is running. The token is valid. Messages are being consumed. Nobody is home. A systematic takedown of every wrong hypothesis — and the hidden causal chain that connects Tailscale routing tables to silent sendMessage failures in Node.js."
+date: "2026-03-19"
+tags: ["Node.js", "Tailscale", "IPv6", "undici", "Happy Eyeballs", "Telegram", "Debugging", "Networking"]
+series: "OpenClaw"
+part: 8
+---
+
+## Preface
+
+The bot was online. The process was running. I sent a message. Nothing came back.
+
+This is the category of bug that costs the most time — not because the fix is hard, but because every first-instinct diagnosis is wrong. Like a post office that stamps all incoming mail as received but somehow never sends replies, the system looked healthy from every angle except the one that mattered.
+
+This is the full debug record: four wrong hypotheses, one routing table, and a Node.js behavior that most people don't know exists.
+
+---
+
+## The Scene
+
+Around 13:00, the openclaw gateway stopped responding to Telegram messages. No crash. No visible error. The AI agent behind it had been running fine for days.
+
+The only clues: a recurring log line appearing every 30 minutes, and an occasional startup warning about identity reconciliation. Nothing that obviously pointed to Telegram.
+
+---
+
+## The Method
+
+Each hypothesis below gets a full prosecution. Assume guilt, then try to prove it wrong. The last one standing is the root cause.
+
+---
+
+## Hypothesis 1: The Process Crashed
+
+**Assertion**: The gateway process is down. Something killed it, launchd failed to restart it, and what looks like "running" is stale state.
+
+**Attack**:
+
+```bash
+launchctl list | grep openclaw
+# 67104  0  ai.openclaw.gateway
+```
+
+PID 67104 is alive, exit code 0. `launchctl` confirms it. Running, not crashed.
+
+The log file shows new entries arriving every minute (cron timer ticks). If the process were dead, the log would have stopped. The process is running.
+
+**Verdict: ELIMINATED.** Alive and writing logs.
+
+---
+
+## Hypothesis 2: The Bot Token Expired or Got Revoked
+
+**Assertion**: Something invalidated the bot token. The gateway is running but authentication is broken, so Telegram silently rejects all API calls.
+
+**Attack**:
+
+```bash
+curl -s "https://api.telegram.org/bot${TOKEN}/getMe"
+# {"ok":true,"result":{"id":8647078778,"username":"little_shrimp_0226_bot",...}}
+```
+
+Token valid. Bot identity confirmed.
+
+```bash
+curl -s "https://api.telegram.org/bot${TOKEN}/getUpdates?limit=1"
+# {"ok":true,"result":[]}
+```
+
+Zero pending updates. Worth noting — we'll return to this.
+
+**Verdict: ELIMINATED.** Token is valid, API responds correctly.
+
+---
+
+## Hypothesis 3: Network Is Down
+
+**Assertion**: The machine can't reach Telegram's API. A network change, DNS failure, or firewall rule is blocking all outbound connections.
+
+**Attack**:
+
+```bash
+curl -s https://api.telegram.org/bot1/getMe
+# {"ok":false,"error_code":404,"description":"Not Found"}
+```
+
+404 is the correct response for an invalid bot token path. The server answered. Network is fine.
+
+The log also shows the bot received startup DNS resolution events — DNS is working. And messages are being consumed (see Hypothesis 4).
+
+**Verdict: ELIMINATED.** Network connectivity is functioning.
+
+---
+
+## Hypothesis 4: Messages Aren't Being Received
+
+**Assertion**: Long-polling is broken. The gateway never receives messages from Telegram, so there's nothing to respond to.
+
+**Attack**:
+
+Send a test message to the bot. Then immediately check:
+
+```bash
+curl -s "https://api.telegram.org/bot${TOKEN}/getUpdates?limit=1"
+# {"ok":true,"result":[]}
+```
+
+Zero pending updates — immediately after sending. The message was consumed. The gateway **received** it. It's somewhere in the processing pipeline.
+
+The log confirms: a few seconds after sending, the agent bootstrap sequence fires:
+
+```
+[15:20:19] INFO  {"workspaceDir": "...", "skills": [{"name": "acp-router", ...}]}
+```
+
+Skills are being loaded. The agent started processing the message.
+
+**Verdict: ELIMINATED.** Messages are received and processing begins.
+
+---
+
+## What Actually Happened
+
+Everything worked — right up until the gateway tried to respond.
+
+```
+[15:19:39] ERROR  telegram sendChatAction failed: Network request for 'sendChatAction' failed!
+```
+
+The typing indicator. The bot received the message, started the agent, tried to show "typing..." — and the network request failed. Not DNS. Not authentication. The raw HTTP call to `api.telegram.org` failed with a network error.
+
+But the network test passed. curl reaches Telegram fine. How can the HTTP call fail?
+
+The answer is in how Node.js makes connections — and what Tailscale did to the routing table.
+
+---
+
+## The Actual Culprit: A Routing Table With False Promises
+
+Inspect the IPv6 routing table:
+
+```bash
+netstat -rn -f inet6 | head -15
+```
+
+```
+Internet6:
+Destination     Gateway                  Flags    Netif
+default         fe80::%utun0             UGcIg    utun0
+default         fe80::%utun1             UGcIg    utun1
+default         fe80::%utun2             UGcIg    utun2
+default         fe80::%utun3             UGcIg    utun3
+default         fd7a:115c:a1e0::         UGcIg    utun4
+default         fe80::%utun5             UGcIg    utun5
+...
+```
+
+Eight default IPv6 routes, all through Tailscale's `utun` interfaces.
+
+Now check what the system actually knows about IPv6 connectivity:
+
+```bash
+scutil --nwi
+```
+
+```
+IPv4 network interface information
+     en1 : flags      : 0x5 (IPv4,DNS)
+           address    : 192.168.68.67
+
+IPv6 network interface information
+   No IPv6 states found
+```
+
+No IPv6 internet connectivity. No ISP-assigned IPv6 address. No IPv6 DNS. Nothing.
+
+But the routing table says IPv6 traffic has somewhere to go — through Tailscale's tunnels. When an IPv6 packet goes to any external destination, the kernel hands it to a `utun` interface. Tailscale receives it. Tailscale has no exit node configured for external IPv6. The packet goes nowhere. The OS returns `EHOSTUNREACH`.
+
+The contradiction: the kernel believes IPv6 is routable (routes exist), but the routes lead to a dead end.
+
+---
+
+## Why Node.js Falls Into This Trap
+
+Node.js 20+ ships with Happy Eyeballs (RFC 8305) enabled by default via undici, its built-in HTTP engine. The behavior is controlled by `autoSelectFamily: true` in the undici Agent.
+
+Happy Eyeballs: when connecting to a hostname with both A and AAAA records, attempt IPv6 first. If IPv6 doesn't connect within the attempt timeout, also try IPv4 in parallel. Use whichever succeeds first.
+
+The algorithm assumes IPv6 failure is slow — a timeout. RFC 8305 is designed for the world where IPv6 just hasn't reached yet but the network stack is otherwise healthy.
+
+Not for this world: where IPv6 fails *immediately* with `EHOSTUNREACH` because a VPN injected a route that pretends IPv6 works but doesn't actually deliver.
+
+`EHOSTUNREACH` is a hard error. Node.js's Happy Eyeballs implementation treats it as a connection failure, not a "try the next address" signal. The connection attempt aborts. IPv4 is never tried.
+
+Verify directly:
+
+```bash
+curl -6 https://api.telegram.org   # → curl: (7) Couldn't connect to server
+curl -4 https://api.telegram.org   # → 302 (works fine)
+```
+
+IPv6: dead. IPv4: fine. Node.js: tries IPv6 first, hits `EHOSTUNREACH`, fails the whole request.
+
+---
+
+## The Fallback That Didn't
+
+The gateway code has a fallback mechanism. When it detects `ETIMEDOUT` or `EHOSTUNREACH`, it logs:
+
+```
+fetch fallback: enabling sticky IPv4-only dispatcher (codes=ETIMEDOUT,EHOSTUNREACH)
+```
+
+This is supposed to switch all future Telegram API calls to IPv4-only. It appears in the log almost every time the gateway starts. The problem: it doesn't fix anything.
+
+The "sticky" flag lives in a closure:
+
+```javascript
+let stickyIpv4FallbackEnabled = false;
+
+const resolvedFetch = async (input, init) => {
+  const initialInit = withDispatcherIfMissing(
+    init,
+    stickyIpv4FallbackEnabled
+      ? resolveStickyIpv4Dispatcher()
+      : defaultDispatcher.dispatcher
+  );
+  try {
+    return await sourceFetch(input, initialInit);
+  } catch (err) {
+    if (!stickyIpv4FallbackEnabled) {
+      stickyIpv4FallbackEnabled = true;
+      log.warn(`fetch fallback: enabling sticky IPv4-only dispatcher`);
+    }
+    return sourceFetch(input, withDispatcherIfMissing(init, resolveStickyIpv4Dispatcher()));
+  }
+};
+```
+
+Once `stickyIpv4FallbackEnabled` becomes `true`, subsequent calls through *this closure* use IPv4-only. That's the design.
+
+But the Telegram provider restarts on network failures. Each restart calls `resolveTelegramTransport()` again — a new closure, a new `stickyIpv4FallbackEnabled = false`. The flag resets. IPv6 attempt. `EHOSTUNREACH`. Flag sets. Provider fails. Restart. Loop.
+
+Every two minutes in the logs, the same sequence repeating.
+
+---
+
+## The Common Workaround That Doesn't Work
+
+The standard advice for Node.js IPv6 issues:
+
+```bash
+node --no-network-family-autoselection app.js
+# or
+net.setDefaultAutoSelectFamily(false)
+```
+
+Both affect Node.js's built-in `net` module. Neither affects undici. Node.js's `fetch()` (since v18) uses undici internally, which has its own `autoSelectFamily` option in its `Agent` configuration — independent of the `net` module setting.
+
+Setting `NODE_OPTIONS=--no-network-family-autoselection` and watching undici still attempt IPv6 is a documented frustration. The two systems are not connected. This is tracked in [nodejs/node #54359](https://github.com/nodejs/node/issues/54359).
+
+---
+
+## The Fix
+
+The gateway exposes an environment variable for this case:
+
+```
+OPENCLAW_TELEGRAM_DISABLE_AUTO_SELECT_FAMILY=1
+```
+
+This sets `autoSelectFamily: false` in the undici Agent at initialization — not as a fallback after failure, but as the initial configuration:
+
+```javascript
+if (isTruthyEnvValue(env["OPENCLAW_TELEGRAM_DISABLE_AUTO_SELECT_FAMILY"])) {
+  return { value: false, source: `env:OPENCLAW_TELEGRAM_DISABLE_AUTO_SELECT_FAMILY` };
+}
+```
+
+Add it to the launchd plist:
+
+```xml
+<key>OPENCLAW_TELEGRAM_DISABLE_AUTO_SELECT_FAMILY</key>
+<string>1</string>
+```
+
+Reload:
+
+```bash
+launchctl unload ~/Library/LaunchAgents/ai.openclaw.gateway.plist
+launchctl load   ~/Library/LaunchAgents/ai.openclaw.gateway.plist
+launchctl start  ai.openclaw.gateway
+```
+
+After reload, the startup log changes from:
+
+```
+autoSelectFamily=true (default-node22)
+fetch fallback: enabling sticky IPv4-only dispatcher...
+```
+
+To:
+
+```
+autoSelectFamily=false (env:OPENCLAW_TELEGRAM_DISABLE_AUTO_SELECT_FAMILY)
+```
+
+No ETIMEDOUT. No fallback loop. Bot responds immediately.
+
+---
+
+## Why Tailscale Causes This When Other VPNs Don't
+
+Most VPNs either take over routing entirely (including IPv6), or disable IPv6 on setup.
+
+Tailscale is a mesh VPN for private connectivity between devices. It assigns each device a Tailscale IPv6 address (`fd7a:115c:a1e0::/48`) for internal reachability and injects IPv6 routes to handle it. But unless an exit node with IPv6 capability is explicitly configured, Tailscale doesn't provide IPv6 *internet* connectivity — only IPv6 *routes* that terminate at its WireGuard interfaces.
+
+The kernel sees routes and concludes IPv6 works. Node.js's Happy Eyeballs sees a routable IPv6 address and tries it first. The packet hits the Tailscale `utun` interface and dies with `EHOSTUNREACH`.
+
+Check with:
+
+```bash
+netstat -rn -f inet6 | grep default
+# utun entries = Tailscale is injecting IPv6 routes
+
+scutil --nwi | grep -A5 "IPv6"
+# "No IPv6 states found" = no real IPv6 internet
+```
+
+Both true simultaneously: you're in the trap.
+
+---
+
+## What Was Gained
+
+**What cost the most time:**
+The sticky fallback log line was actively misleading. It looked like the gateway was detecting and correcting the problem — `enabling sticky IPv4-only dispatcher` sounds like a fix. It took reading the source to understand it was resetting every provider restart. A log line that says "fixed" when the fix doesn't survive a restart is worse than no log line.
+
+**Transferable diagnostics:**
+- Silent failures after `sendChatAction` → check if IPv6 attempts are happening before the real request
+- `net.setDefaultAutoSelectFamily(false)` having no effect → you're using undici (Node.js 18+), not the `net` module; they're separate
+- Fallback mechanism that logs "enabled" on every startup → the flag probably lives in a closure that gets recreated
+
+**The pattern that applies everywhere:**
+If the routing table says a network path exists, the OS believes it — regardless of whether packets actually arrive anywhere. `EHOSTUNREACH` from a VPN interface is not the same as "no IPv6." The fix has to be at the application layer, not the OS layer.
+
+---
+
+## Diagnostic Checklist
+
+```bash
+# 1. Is the process alive?
+launchctl list | grep openclaw
+
+# 2. Does IPv4 work?
+curl -4 https://api.telegram.org
+
+# 3. Does IPv6 fail immediately?
+curl -6 https://api.telegram.org
+
+# 4. Are there IPv6 routes from Tailscale?
+netstat -rn -f inet6 | grep "default.*utun"
+
+# 5. Does the system have actual IPv6 internet?
+scutil --nwi | grep -A3 IPv6
+
+# 6. Check Node.js undici default
+node -e "const {Agent} = require('undici'); const a = new Agent(); console.log(a[Object.getOwnPropertySymbols(a)[0]])"
+# Look for autoSelectFamily in the options
+```
+
+If steps 3–5 confirm "IPv6 routes exist, IPv4 works, IPv6 dies, no real IPv6" — the fix is at the HTTP client level, not the OS level.
+
+---
+
+*Also in this series: [The Codex-Executor Pattern](/en/blog/openclaw-codex-executor-agent-architecture) · [Ollama vs vLLM GPU Conflict](/en/blog/openclaw-ollama-vllm-gpu-conflict)*

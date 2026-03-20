@@ -1,0 +1,98 @@
+---
+title: "[AI Agent] openclaw: When the Agent Calls for Help"
+description: "How to wire a callhelp tool into a local agent loop so it can spawn Codex CLI mid-reasoning. One permission flag you must set, and why Claude's quota stays mine."
+date: "2026-03-18"
+tags: ["AI Agent", "openclaw", "Codex", "LLM", "Agent Tools", "Local AI"]
+series: "OpenClaw"
+part: 7
+---
+
+## Preface
+
+Every local agent hits a ceiling. The model is good enough for most things, but occasionally a task arrives that requires stronger reasoning, better code generation, or simply a second opinion from a model that's had more training on the problem domain. The standard answer is to route those tasks to a cloud API. The less obvious answer is to let the agent make that call itself — by spawning a CLI tool mid-reasoning and reading the output.
+
+This is what `callhelp` does in openclaw. The agent has a tool. The tool runs Codex. The result comes back as a tool response. The agent continues.
+
+---
+
+## The Tool
+
+`callhelp` is a custom tool definition in yui's tool list. It takes a prompt, spawns `codex` as a subprocess, and returns stdout as the tool result. Nothing else.
+
+The agent decides when to use it. It's not triggered by a keyword or a rule. If yui hits something it can't confidently answer, it calls the tool. If it can handle it locally, it doesn't.
+
+---
+
+## Why Codex, Not Claude
+
+I gave the agent Codex. Claude's quota is mine.
+
+This is the entire reason. Claude CLI is more capable on certain tasks, but the quota is shared with my own work. Codex runs on a separate API key. If yui burns through tokens on an agentic loop, it burns Codex tokens — not mine.
+
+The practical difference is small. Codex handles code generation, debugging, and structured reasoning well. For what `callhelp` is used for — filling gaps in the agent's own reasoning — it's sufficient.
+
+---
+
+## The Permission Flag
+
+When Codex runs as a subprocess inside an agent loop, nobody is there to approve tool calls.
+
+Codex's default behavior is to pause and ask for confirmation before executing anything. In a subprocess with no TTY attached, that pause hangs forever. The agent times out. The task fails silently or with a cryptic error.
+
+The fix: run Codex with full auto-approval:
+
+```bash
+codex --full-auto -q "your prompt here"
+```
+
+`--full-auto` skips all permission prompts. `-q` suppresses interactive UI output. Without both flags, the subprocess hangs.
+
+This is the one configuration detail that makes `callhelp` actually work vs. theoretically work.
+
+---
+
+## When the Agent Uses It
+
+`callhelp` is not called for everything. The agent uses it when it recognizes a gap:
+
+- Code generation tasks where it's uncertain about correctness
+- Debugging a specific error it hasn't seen before
+- Tasks where the prompt implies a domain it's less confident in
+
+The key is that the agent decides. There's no hard routing rule — just a tool available in the loop, and a model that has enough self-awareness to reach for it when needed.
+
+---
+
+## What This Looks Like in Practice
+
+A typical callhelp invocation, from the agent's perspective:
+
+1. Task arrives: "fix the bug in this function"
+2. Agent reviews the code, identifies the issue is subtle
+3. Agent calls `callhelp` with the function and error message as the prompt
+4. Codex runs: analyzes, returns a fix with explanation
+5. Agent reads the result, incorporates it, continues the task
+
+From the outside, the agent just fixed the bug. From the inside, it delegated the hard part to a stronger tool and used the answer.
+
+---
+
+## The Meta-Pattern
+
+An AI agent calling another AI for help is not a novel idea, but it's underused in local agent setups. Most people wire a local model to a fixed set of tools — search, code execution, file I/O. The idea that one of those tools can be another model's CLI is a step further.
+
+The reason it works: Codex is not a general-purpose oracle. It's a specific tool with a specific strength. `callhelp` doesn't route everything to it — just the subset of tasks where that strength is relevant. That's exactly how you'd use any specialized tool.
+
+The quota question is the practical part. Whatever CLI you give the agent, make sure the budget is separated from your own. An agent loop can burn tokens faster than you expect.
+
+---
+
+## Setup Checklist
+
+1. Define `callhelp` as a tool in your agent's tool list
+2. Implementation: spawn `codex --full-auto -q "<prompt>"` as subprocess, return stdout
+3. Set a timeout — if the subprocess hangs anyway, you want a clean failure
+4. Separate API key / quota from your personal usage
+5. Test the tool call in isolation before wiring it into the loop
+
+The `--full-auto` flag is non-negotiable. Everything else is configuration.

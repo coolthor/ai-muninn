@@ -1,6 +1,6 @@
 ---
-title: "[vLLM] gpt-oss-120B at 59 tok/s: 6 Pitfalls and a Working Serve Script"
-description: "Getting Microsoft's gpt-oss-120B running on a DGX Spark (SM121, GB10) with vLLM. Six bugs, one wrong environment variable that silently did nothing, a tiktoken file hidden behind a SHA1 hash, and a repetition loop that took longer to find than all the rest combined."
+title: "[vLLM] Running a 120B Model on DGX Spark at 60 tok/s — Zero API Cost, Six Bugs"
+description: "How to get gpt-oss-120B running on a DGX Spark (GB10, SM121) with vLLM. The goal: a 120B model serving a local AI agent at zero API cost. The path: six bugs, one silent env var, and a startup log that tells you everything."
 date: "2026-03-19"
 tags: ["DGX Spark", "SM121", "vLLM", "gpt-oss", "MXFP4", "Blackwell", "LLM Serving"]
 series: "gpt-oss-120B on DGX Spark"
@@ -9,17 +9,15 @@ part: 1
 
 ## Preface
 
-Same hardware, different model, different problem set. After getting [SM121 NVFP4 working](/en/blog/part1-why-your-dgx-spark-says-exclamation-marks), the natural next question is: what else can this machine run? gpt-oss-120B is Microsoft's open-source 120B model — a different quantization format, a different tokenizer, and its own category of silent failures.
+The goal was simple: give the openclaw agent running on this machine a 120B model as its brain. Local inference, no API quota, no rate limits, no cost per token. A model that's always available, runs at the edge of the hardware's bandwidth ceiling, and doesn't phone home.
 
-This article is the full debugging record: six bugs between a blank shell and a working serve script, with a working script at the end.
+The DGX Spark (GB10, SM121, 128 GB unified memory) is the hardware. gpt-oss-120B is Microsoft's open-source 120B model, MXFP4-quantized. At 273 GB/s memory bandwidth and 60 GB of weights, the theoretical ceiling is ~60 tok/s. That's the number to hit.
 
-The analogy: it's like moving into a new apartment where everything looks standard but nothing quite fits — the outlets are a different standard, the fridge runs on the wrong voltage, and the building's water pressure affects the pipes in ways no one warned you about. Each problem is fixable. None of them are obvious until you hit them.
+Between zero and that number: six bugs. This is the path through them.
 
 ---
 
-[Part 1](/en/blog/part1-why-your-dgx-spark-says-exclamation-marks) covered the four bugs that cause any NVFP4 model to output `!!!!!` on SM121. Fix those first. This post picks up after that — and covers what happens when you try to serve gpt-oss-120B, a completely different model format with its own set of landmines.
-
-Target: **59 tok/s** at 131K context on a single GB10 (128 GB unified memory). Actual path to get there: six separate bugs, one of which took longer to find than all the others combined.
+[Part 1](/en/blog/part1-why-your-dgx-spark-says-exclamation-marks) covered the SM121-specific NVFP4 fixes — if any model outputs `!!!!!` on your DGX Spark, fix those first. This article picks up after that, with gpt-oss-120B specifically: a different quantization format, a different tokenizer, and its own set of obstacles.
 
 ---
 
@@ -107,7 +105,7 @@ tokens: {'prompt_tokens': 68, 'completion_tokens': 100}
 
 The `--reasoning-parser openai_gptoss` flag routes all output into the `reasoning` field and sets `content` to null. gpt-oss is not a thinking model. The parser is designed for a specific output format gpt-oss uses for its reasoning channel — but if your client only reads `content` (as any standard OpenAI-compatible client does), it gets nothing.
 
-Initial fix: remove `--reasoning-parser openai_gptoss`. Content appears.
+Fix: remove `--reasoning-parser openai_gptoss`. Content appears.
 
 *(This diagnosis was correct, but bug 6 was also active. Removing the parser helped, but without fixing bug 6, outputs still degraded into repetition loops for anything longer than a few sentences.)*
 
@@ -122,7 +120,7 @@ gpt-oss uses the harmony message format. vLLM processes chat completion requests
 
 The bug (tracked as [vLLM PR #31607](https://github.com/vllm-project/vllm/pull/31607), unmerged at time of writing): if the client sends a message with `role: "system"` in the messages array, it gets serialized as a raw harmony message rather than going through `get_system_message()`. The model sees a malformed token sequence and starts producing garbage.
 
-Any client that sends a system prompt hits this — which is most of them.
+Any client that sends a system prompt hits this — which is most of them. For openclaw, this matters: every request from the agent loop includes a system prompt.
 
 Manual fix: patch `vllm/entrypoints/openai/serving_chat.py` to extract system-role messages from `request.messages` and route them through `get_system_message(instructions=...)`.
 
@@ -223,6 +221,8 @@ Two flags updated from the original script, based on [eugr/spark-vllm-docker rec
 
 Note: `--reasoning-parser openai_gptoss` is not included. Remove it unless you specifically need the reasoning channel separated.
 
+> **eugr venv users:** `--attention-backend FLASHINFER` and `--mxfp4-layers` are specific to spark-vllm-docker's patched build. If using the eugr venv directly, omit both — TRITON_ATTN is auto-selected and performance is equivalent (~63 tok/s measured).
+
 ---
 
 ## Performance
@@ -239,25 +239,34 @@ The arithmetic: GB10 has 273 GB/s memory bandwidth. 120B × 4-bit ≈ 60 GB. At 
 
 ---
 
-## What Was Gained
+## What This Means for a Local Agent
 
-All six bugs were fixed. 59 tok/s is the result — close to the bandwidth ceiling, which means the stack is working correctly. But the lessons are worth stating explicitly, because each one is non-obvious and will recur.
+59 tok/s at 131K context, on a machine that fits under a desk.
 
-**The bugs that cost the most time:**
-- **Bug 6 (wrong env var)** was the hardest because it was invisible. No error, no warning. The startup log is the only signal. Always read the startup log before debugging model behavior.
-- **Bug 5 (harmony system message)** has no workaround via config — it requires a source patch. Any client sending system prompts will hit this silently if unpatched.
+For openclaw — an always-on AI agent running locally — the arithmetic is different from cloud API use. There's no cost per token. No rate limit. No latency spike when a paid tier gets throttled. The model is available at any hour, responding to any prompt, without a usage meter running in the background.
 
-**Transferable diagnostics:**
-- Repetition loops on gpt-oss → check startup log for `Auto-selected: CUTLASS_FP4`. If present, your Marlin env var isn't being read.
-- `content: null` in responses → either reasoning parser is routing output to the wrong field, or the model is generating into reasoning tokens. Check the parser flag first.
-- Tokenizer download failures on internal networks → tiktoken uses SHA1-hashed filenames for its cache. There is no documentation for this. The workaround is pre-downloading and pointing `TIKTOKEN_RS_CACHE_DIR` at the directory.
+120B parameters means the model handles complex reasoning, long system prompts, and multi-turn context without the quality ceiling that smaller local models hit. openclaw runs on this model full-time as its primary inference backend. The setup cost was six bugs and a few hours. The ongoing cost is electricity.
 
-**The pattern that applies everywhere:**
-`--enforce-eager` should never be in a production serve script. If you inherited a script and the speed is wrong, check for this flag first. It's an easy 2× regression to introduce and forget.
+The DGX Spark makes this possible because of the unified memory architecture: 128 GB accessible by both CPU and GPU, enough to hold a 60 GB model with room left for a large KV cache. No quantization tradeoff that would have been necessary on a GPU with smaller VRAM.
 
 ---
 
-## Summary: The Ordered Checklist
+## What Was Gained
+
+**The bug that cost the most time:**
+Bug 6 (wrong env var) was invisible. No error, no warning. The startup log is the only signal — and only if you know what to look for. A script can look completely correct and silently do nothing. Always read the startup log before debugging model behavior.
+
+**Transferable diagnostics:**
+- Repetition loops on gpt-oss → check startup log for `Auto-selected: CUTLASS_FP4`. If present, the Marlin env var isn't being read.
+- `content: null` in responses → reasoning parser is routing output to the wrong field. Check the parser flag first.
+- Tokenizer download failures on internal networks → tiktoken uses SHA1-hashed filenames for its cache. The workaround is pre-downloading and pointing `TIKTOKEN_RS_CACHE_DIR` at the directory.
+
+**The pattern that applies everywhere:**
+`--enforce-eager` in a production serve script is a silent 2× regression. If you inherited a script and the speed is wrong, check for this flag before debugging anything else.
+
+---
+
+## Setup Checklist
 
 If you're serving gpt-oss-120B on SM121:
 
@@ -268,8 +277,6 @@ If you're serving gpt-oss-120B on SM121:
 5. **Use `VLLM_MXFP4_BACKEND=marlin`** — not `VLLM_NVFP4_GEMM_BACKEND`. The wrong variable silently does nothing.
 6. Confirm the startup log says `Using backend: marlin`, not `Auto-selected: CUTLASS_FP4`.
 7. If sending system prompts: patch `serving_chat.py` for PR #31607, and set `VLLM_GPT_OSS_HARMONY_SYSTEM_INSTRUCTIONS=1`.
-
-The diagnostic for bug 6: if you're getting repetition loops and you think you've forced Marlin, check your startup log. If it says `Auto-selected`, your env var isn't being read.
 
 ---
 

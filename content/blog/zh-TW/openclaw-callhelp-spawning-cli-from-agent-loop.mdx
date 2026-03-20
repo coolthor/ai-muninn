@@ -1,0 +1,98 @@
+---
+title: "[AI Agent] openclaw：Agent 卡住的時候，叫 CLI 來幫"
+description: "怎麼在本地 agent loop 裡掛上 callhelp tool，讓它在推理途中 spawn Codex CLI。一個必設的 permission flag，還有為什麼 Claude quota 是我自己的。"
+date: "2026-03-18"
+tags: ["AI Agent", "openclaw", "Codex", "LLM", "Agent Tools", "Local AI"]
+series: "OpenClaw"
+part: 7
+---
+
+## 前言
+
+每個本地 agent 都有天花板。大部分任務跑得動，但偶爾會出現一個問題：需要更強的推理、更準的 code generation，或者只是一個對這個 domain 訓練更多的模型來給第二意見。標準答案是把那些任務丟給 cloud API。比較少人想到的答案是讓 agent 自己做這個決定——在推理途中 spawn 一個 CLI tool，讀回 stdout，繼續跑。
+
+這就是 openclaw 裡 `callhelp` 在做的事。Agent 有一個 tool。Tool 跑 Codex。結果當成 tool response 回來。Agent 繼續。
+
+---
+
+## 這個 Tool 是什麼
+
+`callhelp` 是 yui tool list 裡的一個自定義 tool definition。傳進一個 prompt，spawn `codex` 當 subprocess，把 stdout 當 tool result 回傳。就這樣。
+
+什麼時候用由 agent 自己決定。沒有 keyword 觸發，沒有規則。yui 遇到自己沒有把握的東西，就呼叫這個 tool。能自己處理的，就不叫。
+
+---
+
+## 為什麼是 Codex 不是 Claude
+
+我給 agent 用的是 Codex。Claude 的 quota 是我自己的。
+
+這就是全部的原因。Claude CLI 在某些任務上更強，但 quota 跟我自己的工作共用。Codex 跑在另一個 API key 上。如果 yui 在 agent loop 裡燒掉一堆 token，燒的是 Codex 的——不是我的。
+
+實際差距不大。Codex 處理 code generation、debug、結構化推理都夠用。`callhelp` 的使用場景——補上 agent 自己推理的缺口——它能勝任。
+
+---
+
+## Permission Flag
+
+Codex 跑在 agent loop 的 subprocess 裡，旁邊沒有人可以按 y。
+
+Codex 預設行為是執行任何動作前先暫停、等確認。在沒有 TTY 的 subprocess 裡，這個暫停會一直等下去。Agent timeout。任務靜靜地失敗，或是吐出一個看不懂的錯誤。
+
+解法：帶 full auto-approval 跑 Codex：
+
+```bash
+codex --full-auto -q "你的 prompt"
+```
+
+`--full-auto` 跳過所有 permission prompt。`-q` 關掉互動式 UI 輸出。少了任何一個，subprocess 就掛住。
+
+這是讓 `callhelp` 真的能用、而不是理論上能用的唯一設定細節。
+
+---
+
+## Agent 什麼時候會用它
+
+`callhelp` 不是什麼都叫。Agent 在認出自己有缺口的時候才會用：
+
+- 不確定正確性的 code generation 任務
+- 沒見過的 error 要 debug
+- Prompt 暗示一個它比較沒把握的 domain
+
+關鍵是 agent 自己決定。沒有硬性的 routing 規則——只是 loop 裡多一個可用的 tool，然後 model 自己夠清醒知道什麼時候伸手。
+
+---
+
+## 實際長什麼樣子
+
+一次典型的 callhelp 呼叫，從 agent 的角度：
+
+1. 任務進來：「修這個 function 的 bug」
+2. Agent 看了 code，判斷問題很微妙
+3. Agent 呼叫 `callhelp`，把 function 和 error message 當 prompt 傳進去
+4. Codex 跑：分析，回傳修法加解釋
+5. Agent 讀回結果，吸收，繼續完成任務
+
+從外面看，agent 修好了 bug。從裡面看，它把難的部分外包給更強的工具，然後用那個答案繼續走。
+
+---
+
+## 這個 Pattern 的本質
+
+AI agent 呼叫另一個 AI 求助，不是新概念，但在本地 agent 架構裡用得很少。大多數人把本地 model 跟一組固定的 tool 連在一起——搜尋、執行程式碼、讀寫檔案。「其中一個 tool 可以是另一個 model 的 CLI」這一步，很少人跨出去。
+
+為什麼有效：Codex 不是萬能的 oracle。它是一個有特定強項的特定工具。`callhelp` 不是把所有東西都丟給它——只是那個子集，剛好是它的強項能補上的。這就是你用任何一個專門工具的方式。
+
+Quota 的問題是實務面。不管你給 agent 用哪個 CLI，把預算和自己的用量分開。Agent loop 燒 token 的速度可以比你預期快很多。
+
+---
+
+## Setup Checklist
+
+1. 在 agent 的 tool list 裡定義 `callhelp`
+2. 實作：spawn `codex --full-auto -q "<prompt>"` 當 subprocess，回傳 stdout
+3. 設 timeout——就算 subprocess 還是掛住，要能乾淨地失敗
+4. API key / quota 跟個人用量分開
+5. 先獨立測試這個 tool call，再接進 loop
+
+`--full-auto` 是不能省的。其他都是設定問題。

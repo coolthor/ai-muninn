@@ -1,0 +1,373 @@
+---
+title: "[AI Agent] openclaw：Bot 突然消失了 — Tailscale、IPv6、和一個 Node.js 的安靜陷阱"
+description: "Bot process 跑著、token 有效、訊息有收到。但沒有任何回應。四個錯誤假設、一張路由表，還有一個大多數人不知道的 Node.js 行為。"
+date: "2026-03-19"
+tags: ["Node.js", "Tailscale", "IPv6", "undici", "Happy Eyeballs", "Telegram", "Debugging", "Networking"]
+series: "OpenClaw"
+part: 8
+---
+
+## 前言
+
+Bot 顯示在線。Process 在跑。發了一則訊息。沒有任何回應。
+
+這是最消耗時間的那類 bug——不是因為修起來難，而是因為每一個第一直覺的診斷都是錯的。像一個郵局把所有進來的信都蓋章收了，但回信從來沒寄出去。系統從每個角度看起來都健康，除了那個唯一重要的角度。
+
+這是完整的 debug 記錄：四個錯誤假設、一張路由表，和一個 Node.js 的行為——大多數人不知道它存在，直到撞上它。
+
+---
+
+## 事發經過
+
+13:00 左右，openclaw gateway 停止回應 Telegram 訊息。沒有 crash。沒有明顯的 error。背後的 AI agent 已經穩定跑了好幾天。
+
+唯一的線索：一個每 30 分鐘出現一次的 log 行，還有偶爾在啟動時出現的 identity reconciliation 警告。沒有任何東西明顯指向 Telegram。
+
+---
+
+## 方法
+
+下面每個假設都會被完整起訴。先假設有罪，再嘗試證明它是錯的。最後站著的那個就是根本原因。
+
+---
+
+## 假設一：Process Crash 了
+
+**主張**：Gateway process 已經掛掉。某個東西把它殺了，launchd 沒有重新啟動，看起來像「在跑」的只是過時的狀態。
+
+**攻擊**：
+
+```bash
+launchctl list | grep openclaw
+# 67104  0  ai.openclaw.gateway
+```
+
+PID 67104 活著，exit code 0。`launchctl` 確認了。跑著，沒有 crash。
+
+Log 檔每分鐘都有新的紀錄進來（cron timer ticks）。如果 process 死了，log 就會停止寫入。Process 在跑。
+
+**結論：排除。** 活著，而且在寫 log。
+
+---
+
+## 假設二：Bot Token 過期或被撤銷
+
+**主張**：某個東西讓 bot token 失效了。Gateway 在跑但認證壞掉，所以 Telegram 靜靜地拒絕所有 API 呼叫。
+
+**攻擊**：
+
+```bash
+curl -s "https://api.telegram.org/bot${TOKEN}/getMe"
+# {"ok":true,"result":{"id":8647078778,"username":"little_shrimp_0226_bot",...}}
+```
+
+Token 有效。Bot 身份確認。
+
+```bash
+curl -s "https://api.telegram.org/bot${TOKEN}/getUpdates?limit=1"
+# {"ok":true,"result":[]}
+```
+
+零個待處理的更新。這個值得注意——待會會回來看。
+
+**結論：排除。** Token 有效，API 正常回應。
+
+---
+
+## 假設三：網路斷了
+
+**主張**：機器無法連到 Telegram 的 API。網路異動、DNS 失敗、或防火牆規則擋掉了所有對外連線。
+
+**攻擊**：
+
+```bash
+curl -s https://api.telegram.org/bot1/getMe
+# {"ok":false,"error_code":404,"description":"Not Found"}
+```
+
+404 是無效 bot token path 的正確回應。伺服器有回應。網路沒問題。
+
+Log 也顯示 bot 收到啟動時的 DNS resolution 事件——DNS 在運作。而且訊息有被消費（見假設四）。
+
+**結論：排除。** 網路連線正常。
+
+---
+
+## 假設四：訊息沒有被收到
+
+**主張**：Long-polling 壞掉了。Gateway 從來沒收到 Telegram 的訊息，所以沒有東西可以回應。
+
+**攻擊**：
+
+發一則測試訊息給 bot。然後立刻檢查：
+
+```bash
+curl -s "https://api.telegram.org/bot${TOKEN}/getUpdates?limit=1"
+# {"ok":true,"result":[]}
+```
+
+發完之後立刻查——零個待處理的更新。訊息被消費了。Gateway **有收到它**。它在某個地方的處理 pipeline 裡。
+
+Log 確認：發送後幾秒，agent bootstrap 序列觸發了：
+
+```
+[15:20:19] INFO  {"workspaceDir": "...", "skills": [{"name": "acp-router", ...}]}
+```
+
+Skills 正在載入。Agent 開始處理訊息了。
+
+**結論：排除。** 訊息有收到，處理也開始了。
+
+---
+
+## 真正發生的事
+
+所有東西都在運作——直到 gateway 嘗試回應的那一刻。
+
+```
+[15:19:39] ERROR  telegram sendChatAction failed: Network request for 'sendChatAction' failed!
+```
+
+打字中指示器。Bot 收到訊息、啟動 agent、嘗試顯示「正在輸入…」——然後 network request 失敗了。不是 DNS。不是認證。對 `api.telegram.org` 的原始 HTTP 呼叫以 network error 失敗。
+
+但網路測試通過了。curl 可以正常連到 Telegram。HTTP 呼叫怎麼可能失敗？
+
+答案在 Node.js 如何建立連線——以及 Tailscale 對路由表做了什麼。
+
+---
+
+## 真正的罪犯：一張說謊的路由表
+
+檢查 IPv6 路由表：
+
+```bash
+netstat -rn -f inet6 | head -15
+```
+
+```
+Internet6:
+Destination     Gateway                  Flags    Netif
+default         fe80::%utun0             UGcIg    utun0
+default         fe80::%utun1             UGcIg    utun1
+default         fe80::%utun2             UGcIg    utun2
+default         fe80::%utun3             UGcIg    utun3
+default         fd7a:115c:a1e0::         UGcIg    utun4
+default         fe80::%utun5             UGcIg    utun5
+...
+```
+
+八條 IPv6 預設路由，全部通過 Tailscale 的 `utun` 介面。
+
+現在檢查系統實際上對 IPv6 連線知道什麼：
+
+```bash
+scutil --nwi
+```
+
+```
+IPv4 network interface information
+     en1 : flags      : 0x5 (IPv4,DNS)
+           address    : 192.168.68.67
+
+IPv6 network interface information
+   No IPv6 states found
+```
+
+沒有 IPv6 網路連線。沒有 ISP 給的 IPv6 位址。沒有 IPv6 DNS。什麼都沒有。
+
+但路由表說 IPv6 流量有地方可以去——透過 Tailscale 的 tunnel。當一個 IPv6 封包要去任何外部目的地，kernel 就把它交給 `utun` 介面。Tailscale 收到它。Tailscale 沒有設定可以處理外部 IPv6 的 exit node。封包沒有去向。OS 回傳 `EHOSTUNREACH`。
+
+矛盾點：kernel 相信 IPv6 是可路由的（路由存在），但這些路由通往死路。
+
+---
+
+## 為什麼 Node.js 會掉進這個陷阱
+
+Node.js 20+ 預設透過 undici（內建 HTTP engine）啟用了 Happy Eyeballs（RFC 8305）。行為由 undici Agent 的 `autoSelectFamily: true` 控制。
+
+Happy Eyeballs 的運作方式：連接到一個同時有 A 和 AAAA record 的 hostname 時，先嘗試 IPv6。如果 IPv6 在嘗試 timeout 內沒有連上，同時也試 IPv4。用先成功的那個。
+
+這個演算法假設 IPv6 失敗是緩慢的——一個 timeout。RFC 8305 是為「IPv6 還沒普及，但網路 stack 其他部分是健康的」這個世界設計的。
+
+不是為這個世界設計的：IPv6 因為 VPN 注入了一條假裝 IPv6 能用但實際上沒有送達的路由，導致立刻以 `EHOSTUNREACH` 失敗。
+
+`EHOSTUNREACH` 是一個硬性錯誤。Node.js 的 Happy Eyeballs 實作把它當成連線失敗，而不是「試下一個位址」的信號。連線嘗試中止。IPv4 從來沒被嘗試。
+
+直接驗證：
+
+```bash
+curl -6 https://api.telegram.org   # → curl: (7) Couldn't connect to server
+curl -4 https://api.telegram.org   # → 302（正常）
+```
+
+IPv6：死路。IPv4：沒問題。Node.js：先試 IPv6，撞到 `EHOSTUNREACH`，整個 request 失敗。
+
+---
+
+## 沒有發揮作用的 Fallback
+
+Gateway 程式碼有一個 fallback 機制。當它偵測到 `ETIMEDOUT` 或 `EHOSTUNREACH`，會 log：
+
+```
+fetch fallback: enabling sticky IPv4-only dispatcher (codes=ETIMEDOUT,EHOSTUNREACH)
+```
+
+這應該要把之後所有的 Telegram API 呼叫切換到只用 IPv4。它幾乎每次 gateway 啟動都會出現在 log 裡。問題：它實際上沒有修好任何事。
+
+"sticky" flag 住在一個 closure 裡：
+
+```javascript
+let stickyIpv4FallbackEnabled = false;
+
+const resolvedFetch = async (input, init) => {
+  const initialInit = withDispatcherIfMissing(
+    init,
+    stickyIpv4FallbackEnabled
+      ? resolveStickyIpv4Dispatcher()
+      : defaultDispatcher.dispatcher
+  );
+  try {
+    return await sourceFetch(input, initialInit);
+  } catch (err) {
+    if (!stickyIpv4FallbackEnabled) {
+      stickyIpv4FallbackEnabled = true;
+      log.warn(`fetch fallback: enabling sticky IPv4-only dispatcher`);
+    }
+    return sourceFetch(input, withDispatcherIfMissing(init, resolveStickyIpv4Dispatcher()));
+  }
+};
+```
+
+一旦 `stickyIpv4FallbackEnabled` 變成 `true`，之後透過*這個 closure* 的呼叫就會用只有 IPv4 的模式。這是設計上的用意。
+
+但 Telegram provider 在網路失敗時會重新啟動。每次重啟都會再呼叫一次 `resolveTelegramTransport()`——新的 closure，新的 `stickyIpv4FallbackEnabled = false`。Flag 重置。IPv6 嘗試。`EHOSTUNREACH`。Flag 設定。Provider 失敗。重啟。循環。
+
+Log 裡每兩分鐘出現一次相同的序列。
+
+---
+
+## 標準解法——但在這裡沒用
+
+Node.js IPv6 問題的標準建議：
+
+```bash
+node --no-network-family-autoselection app.js
+# 或
+net.setDefaultAutoSelectFamily(false)
+```
+
+兩個都影響 Node.js 內建的 `net` 模組。都不影響 undici。Node.js 的 `fetch()`（v18 起）在內部使用 undici，undici 有自己的 `autoSelectFamily` 選項在它的 `Agent` 設定裡——獨立於 `net` 模組設定之外。
+
+設了 `NODE_OPTIONS=--no-network-family-autoselection`，然後看著 undici 還是嘗試 IPv6——這是有記錄的挫折，見 [nodejs/node #54359](https://github.com/nodejs/node/issues/54359)。兩個系統沒有連接。
+
+---
+
+## 解法
+
+Gateway 暴露了一個環境變數用來處理這個情況：
+
+```
+OPENCLAW_TELEGRAM_DISABLE_AUTO_SELECT_FAMILY=1
+```
+
+這在初始化時就把 undici Agent 的 `autoSelectFamily: false` 設好——不是在失敗後的 fallback，而是初始設定：
+
+```javascript
+if (isTruthyEnvValue(env["OPENCLAW_TELEGRAM_DISABLE_AUTO_SELECT_FAMILY"])) {
+  return { value: false, source: `env:OPENCLAW_TELEGRAM_DISABLE_AUTO_SELECT_FAMILY` };
+}
+```
+
+加進 launchd plist：
+
+```xml
+<key>OPENCLAW_TELEGRAM_DISABLE_AUTO_SELECT_FAMILY</key>
+<string>1</string>
+```
+
+重新載入：
+
+```bash
+launchctl unload ~/Library/LaunchAgents/ai.openclaw.gateway.plist
+launchctl load   ~/Library/LaunchAgents/ai.openclaw.gateway.plist
+launchctl start  ai.openclaw.gateway
+```
+
+重載後，啟動 log 從：
+
+```
+autoSelectFamily=true (default-node22)
+fetch fallback: enabling sticky IPv4-only dispatcher...
+```
+
+變成：
+
+```
+autoSelectFamily=false (env:OPENCLAW_TELEGRAM_DISABLE_AUTO_SELECT_FAMILY)
+```
+
+沒有 ETIMEDOUT。沒有 fallback loop。Bot 立刻回應。
+
+---
+
+## 為什麼 Tailscale 會造成這個問題，其他 VPN 不會
+
+大多數 VPN 要不是完全接管路由（包含 IPv6），就是在設定時直接停用 IPv6。
+
+Tailscale 是一個 mesh VPN，用來讓你的裝置之間互相連線。它給每個裝置一個 Tailscale IPv6 位址（`fd7a:115c:a1e0::/48`）用於內部可達性，並注入 IPv6 路由來處理這個。但除非明確設定一個有 IPv6 能力的 exit node，Tailscale 不提供 IPv6*網路*連線——只提供 IPv6*路由*，這些路由終止於它的 WireGuard 介面。
+
+Kernel 看到路由，就認為 IPv6 可用。Node.js 的 Happy Eyeballs 看到一個可路由的 IPv6 位址，就先試它。封包撞上 Tailscale 的 `utun` 介面，以 `EHOSTUNREACH` 死亡。
+
+確認方法：
+
+```bash
+netstat -rn -f inet6 | grep default
+# 看到 utun 紀錄 = Tailscale 在注入 IPv6 路由
+
+scutil --nwi | grep -A5 "IPv6"
+# "No IPv6 states found" = 沒有真正的 IPv6 網路
+```
+
+兩個同時成立：你就在這個陷阱裡了。
+
+---
+
+## 收穫
+
+**最花時間的部分：**
+sticky fallback 的 log 行在主動誤導我。`enabling sticky IPv4-only dispatcher` 聽起來像是修好了。花了讀 source code 才理解它在每次 provider 重啟時都會重置。一個說「已修復」但修復無法在重啟後存活的 log 行，比沒有 log 行還糟。
+
+**可遷移的診斷方法：**
+- `sendChatAction` 後靜默失敗 → 檢查在真正的 request 之前有沒有 IPv6 嘗試在發生
+- `net.setDefaultAutoSelectFamily(false)` 沒有效果 → 你在用 undici（Node.js 18+），不是 `net` 模組；它們是分開的
+- Fallback 機制在每次啟動都 log「已啟用」→ flag 大概住在一個每次重新建立的 closure 裡
+
+**到處適用的 pattern：**
+如果路由表說一條網路路徑存在，OS 就相信它——不管封包實際上有沒有到達任何地方。來自 VPN 介面的 `EHOSTUNREACH` 不等於「沒有 IPv6」。修法必須在應用層，不是 OS 層。
+
+---
+
+## 診斷 Checklist
+
+```bash
+# 1. Process 還活著嗎？
+launchctl list | grep openclaw
+
+# 2. IPv4 能用嗎？
+curl -4 https://api.telegram.org
+
+# 3. IPv6 會立刻失敗嗎？
+curl -6 https://api.telegram.org
+
+# 4. 有沒有來自 Tailscale 的 IPv6 路由？
+netstat -rn -f inet6 | grep "default.*utun"
+
+# 5. 系統有沒有真正的 IPv6 網路？
+scutil --nwi | grep -A3 IPv6
+```
+
+如果步驟 3–5 確認「IPv6 路由存在、IPv4 能用、IPv6 死了、沒有真正的 IPv6」——修法在 HTTP client 層，不是 OS 層。
+
+---
+
+*也在這個系列：[Codex-Executor Pattern](/zh-TW/blog/openclaw-codex-executor-agent-architecture) · [Ollama vs vLLM GPU 衝突](/zh-TW/blog/openclaw-ollama-vllm-gpu-conflict)*

@@ -1,6 +1,6 @@
 ---
-title: "[vLLM] gpt-oss-120B 跑到 59 tok/s：六個坑與一份可用的 Serve Script"
-description: "在 DGX Spark（SM121、GB10）上用 vLLM 跑 Microsoft gpt-oss-120B。六個 bug、一個靜默失效的錯誤環境變數、一個藏在 SHA1 hash 後面的 tiktoken 檔案，以及一個重複迴圈 bug 比其他所有加起來還難找。"
+title: "[vLLM] 在 DGX Spark 上跑 120B 模型到 60 tok/s——零 API 成本、六個坑"
+description: "怎麼讓 gpt-oss-120B 在 DGX Spark（GB10、SM121）上以 vLLM 跑到 60 tok/s。目標是讓 openclaw agent 用本地 120B 模型，零 API 費用。路上有六個坑，其中一個靜默失效的環境變數比其他五個加起來還難找。"
 date: "2026-03-19"
 tags: ["DGX Spark", "SM121", "vLLM", "gpt-oss", "MXFP4", "Blackwell", "LLM Serving"]
 series: "gpt-oss-120B on DGX Spark"
@@ -9,17 +9,15 @@ part: 1
 
 ## 前言
 
-同一台硬體，不同的模型，不同的問題集。[SM121 NVFP4 搞定之後](/zh-TW/blog/part1-why-your-dgx-spark-says-exclamation-marks)，下一個自然的問題是：這台機器還能跑什麼？gpt-oss-120B 是 Microsoft 的開源 120B 模型——不同的量化格式、不同的 tokenizer、以及它自己的一類靜默失敗。
+目標很簡單：讓跑在這台機器上的 openclaw agent 有一個 120B 的大腦。本地推論，沒有 API 配額，沒有 rate limit，沒有每個 token 的費用。一個隨時可用、速度貼近硬體頻寬上限、不會把資料傳出去的模型。
 
-這篇是完整的除錯記錄：從空白的 shell 到一份可用的 serve script，中間六個 bug，最後附上腳本。
+DGX Spark（GB10、SM121、128 GB 統一記憶體）是硬體。gpt-oss-120B 是 Microsoft 的開源 120B 模型，MXFP4 量化。273 GB/s 記憶體頻寬、60 GB 的 weight，理論上限是 ~60 tok/s。那就是目標。
 
-用個比喻：就像搬進一間新公寓，看起來一切都是標準規格，但沒有一樣完全吻合——插座是另一個標準、冰箱用錯電壓、大樓水壓以沒有人警告過你的方式影響水管。每個問題都能修，但沒有一個是你事先知道會踩到的。
+在零和那個數字之間：六個坑。這篇是通過它們的路徑。
 
 ---
 
-[第一篇](/zh-TW/blog/part1-why-your-dgx-spark-says-exclamation-marks)講的是讓任何 NVFP4 模型在 SM121 上不輸出 `!!!!!` 的四個 bug。先把那些修完。這篇從那之後開始，講試著跑 gpt-oss-120B 的過程——一個完全不同的模型格式，有它自己的一套地雷。
-
-目標：**59 tok/s**，131K context，單顆 GB10（128 GB 統一記憶體）。實際路徑：六個獨立的 bug，其中一個比其他所有合起來還難找。
+[第一篇](/zh-TW/blog/part1-why-your-dgx-spark-says-exclamation-marks)講的是 SM121 特有的 NVFP4 修法——如果你的 DGX Spark 上任何模型都只輸出 `!!!!!`，先修那些。這篇從那之後開始，專門講 gpt-oss-120B：不同的量化格式、不同的 tokenizer、它自己的一套地雷。
 
 ---
 
@@ -223,6 +221,8 @@ exec vllm serve /home/username/models/gpt-oss-120b \
 
 注意：`--reasoning-parser openai_gptoss` 不在這份 script 裡。除非你需要 reasoning channel 分離，否則不要加。
 
+> **使用 eugr venv 的人：** `--attention-backend FLASHINFER` 和 `--mxfp4-layers` 是 spark-vllm-docker patched build 專屬的 flag。直接用 eugr venv 的話，這兩個都要拿掉——attention 會 auto 選 TRITON_ATTN，速度相當（實測 ~63 tok/s）。
+
 ---
 
 ## 效能數字
@@ -236,6 +236,18 @@ exec vllm serve /home/username/models/gpt-oss-120b \
 | CUDAGraph | ✅ 已捕捉 |
 
 數學算法：GB10 有 273 GB/s 記憶體頻寬。120B × 4-bit ≈ 60 GB。在 273 GB/s 下，理論 decode 速度約 ~60 tok/s。實測 59 tok/s 幾乎完全貼到頻寬上限。這就是 GB10 上正常運作的樣子。
+
+---
+
+## 對本地 Agent 的意義
+
+59 tok/s，131K context，一台放得進桌子底下的機器。
+
+對 openclaw——一個持續在本地運行的 AI agent——這個算法跟用 cloud API 完全不一樣。沒有每個 token 的費用。沒有 rate limit。不會因為付費方案被節流而突然變慢。模型任何時間都在，回應任何 prompt，後台沒有計費器在跑。
+
+120B 參數代表模型能處理複雜推理、長 system prompt、多輪對話，不會踩到小型本地模型的品質天花板。openclaw 全天候用這個模型跑作為主要推論後端。安裝成本是六個坑和幾個小時。持續成本是電費。
+
+DGX Spark 讓這件事可行的原因是統一記憶體架構：128 GB 的記憶體 CPU 和 GPU 共用，足以放下 60 GB 的模型，還有空間留給大 KV cache。不需要在更小 VRAM 的 GPU 上做會損失品質的量化取捨。
 
 ---
 
