@@ -6,6 +6,15 @@ updatedAt: "2026-03-06"
 tags: ["vLLM", "SSM", "Qwen", "DGX Spark", "LLM Serving", "Performance"]
 series: "OpenClaw"
 part: 2
+faq:
+  - q: "Why does --enable-chunked-prefill cause an 8x throughput regression in vLLM with Qwen3.5-35B?"
+    a: "Qwen3.5-35B-A3B uses SSM (DeltaNet) recurrent layers that require sequential state passing. Chunked prefill splits prompts into segments, but each SSM chunk must receive the hidden state from the previous chunk — this inter-chunk overhead compounds across boundaries. At 5.7 tok/s vs 47 tok/s, the regression is an order of magnitude."
+  - q: "Which LLM architectures are incompatible with vLLM's --enable-chunked-prefill?"
+    a: "Any model with recurrent layers: Mamba, DeltaNet, Mamba2, RWKV, SSM hybrids. This includes Qwen3.5-35B-A3B and qwen3-coder-next. Standard Transformers (Llama, Mistral) and pure MoE models (GLM-4.7-Flash) are safe. Check the model card for 'mamba', 'ssm', 'deltanet', or 'recurrent' in the architecture description."
+  - q: "How do I check if vLLM has chunked prefill enabled without setting the flag myself?"
+    a: "Some vLLM versions enable chunked prefill by default. Run: docker logs qwen35 2>&1 | grep -i 'chunked'. You want to see no output or 'Chunked prefill: disabled'. If you see 'Chunked prefill: enabled', add --disable-chunked-prefill explicitly to your serve command."
+  - q: "How do I diagnose catastrophic vLLM throughput collapse without errors?"
+    a: "When throughput collapses but the server appears healthy (requests succeed, no errors), investigate configuration flags before the model or hardware. For SSM models, --enable-chunked-prefill is the first suspect. Also check for Ollama memory conflicts and whether enable_thinking is set to false per-request."
 ---
 
 ## Preface
@@ -16,7 +25,7 @@ That's what `--enable-chunked-prefill` does to an SSM model. The flag is a docum
 
 ---
 
-## The Incident
+## What Happened When --enable-chunked-prefill Was Added?
 
 The [vLLM migration for Qwen3.5-35B](/en/blog/dgx-spark-vllm-qwen35-setup) was already done. The model was running at ~47 tok/s. I was trying to squeeze out more throughput for concurrent agent workloads and went looking for flags to tune.
 
@@ -30,7 +39,7 @@ The flag didn't crash vLLM. It didn't produce an error. The server started, acce
 
 ---
 
-## Root Cause
+## Why Does Chunked Prefill Destroy SSM Model Throughput?
 
 Qwen3.5-35B-A3B is an SSM+MoE hybrid architecture. The "A3B" in the name refers to its use of DeltaNet — a state space model architecture alongside the mixture-of-experts layers. This is not a standard Transformer.
 
@@ -52,7 +61,7 @@ On a long sequence with many chunk boundaries, the cumulative overhead of passin
 
 ---
 
-## Which Models Are Affected
+## Which Model Architectures Are Affected?
 
 Any model with recurrent layers (SSM, Mamba, DeltaNet, Mamba2, RWKV, or similar) is affected. The key identifier is the model architecture, not the name:
 
@@ -65,7 +74,7 @@ If you're unsure, check the model card or config.json. Look for any of: `mamba`,
 
 ---
 
-## The Fix
+## How Do You Fix It?
 
 Remove the flag. That's it. The working serve command for Qwen3.5-35B-A3B-FP8 does not include `--enable-chunked-prefill`:
 

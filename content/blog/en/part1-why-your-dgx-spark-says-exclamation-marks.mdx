@@ -6,6 +6,15 @@ updatedAt: "2026-03-17"
 tags: ["DGX Spark", "SM121", "vLLM", "NVFP4", "MXFP4", "Blackwell", "CUDA", "LLM Serving"]
 series: "DGX Spark"
 part: 4
+faq:
+  - q: "Why does my DGX Spark (GB10) only output '!!!!!' with NVFP4 models on vLLM?"
+    a: "SM121 (GB10) and SM120 (GB200) are different microarchitectures despite both being labeled Blackwell SM12x. CUTLASS FP4 kernels target SM120 ISA and run on SM121 without error but produce wrong outputs — specifically, row-identical values where every element in a row has the same number. This drives logits to near-zero and argmax collapses to token ID 0, which is '!'."
+  - q: "What environment variables fix the NVFP4 '!!!!!' output on DGX Spark SM121?"
+    a: "Set VLLM_NVFP4_GEMM_BACKEND=marlin and VLLM_MXFP4_USE_MARLIN=1 (covers different code paths — you need both), VLLM_MARLIN_USE_ATOMIC_ADD=1, VLLM_USE_FLASHINFER_MOE_FP4=0, and CUDA_DEVICE_MAX_CONNECTIONS=1. Also patch cutlass_moe.py to return False for SM121 and mxfp4.py to respect VLLM_MXFP4_USE_MARLIN."
+  - q: "Why does Qwen3.5-122B GDN layer quantization corrupt the model output on vLLM?"
+    a: "Qwen3.5-122B uses hybrid GDN (Gated Delta Network) SSM layers that must stay in BF16. Without SupportsQuant on Qwen3_5ForConditionalGeneration, vLLM's apply_vllm_mapper() is never called, the exclude_modules list keeps HF-format names, and is_layer_excluded() returns False for every GDN layer — they get NVFP4-quantized, corrupting recurrent hidden states."
+  - q: "What is the row-identical output signature for CUTLASS FP4 failure on SM121?"
+    a: "Every element in a row has the same value — e.g., [-28.625, -28.625, -28.625, ...]. Not zeros, not NaN, not random noise. One scalar computed and broadcast across the full row width. This is distinct from other failure modes and confirms the CUTLASS FP4 kernel is miscomputing, not just producing noise."
 ---
 
 ## Preface
@@ -38,7 +47,7 @@ This is the debugging story.
 
 ---
 
-## What `!` Actually Means
+## What Does Repeated `!` Output Actually Mean?
 
 In the Qwen3.5 tokenizer, `!` is token ID 0. Repeated `!` output means your model is emitting near-zero logits — `argmax` of near-zero values = 0 = `!`. The model isn't confused or undertrained. Something in the computation pipeline is producing wrong values that drive all logits toward zero.
 
@@ -46,7 +55,7 @@ The first instinct is "bad weights" or "wrong quantization format." It's neither
 
 ---
 
-## The Hardware: SM121 ≠ SM120
+## Why Does SM121 ≠ SM120 Matter for vLLM?
 
 The DGX Spark has an NVIDIA GB10 GPU — compute capability **12.1**, NVIDIA internal designation **SM121**.
 
@@ -58,7 +67,7 @@ The vLLM code doesn't know this. It sees "SM12x" and thinks everything is fine.
 
 ---
 
-## The Four Bugs
+## What Are the Four Bugs That Cause `!!!!!` Output?
 
 Getting from `!!!!!` to coherent output required fixing four independent issues. Two were already patched in the community fork being used ([namake-taro's vLLM branch](https://github.com/namake-taro/vllm)); two required manual intervention.
 
@@ -139,7 +148,7 @@ Note: setting `VLLM_NVFP4_GEMM_BACKEND=marlin` only affects the linear layer pat
 
 ---
 
-## The Diagnostic Signature
+## How Do You Confirm It's CUTLASS FP4 and Not Something Else?
 
 How do you know it's CUTLASS FP4 and not something else? Hook into the GEMM output before the lm_head and inspect the tensor:
 
@@ -222,7 +231,7 @@ True W4A4 CUTLASS (compute-bound) would be roughly 2–3× faster, but there's n
 
 ---
 
-## What Needs Upstreaming
+## What Should Be Upstreamed to vLLM?
 
 Three issues worth filing against `vllm-project/vllm`:
 

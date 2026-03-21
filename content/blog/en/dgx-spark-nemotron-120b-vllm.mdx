@@ -6,6 +6,15 @@ updatedAt: "2026-03-13"
 tags: ["DGX Spark", "GB10", "SM121", "Nemotron", "vLLM", "NVFP4", "Blackwell", "LLM Serving"]
 series: "DGX Spark"
 part: 3
+faq:
+  - q: "How do I run Nemotron-3-Super-120B on a DGX Spark (GB10, SM121)?"
+    a: "Use the stable vLLM image (v0.17.1-cu130), not nightly. Set --moe-backend marlin as a CLI flag (no env var substitute), add VLLM_NVFP4_GEMM_BACKEND=marlin, VLLM_USE_FLASHINFER_MOE_FP4=0, and VLLM_MARLIN_USE_ATOMIC_ADD=1. Use --reasoning-parser nemotron_v3 (exact name). Nemotron loads in ~8 minutes and runs at 13-16 tok/s."
+  - q: "Why does VLLM_NVFP4_MOE_BACKEND=marlin do nothing on vLLM?"
+    a: "This environment variable does not exist in vLLM's source code. Setting it produces no error and no effect. The correct way to route MoE layers through Marlin on SM121 is the CLI flag --moe-backend marlin. Check the startup log for '[NVFP4] Using backend: marlin' to confirm it's active."
+  - q: "Which vLLM Docker image should I use for Nemotron on DGX Spark versus Qwen3.5?"
+    a: "They're opposite: Nemotron requires the stable image (vllm/vllm-openai:v0.17.1-cu130) because nightly has a torch.compile SM121 bug that crashes on first request. Qwen3.5-35B requires the nightly image (cu130-nightly) because stable lacks GB10 kernel support for that model."
+  - q: "How fast does Nemotron-3-Super-120B run on a GB10 with 128GB unified memory?"
+    a: "13-16 tok/s decode speed. Load time is ~8 minutes for 17 shards. At 200K context with fp8 KV cache and 0.85 GPU utilization, it allocates ~35GB for KV cache. It's roughly 3x slower than Qwen3.5-35B (47 tok/s) on the same hardware — consistent with its 3x larger active parameter count."
 ---
 
 ## Preface
@@ -35,7 +44,7 @@ Load time: ~8 minutes (17 shards). This is not a model you restart casually.
 
 ---
 
-## The Core Problem: SM121 ≠ SM100
+## Why Does SM121 Break Standard CUDA Kernels?
 
 GB10's compute capability is SM121. The B200's is SM100. Both are Blackwell. They are not ISA-compatible.
 
@@ -149,7 +158,7 @@ The SSM-related parameter coupling from the Qwen3.5 article applies here too: `-
 
 ---
 
-## Performance
+## How Fast Does Nemotron Actually Run?
 
 | Metric | Value |
 |--------|-------|

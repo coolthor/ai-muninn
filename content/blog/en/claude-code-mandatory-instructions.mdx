@@ -6,6 +6,15 @@ updatedAt: "2026-02-19"
 tags: ["Claude Code", "AI Agents", "Prompt Engineering", "Systems Design", "Developer Workflow"]
 series: "AI Workflow"
 part: 1
+faq:
+  - q: "Why does Claude Code ignore MANDATORY instructions in CLAUDE.md?"
+    a: "Transformer attention weights are not uniform across the context window — tokens near the current generation step get higher weight than tokens far away. CLAUDE.md loads at the start of context, and by the time a task arrives, thousands of tokens later, the MANDATORY instruction has lower attention weight. Capitalization and bold formatting don't change attention weight."
+  - q: "How do I make Claude Code reliably follow a pre-task step every time?"
+    a: "Use a PreToolUse hook in settings.json targeting Edit|Write tools. The hook fires at the moment of relevance and injects its output into the most recent context — not at the top of a file loaded an hour ago. This is architecturally different from a CLAUDE.md rule and 10x more effective."
+  - q: "What is the best way to enforce Claude Code compliance with CLAUDE.md rules?"
+    a: "Three approaches work: (1) PreToolUse hooks that fire before every Edit/Write — the reminder appears in the most recent context; (2) structural friction — make the prerequisite a load-bearing input that subsequent steps depend on; (3) short context windows with fresh injections — use /clear between tasks so CLAUDE.md reloads at the top."
+  - q: "How does recency bias in transformers affect Claude Code instruction following?"
+    a: "Attention mechanisms give higher weight to recent tokens. CLAUDE.md sits at the beginning of the context window. After hours of tool calls and conversation turns, the instruction is far back and deprioritized. The fix is to inject reminders at the point of use via hooks, not to write the instruction louder."
 ---
 
 ## Preface
@@ -18,7 +27,7 @@ An LLM is the fastest veteran you've ever employed.
 
 ---
 
-## The Incident
+## What Happened When MANDATORY Was Ignored?
 
 My Claude Code config has a rule. It's in `CLAUDE.md`, in a section called "Core Loop," under "Step 1: RETRIEVE." The instruction reads, in part:
 
@@ -48,7 +57,7 @@ The entire session is a meta-example of the problem it describes. I'll return to
 
 ---
 
-## Why It Happened
+## Why Did It Happen?
 
 Not because Claude Code "doesn't understand" the instruction. It clearly does — the self-diagnosis was precise and correct. The problem is more interesting than comprehension failure.
 
@@ -86,7 +95,7 @@ The instruction fades — not because the model forgets it in a human sense, but
 
 ---
 
-## What Actually Works
+## What Actually Works Instead of Writing MANDATORY?
 
 The pattern across all three solutions is the same: don't ask the model to self-enforce. Build the constraint into the system.
 

@@ -6,6 +6,15 @@ updatedAt: "2026-03-16"
 tags: ["AI Agent", "Claude Code", "Codex", "Agent Architecture", "OpenClaw"]
 series: "OpenClaw"
 part: 5
+faq:
+  - q: "How do I prevent an AI agent from producing malformed output on multi-step tasks?"
+    a: "Use the Codex-executor pattern: the agent spawns a Codex subprocess with a complete task description, the subprocess handles all intermediate steps, and the agent reads a single result file. The agent makes 2 tool calls instead of 8, and all intermediate state lives inside the subprocess's fresh context window."
+  - q: "When should an AI agent delegate a task to a subprocess instead of handling it directly?"
+    a: "When the task involves multiple file reads, one or more external model calls, multiple file writes as outputs, and a final notification — in sequence. If the task has more than 3 sequential steps with intermediate state, the subprocess version is more reliable. If conditional branching based on intermediate results is needed, keep it in the agent's session."
+  - q: "What is the Codex-executor pattern and why does it improve agent reliability?"
+    a: "The pattern: agent spawns 'codex exec <complete-task-description>' as a subprocess, all 8 steps execute in the subprocess's own fresh context window, agent reads the output file and sends notification (2 total tool calls). Failure is atomic — the subprocess either completes or returns an error, no partial writes."
+  - q: "How do you hand off state between an agent and a Codex subprocess?"
+    a: "Through the filesystem. The subprocess writes its output to a predictable path (/tmp/result.md). The agent reads that path. This is the correct handoff point: simple, explicit, testable — the agent never needs to hold intermediate state in its own context."
 ---
 
 ## Preface
@@ -16,7 +25,7 @@ This picks up where [Zero API Cost: Running OpenClaw on DGX Spark + Mac Mini](/e
 
 ---
 
-## The Problem
+## What Goes Wrong When an Agent Orchestrates Many Steps Directly?
 
 The initial design was straightforward: the OpenClaw agent handles everything. A task like `daily-reflexion` — the agent's daily self-analysis routine — would proceed step by step:
 
@@ -39,7 +48,7 @@ The pattern was consistent: tasks that required reading multiple files, calling 
 
 ---
 
-## The Insight
+## What Is the Key Insight Behind Codex-Executor?
 
 The agent is good at deciding what to do. It is bad at maintaining coherent state across many tool calls in a long session.
 
@@ -51,7 +60,7 @@ This is the Codex-executor pattern.
 
 ---
 
-## The Pattern
+## What Does the Codex-Executor Pattern Look Like?
 
 Instead of the agent doing:
 

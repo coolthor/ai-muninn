@@ -6,6 +6,15 @@ updatedAt: "2026-03-18"
 tags: ["AI Agent", "openclaw", "Codex", "LLM", "Agent Tools", "Local AI"]
 series: "OpenClaw"
 part: 7
+faq:
+  - q: "How do I let a local AI agent call Codex CLI mid-reasoning?"
+    a: "Define callhelp as a tool in your agent's tool list. The implementation spawns 'codex --full-auto -q \"<prompt>\"' as a subprocess and returns stdout as the tool result. The --full-auto flag is non-negotiable — without it, Codex pauses for permission prompts and the subprocess hangs forever."
+  - q: "Why use Codex instead of Claude when giving an AI agent a help-call tool?"
+    a: "Claude's API quota is shared with personal work. An agent loop can burn tokens faster than expected. Giving the agent Codex puts usage on a separate API key with a separate budget — if the agent over-spends, it costs Codex tokens, not yours."
+  - q: "What flags are required to run Codex CLI as a subprocess inside an agent loop?"
+    a: "Both --full-auto and -q are required. --full-auto disables all permission prompts (without a TTY attached, the agent loop hangs forever waiting for input that never comes). -q suppresses the interactive UI output. Without both, the subprocess either hangs or produces unreadable output."
+  - q: "What kinds of tasks should an AI agent use callhelp for?"
+    a: "Tasks where the agent recognizes a gap: code generation where it's uncertain about correctness, debugging an error it hasn't seen before, or domains it's less confident in. The agent decides — callhelp is just a tool available in the loop, not a routing rule."
 ---
 
 ## Preface
@@ -16,7 +25,7 @@ This is what `callhelp` does in openclaw. The agent has a tool. The tool runs Co
 
 ---
 
-## The Tool
+## What Is the callhelp Tool?
 
 `callhelp` is a custom tool definition in yui's tool list. It takes a prompt, spawns `codex` as a subprocess, and returns stdout as the tool result. Nothing else.
 
@@ -34,7 +43,7 @@ The practical difference is small. Codex handles code generation, debugging, and
 
 ---
 
-## The Permission Flag
+## What Permission Flag Makes callhelp Actually Work?
 
 When Codex runs as a subprocess inside an agent loop, nobody is there to approve tool calls.
 

@@ -6,6 +6,15 @@ updatedAt: "2026-03-07"
 tags: ["vLLM", "Ollama", "GPU Memory", "DGX Spark", "GB10", "LLM Serving"]
 series: "OpenClaw"
 part: 3
+faq:
+  - q: "為什麼 128GB 的機器重啟 vLLM 時會 OOM，模型明明只需要 35GB？"
+    a: "Ollama 的 KEEP_ALIVE=2h 會在最後一次使用後把模型留在記憶體兩小時。在 unified memory 機器上，Ollama 和 vLLM 共用同一個 memory pool。如果 Ollama 還停著 19-51GB 的模型，vLLM 啟動時的分配就會失敗，儘管機器的總記憶體足夠。"
+  - q: "在 GB10 上怎麼確認 Ollama 載了哪些模型在記憶體裡？"
+    a: "curl -s http://localhost:11434/api/ps——會回傳目前載入的模型清單、大小和 VRAM 用量。nvidia-smi 在 GB10 上沒有用（回傳 N/A），因為 unified memory 沒有獨立的 VRAM 分配可供查詢。"
+  - q: "怎麼立即把 Ollama 的模型從記憶體移除，不需要重啟 Ollama？"
+    a: "透過 generate endpoint 傳 keep_alive: 0——例如 curl -X POST http://localhost:11434/api/generate -d '{\"model\": \"glm-4.7-flash:latest\", \"keep_alive\": 0}'。這是立即驅逐，不是「把 TTL 設為零之後才生效」。"
+  - q: "vLLM 是主要 serving 路徑時，應該把 OLLAMA_KEEP_ALIVE 永久設成 0 嗎？"
+    a: "應該。在 systemd override 裡設 OLLAMA_KEEP_ALIVE=0。代價是每次 Ollama request 都要等 15-25 秒的 cold load。只有在 Ollama 是唯一 model server 的情況下，才應該保持 KEEP_ALIVE=2h。"
 ---
 
 ## 前言
@@ -16,7 +25,7 @@ part: 3
 
 ---
 
-## 事故經過
+## 128GB 的機器為什麼會在 vLLM 重啟時 OOM？
 
 GX10 上每次重啟 vLLM container，大概有一半的機率在 model 載入時 OOM。這台機器有 128GB unified memory。[Qwen3.5-35B-A3B-FP8](https://huggingface.co/Qwen/Qwen3.5-35B-A3B-FP8) 的 weights 需要大約 35GB。用 `--gpu-memory-utilization 0.90` 搭配 fp8 KV cache，vLLM startup 時想要的總量大概是 115GB。
 
@@ -49,7 +58,7 @@ GLM-4.7-Flash，19GB，待在記憶體裡。沒有人要求它在那裡。它在
 
 ---
 
-## 為什麼 KEEP_ALIVE=2h 存在
+## KEEP_ALIVE=2h 為什麼存在？
 
 在批評這個預設值之前，值得先理解它為什麼這樣設計。
 
@@ -61,7 +70,7 @@ GLM-4.7-Flash，19GB，待在記憶體裡。沒有人要求它在那裡。它在
 
 ---
 
-## 手動修法
+## 怎麼在 vLLM 重啟前手動清除 Ollama 的記憶體？
 
 當 vLLM 需要重啟、而 Ollama 有東西載在記憶體裡時，先把它 unload：
 
@@ -95,7 +104,7 @@ curl -X POST http://localhost:11434/api/generate \
 
 ---
 
-## 永久修法
+## vLLM 是主要後端時，永久修法是什麼？
 
 如果 vLLM 是你的主要 serving 路徑，Ollama 只是備用，把 `KEEP_ALIVE` 全域設成 `0`：
 
@@ -128,7 +137,7 @@ sudo systemctl restart ollama
 
 ---
 
-## nvidia-smi 的死路
+## 為什麼 nvidia-smi 在 GB10 上看不到記憶體用量？
 
 在 GPU 機器上，第一個直覺是跑 `nvidia-smi` 看記憶體用量。在 GB10 上這沒用：
 

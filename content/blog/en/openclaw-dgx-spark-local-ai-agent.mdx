@@ -6,6 +6,15 @@ updatedAt: "2026-03-05"
 tags: ["OpenClaw", "AI Agent", "DGX Spark", "Mac Mini", "Self-Hosted", "Ollama", "SearXNG"]
 series: "OpenClaw"
 part: 1
+faq:
+  - q: "How do I run a local AI agent on DGX Spark with zero API cost?"
+    a: "Split the architecture: Mac Mini M4 as always-on gateway (OpenClaw + SearXNG via Orbstack), GX10 as GPU inference backend (Ollama or vLLM). Connect them via Tailscale. TTFT with vLLM prefix caching drops to 0.12s for repeated system prompt context, vs 2-4s with Ollama."
+  - q: "Why should I run SearXNG locally instead of using search APIs for an AI agent?"
+    a: "External APIs have rate limits, cost per request, and send your queries to third parties. SearXNG aggregates DuckDuckGo, Bing, and others without exposing queries to any single provider. One Docker container, zero API keys, unlimited requests. Quality is measurably better from aggregation."
+  - q: "What is the best architecture for a self-hosted always-on AI agent?"
+    a: "Gateway on an always-on low-power machine (Mac Mini at <20W idle), inference on a separate GPU machine (GX10). Keeping them separate means vLLM restarts don't interrupt agent availability. Connect via Tailscale — no public IP needed on the GPU machine."
+  - q: "How do I start with OpenClaw before migrating to vLLM?"
+    a: "Start with Ollama — single binary, one command, works on GB10 out of the box. Connect OpenClaw, test tools, tune the system prompt. Once the agent is stable, migrate to vLLM for prefix caching. Don't try SGLang first — setup complexity will consume the time you need for agent iteration."
 ---
 
 ## Preface
@@ -18,7 +27,7 @@ This is the deployment record: what the architecture looks like, and six lessons
 
 ---
 
-## The Architecture
+## What Does the Full Architecture Look Like?
 
 The split is straightforward: Mac Mini M4 runs the gateway. GX10 runs inference. Telegram is the interface.
 

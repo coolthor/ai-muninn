@@ -6,6 +6,15 @@ updatedAt: "2026-03-21"
 tags: ["Claude Code", "claude-agent-sdk", "multi-agent", "orchestrator", "Python", "asyncio"]
 series: "AI Workflow"
 part: 4
+faq:
+  - q: "為什麼 claude -p subprocess 在 multi-agent 系統中會丟棄中間 turn？"
+    a: "claude -p 只回傳最後一個 agent turn 的最終文字。所有中間 turn——工具呼叫、推理文字、進行中的輸出——全被丟棄。改用 claude-agent-sdk 的 async query() generator，就能即時收到每一個 turn。"
+  - q: "如何用 Python 串流多個 Claude agent 的即時輸出？"
+    a: "使用 claude-agent-sdk 的 query() async generator 搭配 asyncio.gather 並行執行。每個 AssistantMessage 會 yield 該 turn 的文字 block，orchestrator 可以在 token 產生時就收到中間輸出，而非等最終結果。"
+  - q: "claude-agent-sdk 中設定 setting_sources=['project', 'local'] 有什麼效果？"
+    a: "防止 sub-agent 載入全域 ~/.claude/CLAUDE.md 和所有 MCP server 的 tool schema。若不設定，每次 agent 呼叫都會載入數千 token 的 schema——以每小時 20 次呼叫計算，會產生 60K token 的 context 噪音。"
+  - q: "如何修復忽略新 system prompt 的 Claude sub-agent？"
+    a: "刪除 session registry 檔案。舊的 session_id 帶著過去的 context，包括該 session 中訓練好的輸出格式。解決方法：刪除 registry，讓 agent 在下次執行時建立新 session。"
 ---
 
 ## 前言
@@ -16,7 +25,7 @@ part: 4
 
 ---
 
-## `claude -p` 的問題
+## `claude -p` 的問題是什麼？
 
 最初的 orchestrator 用 `subprocess.Popen` 呼叫 `claude -p`：
 
@@ -38,7 +47,7 @@ output = result.stdout
 
 ---
 
-## SDK 的做法
+## SDK 的做法如何解決這個問題？
 
 `claude-agent-sdk`（Python）提供 `query()`，一個非同步 generator，每個 turn 產出一條訊息——包括工具呼叫之間的每一個中間 turn。
 
@@ -99,7 +108,7 @@ Session ID 從 `ResultMessage.session_id` 取得（優先），或 `SystemMessag
 
 ---
 
-## 並行執行
+## 如何並行執行多個 Agent？
 
 多個 agent 用 `asyncio.gather` 同時跑：
 

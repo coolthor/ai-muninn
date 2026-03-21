@@ -6,6 +6,15 @@ updatedAt: "2026-03-21"
 tags: ["openclaw", "context window", "vLLM", "gpt-oss", "configuration"]
 series: "OpenClaw"
 part: 9
+faq:
+  - q: "如何修復 openclaw 的 '400 max_tokens must be at least 1, got -1292' 錯誤？"
+    a: "在 model definition 裡設定 contextWindow（camelCase），值要和 vLLM 的 --max-model-len 完全一致。openclaw 的計算是 max_tokens = contextWindow - reserveTokens - currentPromptTokens。如果 contextWindow 設成 32768 但 model 實際是 131K，prompt overhead 就會把 budget 推成負數。"
+  - q: "openclaw 中 context window 大小的正確 config key 是什麼？"
+    a: "contextWindow（camelCase）。context_window 這類 snake_case 變體會被靜默忽略——沒有 error、沒有警告，config 就是不生效。maxTokens 雖然被接受，但會干擾 budget 計算而非正確設定它。只有 contextWindow 才能正確影響 context budget 計算。"
+  - q: "為什麼 openclaw 的 compaction 即使 context 滿了也沒有觸發？"
+    a: "如果 contextWindow 設得比系統 overhead 小太多，就永遠沒有空間讓 compaction 運作。有 memory-lancedb 的 openclaw agent 至少有 10-12K token 的系統 overhead。contextWindow 設 32768 加上 10K overhead，一段短對話就足以讓 max_tokens 在 compaction 觸發前先變成負數。"
+  - q: "openclaw 連接 131K context 模型的正確 compaction 設定是什麼？"
+    a: "設定 contextWindow: 131072、reserveTokens: 8192（model 輸出空間）、keepRecentTokens: 32768、maxHistoryShare: 0.5。reserveTokens 只需要涵蓋 model 輸出空間——不需要 buffer system prompt overhead，因為 overhead 已經在 131K 上限之內。"
 ---
 
 ## 前言
@@ -16,7 +25,7 @@ part: 9
 
 ---
 
-## 錯誤訊息
+## 錯誤訊息長什麼樣子？
 
 gpt-oss-120B 跑起來之後（見[上一篇](/zh-TW/blog/part2-gpt-oss-120b-serve-script)），第一條訊息透過 openclaw 發出去，收到：
 
@@ -28,7 +37,7 @@ gpt-oss-120B 跑起來之後（見[上一篇](/zh-TW/blog/part2-gpt-oss-120b-ser
 
 ---
 
-## Budget 的計算方式
+## 為什麼 max_tokens 會變成負數？
 
 openclaw 計算 `max_tokens` 的公式：
 

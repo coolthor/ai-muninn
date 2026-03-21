@@ -6,6 +6,15 @@ updatedAt: "2026-02-26"
 tags: ["Claude Code", "iOS", "Swift", "Testing", "Fastlane", "BPS Tracker"]
 series: "AI Workflow"
 part: 2
+faq:
+  - q: "How do I reduce Claude Code context usage when testing iOS apps with the simulator MCP?"
+    a: "Use ui_describe_all instead of screenshot for state verification. Screenshots cost ~10x more context than text. Switching to ui_describe_all-first testing cut context from ~81,290 KB to ~15,215 KB per test run — an 81% reduction."
+  - q: "What is the ui_describe_all-first testing strategy for Claude Code iOS testing?"
+    a: "Add a rule to CLAUDE.md: prefer ui_describe_all for state verification (element presence, values, button states), reserve screenshot only for visual layout bugs or missing accessibility labels. This single rule change produces the 81% context reduction."
+  - q: "How do I speed up repeated iOS UI test runs in Claude Code?"
+    a: "Use the coordinate cache pattern: after each test run, write element coordinates to .claude/ui-coordinates.json. On the next run, read the cache and confirm labels still match with a single ui_describe_all call, then skip the full discovery phase."
+  - q: "How do I automate App Store screenshot generation and upload with Claude Code?"
+    a: "Use Fastlane with capture_ios_screenshots for multi-device/locale screenshots and deliver for metadata and binary upload. Claude can invoke Fastlane lanes directly via Bash. Add max_retries: 0 to CLAUDE.md and require reading error output before any retry to prevent infinite loops."
 ---
 
 ## Preface
@@ -18,7 +27,7 @@ For how I set up the Claude Code compliance layer that enforces these patterns v
 
 ---
 
-## The Problem
+## Why Is Screenshot-First iOS Testing So Expensive?
 
 BPS Tracker is a SwiftUI app with a nontrivial UI: a list of active spreads, an entry screen with several input fields, a settings screen, and a subscription paywall. Testing it with Claude Code and the iOS Simulator MCP meant Claude was doing something like this on every step:
 
@@ -34,7 +43,7 @@ The feedback loop was also slow. Image uploads take time. Analysis takes more. F
 
 ---
 
-## The Solution
+## How Do You Fix It? The ui_describe_all-First Approach
 
 ### Rule 1: ui_describe_all First
 

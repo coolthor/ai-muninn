@@ -6,6 +6,15 @@ updatedAt: "2026-02-19"
 tags: ["DGX Spark", "GB10", "Ollama", "Benchmark", "LLM", "AI Agent", "Blackwell"]
 series: "DGX Spark"
 part: 1
+faq:
+  - q: "What is the best LLM to run on a DGX Spark for AI agents?"
+    a: "qwen3-coder-next q4_K_M is the best primary model: 47.0 tok/s, reliable tool calling, solid across all task categories. For vision: qwen3-vl:30b at ~19GB in raw mode. For deep reasoning: glm-4.7-flash. Running qwen3-coder-next + qwen3-vl together uses ~71GB of the available 128GB."
+  - q: "Why does gpt-oss 120B fail tool calling despite being a larger model?"
+    a: "Parameter count doesn't guarantee tool calling capability — fine-tuning and RLHF focus do. gpt-oss:120b generated invalid JSON in tool calling tests, making it a non-starter for agent frameworks. It was also 5-6x more verbose than qwen3-coder-next with no quality improvement."
+  - q: "Why do thinking models like GLM and Qwen3-VL return empty responses via Ollama?"
+    a: "These models route output to an internal thinking channel. /api/generate doesn't expose it — the response field is empty. Use /api/chat instead: it returns message.content with the actual output. In one test, qwen3-vl spent 7,094 characters thinking and returned zero output."
+  - q: "Does q4_K_M quantization significantly reduce quality compared to q8_0?"
+    a: "Not meaningfully for agent tasks. The speed difference is real (47.0 vs 36.1 tok/s, 23% gap) and VRAM savings are substantial, but across 7 task categories the quality difference was nearly invisible. q4_K_M is the right choice for almost all agent workloads."
 ---
 
 ## Preface
@@ -20,7 +29,7 @@ Here's what I learned.
 
 ---
 
-## The Hardware
+## What Hardware Does This Run On?
 
 ASUS Ascent GX10. NVIDIA GB10 Grace Blackwell Superchip. 128GB unified memory, 273 GB/s bandwidth, SM121 compute capability.
 
@@ -89,7 +98,7 @@ Notable: qwen3-coder-next q4\_K\_M and q8\_0 share blob storage in Ollama — tw
 
 ---
 
-## Finding 1: Quantization Matters Less Than You Think
+## Does q4_K_M vs q8_0 Quantization Actually Matter for Quality?
 
 The headline comparison: qwen3-coder-next q4\_K\_M vs q8\_0 across all seven task categories.
 
@@ -108,7 +117,7 @@ The principle this suggests: on a model with 32B+ parameters, 4-bit quantization
 
 ---
 
-## Finding 2: Bigger Isn't Always Better
+## Does a 120B Model Outperform a 32B Model on Agent Tasks?
 
 gpt-oss:120b is a 120B model. It failed tool calling.
 
@@ -122,7 +131,7 @@ The lesson: parameter count is a proxy for capability, not a guarantee. Tool cal
 
 ---
 
-## Finding 3: Thinking Models Need Different API Calls
+## Why Do Thinking Models Return Empty Responses via /api/generate?
 
 This one is a real trap.
 

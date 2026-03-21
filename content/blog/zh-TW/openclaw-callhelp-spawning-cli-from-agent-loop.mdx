@@ -6,6 +6,15 @@ updatedAt: "2026-03-18"
 tags: ["AI Agent", "openclaw", "Codex", "LLM", "Agent Tools", "Local AI"]
 series: "OpenClaw"
 part: 7
+faq:
+  - q: "如何讓本地 AI agent 在推理途中呼叫 Codex CLI？"
+    a: "在 agent 的 tool list 定義 callhelp。實作方式是 spawn 'codex --full-auto -q \"<prompt>\"' 作為 subprocess，把 stdout 當成 tool result 回傳。--full-auto flag 不可省略——沒有它，Codex 會暫停等待 permission 確認，在沒有 TTY 的 subprocess 裡會永遠 hang 住。"
+  - q: "為什麼給 AI agent 的 help-call tool 用 Codex 而不是 Claude？"
+    a: "Claude 的 API quota 和個人使用是共用的。Agent loop 燒 token 的速度可能比預期快很多。把 Codex 給 agent 用，消耗的是獨立 API key 的獨立預算——就算 agent 超支，燒的是 Codex token，不是自己的。"
+  - q: "在 agent loop 裡把 Codex CLI 跑成 subprocess 需要哪些 flag？"
+    a: "--full-auto 和 -q 都必須要。--full-auto 關掉所有 permission prompt（沒有 TTY，agent loop 會永遠等待永遠不會來的輸入）。-q 抑制互動式 UI 輸出。少一個，subprocess 就會 hang 住或產生無法解析的輸出。"
+  - q: "AI agent 應該在什麼情況下使用 callhelp？"
+    a: "Agent 自己認識到有能力缺口時：對程式碼正確性不確定的 code generation 任務、沒遇過的 debug 錯誤、或較不熟悉的 domain。由 agent 自己決定——callhelp 只是 loop 裡的一個可用 tool，不是硬性 routing 規則。"
 ---
 
 ## 前言
@@ -16,7 +25,7 @@ part: 7
 
 ---
 
-## 這個 Tool 是什麼
+## callhelp Tool 是什麼？
 
 `callhelp` 是 yui tool list 裡的一個自定義 tool definition。傳進一個 prompt，spawn `codex` 當 subprocess，把 stdout 當 tool result 回傳。就這樣。
 
@@ -34,7 +43,7 @@ part: 7
 
 ---
 
-## Permission Flag
+## 哪個 Permission Flag 讓 callhelp 真正可用？
 
 Codex 跑在 agent loop 的 subprocess 裡，旁邊沒有人可以按 y。
 

@@ -6,6 +6,15 @@ updatedAt: "2026-03-16"
 tags: ["AI Agent", "Claude Code", "Codex", "Agent Architecture", "OpenClaw"]
 series: "OpenClaw"
 part: 5
+faq:
+  - q: "如何防止 AI agent 在多步驟任務中途產生錯誤輸出？"
+    a: "使用 Codex-executor 模式：agent 用完整任務描述派生一個 Codex subprocess，subprocess 處理所有中間步驟，agent 只讀一個結果檔案。Agent 只需要 2 次 tool call 而非 8 次，所有中間狀態都在 subprocess 的新鮮 context window 裡。"
+  - q: "AI agent 應該在什麼情況下把任務委派給 subprocess 而非直接處理？"
+    a: "當任務涉及多個檔案讀取、一個或多個外部 model 呼叫、多個檔案寫入輸出，以及最後的通知——依序進行的時候。如果任務有超過 3 個序列步驟且有中間狀態，subprocess 版本更可靠。若需要根據中間結果做條件分支，則保留在 agent session 裡。"
+  - q: "Codex-executor 模式是什麼，為什麼能提升 agent 可靠性？"
+    a: "模式：agent 用完整任務描述派生 'codex exec' subprocess，所有 8 個步驟在 subprocess 自己的全新 context window 裡執行，agent 讀取輸出檔案並發送通知（共 2 次 tool call）。失敗是原子性的——subprocess 要麼完整完成，要麼回傳 error，不會有部分寫入的情況。"
+  - q: "如何在 agent 和 Codex subprocess 之間傳遞狀態？"
+    a: "透過 filesystem。Subprocess 把輸出寫到可預測的路徑（如 /tmp/result.md），agent 讀取該路徑。這是正確的交接點：簡單、明確、可測試——agent 不需要在自己的 context 裡保存任何中間狀態。"
 ---
 
 ## 前言
@@ -16,7 +25,7 @@ part: 5
 
 ---
 
-## 問題所在
+## Agent 直接編排多步驟任務會出什麼問題？
 
 最初的設計很直覺：OpenClaw agent 親自處理一切。像 `daily-reflexion`——agent 的每日自我分析例程——會一步一步執行：
 
@@ -39,7 +48,7 @@ part: 5
 
 ---
 
-## 洞察
+## Codex-Executor 背後的核心洞察是什麼？
 
 Agent 擅長決定要做什麼。它不擅長在長 session 中跨越大量 tool call 維持連貫的狀態。
 
@@ -51,7 +60,7 @@ Agent 的工作變成：把任務描述清楚、派生 subprocess、讀取結果
 
 ---
 
-## 模式本身
+## Codex-Executor 模式長什麼樣？
 
 不讓 agent 這樣做：
 

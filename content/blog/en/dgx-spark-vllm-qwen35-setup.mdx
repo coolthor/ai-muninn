@@ -6,6 +6,15 @@ updatedAt: "2026-03-05"
 tags: ["DGX Spark", "GB10", "vLLM", "Ollama", "Qwen3.5", "Docker", "Blackwell", "AI Agent"]
 series: "DGX Spark"
 part: 2
+faq:
+  - q: "How do I migrate from Ollama to vLLM on a DGX Spark for better TTFT?"
+    a: "Run Qwen3.5-35B-A3B-FP8 in Docker using the cu130-nightly image (not stable). vLLM's prefix caching drops TTFT from 2-4 seconds (Ollama) to 0.12 seconds for repeated system prompt context. Decode speed stays at ~47 tok/s."
+  - q: "Why does --enable-chunked-prefill drop Qwen3.5-35B throughput from 47 to 5.7 tok/s?"
+    a: "Qwen3.5-35B-A3B is an SSM+MoE hybrid with Mamba-style recurrent layers. Chunked prefill splits prompts into segments, but SSM layers require sequential state passing across segment boundaries — the overhead compounds. Never use --enable-chunked-prefill with SSM or hybrid SSM+MoE models."
+  - q: "How do I disable thinking mode in Qwen3.5 served by vLLM?"
+    a: "Pass chat_template_kwargs: {enable_thinking: false} in every request — it cannot be set at the server level. Without this, Qwen3.5 generates <think>...</think> tokens by default and your client reads content: null. Set max_tokens high enough that the model has budget left after thinking."
+  - q: "Why does vLLM OOM on a 128GB GB10 when restarting with Qwen3.5?"
+    a: "Ollama's KEEP_ALIVE=2h keeps models in the shared unified memory pool. Before starting vLLM, run 'curl -s http://localhost:11434/api/ps' to check what's loaded, then unload with 'curl -X POST http://localhost:11434/api/generate -d {\"model\": \"MODEL_NAME\", \"keep_alive\": 0}'."
 ---
 
 ## Preface
@@ -18,7 +27,7 @@ This is a record of how that migration went on an ASUS Ascent GX10 (NVIDIA GB10,
 
 ---
 
-## Why Move from Ollama
+## Why Move from Ollama to vLLM?
 
 The core problem is TTFT — time to first token. For an interactive chat session, a 2-3 second TTFT is annoying. For an always-on agent that calls a model dozens of times per hour, it compounds into real latency.
 
@@ -215,7 +224,7 @@ If you change `--max-model-len`, recalculate. The formula: `block_size = ceil(ma
 
 ---
 
-## Connecting Your Agent
+## How Do You Connect an Agent to vLLM?
 
 vLLM exposes an OpenAI-compatible API on port 8000. Connecting an agent is straightforward — the only required extra step is the per-request `chat_template_kwargs`.
 

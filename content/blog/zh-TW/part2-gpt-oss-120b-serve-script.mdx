@@ -6,6 +6,15 @@ updatedAt: "2026-03-19"
 tags: ["DGX Spark", "SM121", "vLLM", "gpt-oss", "MXFP4", "Blackwell", "LLM Serving"]
 series: "gpt-oss-120B on DGX Spark"
 part: 1
+faq:
+  - q: "怎麼讓 gpt-oss-120B 在 DGX Spark（SM121）以 vLLM 跑到接近理論速度？"
+    a: "用 VLLM_MXFP4_BACKEND=marlin（不是 VLLM_NVFP4_GEMM_BACKEND——那個在 vLLM 0.17.1 靜默無效）。確認啟動 log 顯示 'Using backend: marlin'，不是 'Auto-selected: CUTLASS_FP4'。拿掉 --enforce-eager。設定正確後，gpt-oss-120B 在 GB10 可以到 ~59 tok/s（273 GB/s 頻寬，60 GB weight）。"
+  - q: "在 vLLM 裡強制 MXFP4 模型走 Marlin 後端的正確環境變數是什麼？"
+    a: "VLLM_MXFP4_BACKEND=marlin——不是 VLLM_NVFP4_GEMM_BACKEND。vLLM 0.17.1 不存在 VLLM_NVFP4_GEMM_BACKEND，會被靜默忽略。啟動 log 會顯示 'Auto-selected: CUTLASS_FP4'，接著出現重複迴圈。"
+  - q: "gpt-oss tokenizer 在內網機器上為什麼下載失敗？怎麼離線安裝？"
+    a: "tiktoken 啟動時從 OpenAI CDN 下載 o200k_base.tiktoken，並以 SHA1 hash 當作快取檔名（fb374d419588a4632f3f557e76b4b70aebbca790，無副檔名）。在有網路的機器上預先下載，設定 TIKTOKEN_RS_CACHE_DIR 指向包含這個 hash 命名檔案的目錄。"
+  - q: "為什麼 gpt-oss-120B 明明有生成 token，response 裡卻是 content: null？"
+    a: "--reasoning-parser openai_gptoss 把所有輸出放進 reasoning 欄位，讓 content 變成 null。標準 OpenAI 相容 client 只讀 content，所以什麼都收不到。除非你需要 reasoning channel 分離，否則移除 --reasoning-parser openai_gptoss。"
 ---
 
 ## 前言
@@ -22,7 +31,7 @@ DGX Spark（GB10、SM121、128 GB 統一記憶體）是硬體。gpt-oss-120B 是
 
 ---
 
-## 這個模型是什麼
+## gpt-oss-120B 和其他 MXFP4 模型有什麼不同？
 
 `gpt-oss-120B` 是 Microsoft 的開源 120B 模型，MXFP4 量化，格式叫 **harmony**。它用 `openai_harmony` tokenizer（依賴 tiktoken，不是 HuggingFace tokenizers）。它有一個專門設計給它輸出格式的 `--reasoning-parser`。這三個事實各自貢獻了這個故事裡的一個 bug。
 
@@ -180,7 +189,7 @@ export VLLM_MXFP4_BACKEND=marlin   # ← 正確
 
 ---
 
-## 可用的 Serve Script
+## 可用的 Serve Script 長什麼樣子？
 
 ```bash
 #!/bin/bash
@@ -240,7 +249,7 @@ exec vllm serve /home/username/models/gpt-oss-120b \
 
 ---
 
-## 對本地 Agent 的意義
+## 59 tok/s 在 131K Context 對本地 Agent 有什麼意義？
 
 59 tok/s，131K context，一台放得進桌子底下的機器。
 

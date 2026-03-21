@@ -6,6 +6,15 @@ updatedAt: "2026-03-21"
 tags: ["openclaw", "context window", "vLLM", "gpt-oss", "configuration"]
 series: "OpenClaw"
 part: 9
+faq:
+  - q: "How do I fix the openclaw error '400 max_tokens must be at least 1, got -1292'?"
+    a: "Set contextWindow (camelCase) in the model definition to match the vLLM --max-model-len exactly. openclaw calculates max_tokens = contextWindow - reserveTokens - currentPromptTokens. If contextWindow is set to 32768 but the model serves 131K, prompt overhead pushes the budget negative."
+  - q: "What is the correct config key for context window size in openclaw?"
+    a: "contextWindow (camelCase). Snake_case variants like context_window are silently ignored — no error, no warning, the config just doesn't take effect. maxTokens is accepted but interferes with the budget calculation instead of informing it. Only contextWindow correctly informs the context budget math."
+  - q: "Why does openclaw's compaction never trigger even though the context is full?"
+    a: "If contextWindow is set too small relative to system overhead, there's never room for compaction to operate. OpenClaw agents with memory-lancedb have ~10-12K tokens of system overhead minimum. With contextWindow: 32768 and 10K overhead, a short conversation is enough to push max_tokens negative before compaction can fire."
+  - q: "What are the correct compaction settings for openclaw connected to a 131K context model?"
+    a: "Set contextWindow: 131072, reserveTokens: 8192 (output headroom), keepRecentTokens: 32768, and maxHistoryShare: 0.5. The reserveTokens value only needs to cover model output space — it doesn't need to buffer system prompt overhead, which is already within the 131K ceiling."
 ---
 
 ## Preface
@@ -16,7 +25,7 @@ This is a short one. The symptom is a 400 error. The cause is one wrong number. 
 
 ---
 
-## The Error
+## What Does the Error Look Like?
 
 After getting gpt-oss-120B running (covered in the [previous article](/en/blog/part2-gpt-oss-120b-serve-script)), the first message through openclaw returned:
 
@@ -28,7 +37,7 @@ The model was running fine. The vLLM server was responding to curl requests corr
 
 ---
 
-## The Budget Math
+## Why Does max_tokens Go Negative?
 
 openclaw calculates `max_tokens` like this:
 

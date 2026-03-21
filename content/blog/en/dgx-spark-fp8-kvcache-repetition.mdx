@@ -6,6 +6,15 @@ updatedAt: "2026-03-21"
 tags: ["vLLM", "FP8", "KV cache", "GB10", "DGX Spark", "quantization", "SM121"]
 series: "DGX Spark"
 part: 5
+faq:
+  - q: "Why does vLLM output repetition loops after ~500 tokens when using FP8 KV cache?"
+    a: "Without calibration data, vLLM falls back to q_scale=1.0 — a uniform scale that ignores the actual activation distribution. Quantization error accumulates over the sequence until the model's logits become unreliable around token 500, collapsing into repetition. The startup log warns: 'Using default scale q_scale=1.0'."
+  - q: "How do I fix vLLM repetition loops caused by FP8 KV cache on GB10?"
+    a: "Remove --kv-cache-dtype fp8 and --calculate-kv-scales from your serve command. Without these flags, vLLM uses BF16 for KV cache. On GB10 with 128GB unified memory, BF16 KV cache is almost always the right default — VRAM isn't the limiting constraint."
+  - q: "Should I use FP8 KV cache on a DGX Spark (GB10) with 128GB unified memory?"
+    a: "No, unless you have calibration data. FP8 KV cache requires per-layer scale factors from a calibration run. Without them, q_scale=1.0 causes repetition at long outputs. More importantly, GB10's 128GB unified memory leaves ~63 GiB for BF16 KV cache at 90% utilization — memory isn't the constraint."
+  - q: "How do I diagnose repetition loops in vLLM — is it a sampling parameter or quantization problem?"
+    a: "If the repetition starts at a consistent token count (not immediately) and sampling parameters have no effect, it's precision degradation — not a temperature or top_p issue. Check the startup log for 'q_scale=1.0'. If that line appears, FP8 KV cache is running uncalibrated."
 ---
 
 ## Preface
@@ -16,7 +25,7 @@ This is about FP8 KV cache on GB10, what the failure looks like, and why the opt
 
 ---
 
-## The Symptom
+## What Does the Failure Look Like?
 
 The vLLM serve script had two flags added for memory efficiency:
 
@@ -41,7 +50,7 @@ W  Calculating KV cache scales for FP8 activation, but no calibration
 
 ---
 
-## Root Cause
+## What Is the Root Cause?
 
 FP8 quantization for KV cache requires per-layer scale factors — values that map the float16/bfloat16 distribution of each layer's activations to the FP8 range without losing precision. These scale factors come from a calibration run against a representative dataset.
 
@@ -51,7 +60,7 @@ Without calibration data, vLLM falls back to `q_scale=1.0`. This is a uniform sc
 
 ---
 
-## The Fix
+## How Do You Fix It?
 
 Remove both flags:
 
@@ -71,7 +80,7 @@ Without these flags, vLLM uses BF16 for KV cache. Outputs are stable at any leng
 
 ---
 
-## Why This Optimization Didn't Apply Here
+## Why Didn't This Optimization Apply to GB10?
 
 FP8 KV cache trades memory for precision. The tradeoff is worth it when:
 

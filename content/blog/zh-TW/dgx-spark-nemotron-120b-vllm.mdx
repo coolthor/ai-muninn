@@ -6,6 +6,15 @@ updatedAt: "2026-03-13"
 tags: ["DGX Spark", "GB10", "SM121", "Nemotron", "vLLM", "NVFP4", "Blackwell", "LLM Serving"]
 series: "DGX Spark"
 part: 3
+faq:
+  - q: "如何在 DGX Spark（GB10，SM121）上跑 Nemotron-3-Super-120B？"
+    a: "使用 stable vLLM image（v0.17.1-cu130），不要用 nightly。用 CLI flag --moe-backend marlin（沒有等效的環境變數），加上 VLLM_NVFP4_GEMM_BACKEND=marlin、VLLM_USE_FLASHINFER_MOE_FP4=0 和 VLLM_MARLIN_USE_ATOMIC_ADD=1。--reasoning-parser 必須是 nemotron_v3（名稱要完全正確）。Nemotron 載入約需 8 分鐘，速度 13-16 tok/s。"
+  - q: "為什麼 VLLM_NVFP4_MOE_BACKEND=marlin 在 vLLM 上沒有任何作用？"
+    a: "這個環境變數在 vLLM source code 中根本不存在。設定它不會有任何錯誤，也不會有任何效果。在 SM121 上讓 MoE layer 走 Marlin 的正確方式是 CLI flag --moe-backend marlin。確認 startup log 出現 '[NVFP4] Using backend: marlin' 才算生效。"
+  - q: "DGX Spark 上 Nemotron 和 Qwen3.5 應該用哪個 vLLM Docker image？"
+    a: "兩者相反：Nemotron 必須用 stable image（vllm/vllm-openai:v0.17.1-cu130），因為 nightly 有 torch.compile SM121 bug 會在第一次請求時 crash。Qwen3.5-35B 必須用 nightly（cu130-nightly），因為 stable 版缺少該 model 的 GB10 kernel 支援。"
+  - q: "Nemotron-3-Super-120B 在 128GB unified memory 的 GB10 上跑多快？"
+    a: "decode 速度 13-16 tok/s，17 個 shard 的載入時間約 8 分鐘。以 200K context、fp8 KV cache、0.85 GPU utilization 計算，約分配 35GB 給 KV cache。比同硬體上的 Qwen3.5-35B（47 tok/s）慢約 3 倍，和它大約 3 倍的 active parameter 數量一致。"
 ---
 
 ## 前言
@@ -35,7 +44,7 @@ curl -X POST http://localhost:11434/api/generate \
 
 ---
 
-## 核心問題：SM121 ≠ SM100
+## 為什麼 SM121 會破壞標準 CUDA Kernel？
 
 GB10 的 compute capability 是 SM121。B200 的是 SM100。兩者都是 Blackwell，但 ISA 不相容。
 
@@ -149,7 +158,7 @@ Qwen3.5 那篇提到的 SSM 參數耦合問題在這裡也適用：`--max-num-ba
 
 ---
 
-## 性能
+## Nemotron 實際跑多快？
 
 | 指標 | 數值 |
 |------|------|

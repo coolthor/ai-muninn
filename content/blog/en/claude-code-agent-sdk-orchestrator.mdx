@@ -6,6 +6,15 @@ updatedAt: "2026-03-21"
 tags: ["Claude Code", "claude-agent-sdk", "multi-agent", "orchestrator", "Python", "asyncio"]
 series: "AI Workflow"
 part: 4
+faq:
+  - q: "Why does claude -p subprocess drop intermediate turns in a multi-agent system?"
+    a: "claude -p returns only the final text of the last agent turn. Every intermediate turn — tool calls, reasoning text, in-progress output — is discarded. Use claude-agent-sdk's async query() generator instead to receive every turn as it happens."
+  - q: "How do I stream real-time output from parallel Claude agents in Python?"
+    a: "Use claude-agent-sdk's query() async generator with asyncio.gather for parallel execution. Each AssistantMessage yields one turn's text blocks, so your orchestrator receives intermediate output as tokens arrive — not just the final response."
+  - q: "What does setting_sources=['project', 'local'] do in claude-agent-sdk?"
+    a: "It prevents sub-agents from loading your global ~/.claude/CLAUDE.md and all MCP server tool schemas. Without it, each agent call loads thousands of tokens of tool schemas the sub-agent never uses — at 20 calls/hour that's 60K tokens of context noise."
+  - q: "How do I fix a Claude sub-agent that ignores a new system prompt?"
+    a: "Delete the session registry file. A stale session_id carries its old context, including any output format it was trained on in that session. Start fresh: delete the registry and let the agent create a new session on the next run."
 ---
 
 ## Preface
@@ -16,7 +25,7 @@ This is about migrating from `claude -p` subprocess to `claude-agent-sdk`, what 
 
 ---
 
-## The Problem with `claude -p`
+## What's Wrong with `claude -p`?
 
 The initial orchestrator used `subprocess.Popen` with `claude -p`:
 
@@ -38,7 +47,7 @@ For a MUD-style terminal display where multiple agents run in parallel and strea
 
 ---
 
-## The SDK Approach
+## How Does the SDK Approach Fix This?
 
 `claude-agent-sdk` (Python) provides `query()`, an async generator that yields messages per turn — including every intermediate turn between tool calls.
 
@@ -96,7 +105,7 @@ One caveat: if the agent's system prompt or output format changes, delete the re
 
 ---
 
-## Parallel Execution
+## How Do You Run Multiple Agents in Parallel?
 
 Multiple agents run concurrently with `asyncio.gather`:
 

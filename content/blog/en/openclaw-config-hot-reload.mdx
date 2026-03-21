@@ -6,6 +6,15 @@ updatedAt: "2026-02-25"
 tags: ["AI Agent", "OpenClaw", "Configuration", "Developer Workflow"]
 series: "OpenClaw"
 part: 6
+faq:
+  - q: "Does OpenClaw gateway hot-reload config changes without a restart?"
+    a: "Yes. OpenClaw has a built-in file watcher on ~/.openclaw/openclaw.json. Save the file and the gateway reloads within 1-2 seconds — the service PID doesn't change and active sessions are not interrupted. Confirm with: tail -f /tmp/openclaw/gateway-stdout.log and look for 'Config reloaded'."
+  - q: "What OpenClaw config fields hot-reload and which require a service restart?"
+    a: "Hot-reloads: Telegram botToken, model endpoint, primary model, generation parameters (temperature, max_tokens, chat_template_kwargs), skill definitions, memory paths. Requires restart: port bindings, service-level environment variables in the launchd plist, and the file watcher itself."
+  - q: "How do I distinguish a Telegram 401 error from a transient network error in OpenClaw?"
+    a: "undici 'Network request failed' errors are transient — the gateway retries automatically, no action needed. 401 Unauthorized means the botToken in openclaw.json is invalid — fix the token, save the file, it's live within 2 seconds. 503 means the gateway service itself is down: launchctl list | grep openclaw."
+  - q: "Why does OpenClaw config change have no effect even after saving?"
+    a: "The most common cause is invalid JSON — a trailing comma or missing brace prevents the reload. The gateway logs the parse error instead of silently ignoring it. Check /tmp/openclaw/gateway-stdout.log for a parse error message, fix the JSON syntax, then save again."
 ---
 
 ## Preface
@@ -16,7 +25,7 @@ This picks up from [Zero API Cost: Running OpenClaw on DGX Spark + Mac Mini](/en
 
 ---
 
-## The Problem
+## What Was the Config Iteration Loop Before Hot-Reload Was Known?
 
 Early OpenClaw development involves a lot of config iteration. You're swapping model endpoints, adjusting generation parameters, testing Telegram bot configurations, tuning skill settings. Each change needs to be verified before you move to the next one.
 
@@ -48,7 +57,7 @@ It is also unnecessary.
 
 ---
 
-## The Discovery
+## How Does Hot-Reload Actually Work?
 
 OpenClaw gateway has a built-in file watcher on `~/.openclaw/openclaw.json`. Save the file, and the gateway reloads the changed values within one to two seconds. No restart. The service stays running, active sessions are not interrupted, and the new config is live immediately.
 
@@ -65,7 +74,7 @@ This is not a minor convenience. It's the difference between a 30-second iterati
 
 ---
 
-## What Hot-Reloads
+## What Config Fields Hot-Reload Instantly?
 
 These fields reload immediately on file save:
 

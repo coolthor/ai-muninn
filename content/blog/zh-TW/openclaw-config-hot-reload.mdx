@@ -6,6 +6,15 @@ updatedAt: "2026-02-25"
 tags: ["AI Agent", "OpenClaw", "Configuration", "Developer Workflow"]
 series: "OpenClaw"
 part: 6
+faq:
+  - q: "OpenClaw gateway 可以在不重啟的情況下熱重載 config 嗎？"
+    a: "可以。OpenClaw 對 ~/.openclaw/openclaw.json 有內建的 file watcher。儲存檔案後，gateway 在 1-2 秒內重載——服務 PID 不變，進行中的 session 不受影響。確認方式：tail -f /tmp/openclaw/gateway-stdout.log，看到 'Config reloaded' 即生效。"
+  - q: "OpenClaw config 哪些欄位可以熱重載，哪些需要重啟服務？"
+    a: "熱重載：Telegram botToken、model endpoint、primary model、generation 參數（temperature、max_tokens、chat_template_kwargs）、skill 定義、memory 路徑。需要重啟：port binding、launchd plist 裡的 service-level 環境變數、file watcher 本身。"
+  - q: "如何區分 OpenClaw 的 Telegram 401 錯誤和短暫網路錯誤？"
+    a: "undici 的 'Network request failed' 是短暫錯誤——gateway 會自動重試，不需要任何動作。401 Unauthorized 代表 openclaw.json 裡的 botToken 無效——修正 token、存檔，2 秒內生效。503 代表 gateway 服務本身沒有跑：launchctl list | grep openclaw。"
+  - q: "為什麼 OpenClaw config 儲存後還是沒有效果？"
+    a: "最常見原因是 JSON 語法錯誤——多餘的逗號或缺少大括號會讓重載失敗。Gateway 會把 parse error 記到 log 裡（不是靜默忽略）。檢查 /tmp/openclaw/gateway-stdout.log 是否有 parse error 訊息，修正 JSON 語法後再次儲存。"
 ---
 
 ## 前言
@@ -16,7 +25,7 @@ part: 6
 
 ---
 
-## 問題所在
+## 不知道有熱重載之前，Config 迭代有多慢？
 
 早期 OpenClaw 開發需要大量的 config 迭代。你在換模型端點、調整生成參數、測試 Telegram bot 設定、調整 skill 設定。每次改動都需要在進入下一個之前驗證。
 
@@ -48,7 +57,7 @@ tail -f /tmp/openclaw/gateway-stdout.log
 
 ---
 
-## 發現
+## 熱重載是怎麼運作的？
 
 OpenClaw gateway 對 `~/.openclaw/openclaw.json` 有內建的 file watcher。儲存檔案，gateway 在一到兩秒內重載改動的值。不需要重啟。服務持續運行，進行中的 session 不受影響，新的 config 立即生效。
 
@@ -65,7 +74,7 @@ tail -f /tmp/openclaw/gateway-stdout.log
 
 ---
 
-## 什麼可以熱重載
+## 哪些 Config 欄位可以立即熱重載？
 
 這些欄位在儲存時立即重載：
 

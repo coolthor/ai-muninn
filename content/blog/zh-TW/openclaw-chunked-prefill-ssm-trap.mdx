@@ -6,6 +6,15 @@ updatedAt: "2026-03-06"
 tags: ["vLLM", "SSM", "Qwen", "DGX Spark", "LLM Serving", "Performance"]
 series: "OpenClaw"
 part: 2
+faq:
+  - q: "為什麼 --enable-chunked-prefill 讓 vLLM 上的 Qwen3.5-35B 吞吐量掉了 8 倍？"
+    a: "Qwen3.5-35B-A3B 使用 SSM（DeltaNet）遞迴 layer，需要 sequential state 傳遞。Chunked prefill 把 prompt 切成片段，但每個 SSM chunk 都必須從上一個 chunk 接收 hidden state——跨片段的 overhead 不斷累積。實測結果是 47 tok/s 跌到 5.7 tok/s，衰退了一個數量級。"
+  - q: "哪些 LLM 架構和 vLLM 的 --enable-chunked-prefill 不相容？"
+    a: "所有含有 recurrent layer 的模型：Mamba、DeltaNet、Mamba2、RWKV、SSM hybrid。包含 Qwen3.5-35B-A3B 和 qwen3-coder-next。標準 Transformer（Llama、Mistral）和純 MoE 模型（GLM-4.7-Flash）可以安全使用。查看 model card 架構說明中是否有 'mamba'、'ssm'、'deltanet' 或 'recurrent'。"
+  - q: "如何確認 vLLM 是否在自己沒設定的情況下啟用了 chunked prefill？"
+    a: "某些 vLLM 版本會預設啟用 chunked prefill。執行：docker logs qwen35 2>&1 | grep -i 'chunked'。正確情況是沒有輸出或看到 'Chunked prefill: disabled'。如果看到 'Chunked prefill: enabled'，在 serve command 明確加上 --disable-chunked-prefill。"
+  - q: "vLLM 吞吐量崩潰但沒有任何錯誤，如何診斷？"
+    a: "吞吐量崩潰但 server 看起來正常（請求成功、沒有 error），先查 configuration flag，再查 model 和硬體。SSM 模型的第一個嫌疑是 --enable-chunked-prefill。同時也要確認沒有 Ollama 記憶體衝突，以及每個請求是否都帶了 enable_thinking: false。"
 ---
 
 ## 前言
@@ -16,7 +25,7 @@ part: 2
 
 ---
 
-## 事故經過
+## 加了 --enable-chunked-prefill 之後發生了什麼？
 
 [Qwen3.5-35B 的 vLLM 遷移](/zh-TW/blog/dgx-spark-vllm-qwen35-setup)已經完成，model 跑在 ~47 tok/s。當時在嘗試為多個 agent 並發工作負載擠出更多 throughput，翻了一下可以調整的 flag。
 
@@ -30,7 +39,7 @@ Flag 沒有讓 vLLM crash，也沒有產生任何錯誤訊息。Server 啟動，
 
 ---
 
-## 根本原因
+## 為什麼 Chunked Prefill 會摧毀 SSM 模型的吞吐量？
 
 Qwen3.5-35B-A3B 是 SSM+MoE hybrid 架構。名字裡的「A3B」代表它使用了 DeltaNet — 一種 state space model 架構，搭配 MoE 層一起運作。這不是標準的 Transformer。
 
@@ -52,7 +61,7 @@ Chunked prefill 把 prompt 切成 segment，以交錯方式批次處理。對純
 
 ---
 
-## 哪些 Model 會受影響
+## 哪些模型架構會受影響？
 
 任何有 recurrent layer 的 model（SSM、Mamba、DeltaNet、Mamba2、RWKV 或類似架構）都會受影響。關鍵是 model 架構，不是名字：
 
@@ -65,7 +74,7 @@ Chunked prefill 把 prompt 切成 segment，以交錯方式批次處理。對純
 
 ---
 
-## 解法
+## 如何修正？
 
 把 flag 移掉，就這樣。Qwen3.5-35B-A3B-FP8 的可用啟動指令不包含 `--enable-chunked-prefill`：
 

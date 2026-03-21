@@ -6,6 +6,15 @@ updatedAt: "2026-03-07"
 tags: ["vLLM", "Ollama", "GPU Memory", "DGX Spark", "GB10", "LLM Serving"]
 series: "OpenClaw"
 part: 3
+faq:
+  - q: "Why does vLLM OOM on a 128GB machine when the model only needs 35GB?"
+    a: "Ollama's KEEP_ALIVE=2h keeps the last-used model in memory for two hours after use. On a unified memory machine, Ollama and vLLM share the same pool. If Ollama has 19-51GB parked from a previous session, vLLM's startup allocation fails despite the machine having enough total memory."
+  - q: "How do I check what Ollama has loaded in GPU memory on GB10?"
+    a: "curl -s http://localhost:11434/api/ps — this returns the list of models currently loaded, their size, and VRAM usage. nvidia-smi does not work on GB10 (returns N/A) because unified memory has no separate VRAM allocation to query."
+  - q: "How do I immediately unload a model from Ollama memory without restarting?"
+    a: "POST to the generate endpoint with keep_alive: 0 — e.g., curl -X POST http://localhost:11434/api/generate -d '{\"model\": \"glm-4.7-flash:latest\", \"keep_alive\": 0}'. This evicts the model immediately, not 'set TTL to zero going forward.'"
+  - q: "Should I set OLLAMA_KEEP_ALIVE=0 permanently when using vLLM on the same machine?"
+    a: "Yes, if vLLM is your primary serving path. Set OLLAMA_KEEP_ALIVE=0 in the systemd override. The tradeoff: every Ollama request incurs a 15-25 second cold load. Keep KEEP_ALIVE=2h only if Ollama is your only model server."
 ---
 
 ## Preface
@@ -16,7 +25,7 @@ That's what Ollama's `KEEP_ALIVE` does to GPU memory on a unified-memory machine
 
 ---
 
-## The Incident
+## Why Did vLLM OOM on a 128GB Machine?
 
 Every vLLM container restart on the GX10 had about a 50% chance of failing with an OOM error during model load. The machine has 128GB of unified memory. [Qwen3.5-35B-A3B-FP8](https://huggingface.co/Qwen/Qwen3.5-35B-A3B-FP8) needs roughly 35GB for weights. With `--gpu-memory-utilization 0.90` and fp8 KV cache, vLLM wants about 115GB total at startup.
 
@@ -49,7 +58,7 @@ That assumption is wrong when vLLM is your primary serving path. Ollama sits idl
 
 ---
 
-## Why KEEP_ALIVE=2h Exists
+## Why Does KEEP_ALIVE=2h Exist?
 
 This is worth understanding before dismissing the default as stupid.
 
@@ -61,7 +70,7 @@ It becomes a problem once you add vLLM to the same machine. Now you have two mod
 
 ---
 
-## The Manual Fix
+## How Do You Manually Clear Ollama's Memory Before a vLLM Restart?
 
 When vLLM needs a restart and Ollama has something loaded, unload it first:
 
@@ -95,7 +104,7 @@ curl -X POST http://localhost:11434/api/generate \
 
 ---
 
-## The Permanent Fix
+## What Is the Permanent Fix When vLLM Is Your Primary Backend?
 
 If vLLM is your primary serving path and Ollama is a secondary/backup, set `KEEP_ALIVE=0` globally:
 
@@ -128,7 +137,7 @@ With `KEEP_ALIVE=0`, Ollama unloads a model as soon as the request completes. Th
 
 ---
 
-## The nvidia-smi Dead End
+## Why Doesn't nvidia-smi Show Memory Usage on GB10?
 
 One natural debugging instinct on a GPU machine is to run `nvidia-smi` and look at memory usage. On GB10, this doesn't work:
 

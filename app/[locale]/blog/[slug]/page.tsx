@@ -1,7 +1,7 @@
 import { notFound } from 'next/navigation'
 import Link from 'next/link'
 import { MDXRemote } from 'next-mdx-remote/rsc'
-import { getAllSlugs, getPost, hasTranslation } from '@/lib/blog'
+import { getAllSlugs, getPost, hasTranslation, type FaqItem } from '@/lib/blog'
 import { routing } from '@/i18n/routing'
 import type { Metadata } from 'next'
 import TLDRCard from '@/components/TLDRCard'
@@ -67,7 +67,7 @@ export async function generateMetadata({
 }
 
 function JsonLd({ post, url, locale, slug }: {
-  post: { title: string; description: string; date: string; updatedAt?: string; tags: string[]; series?: string; part?: number }
+  post: { title: string; description: string; date: string; updatedAt?: string; tags: string[]; series?: string; part?: number; faq?: FaqItem[] }
   url: string
   locale: string
   slug: string
@@ -129,6 +129,16 @@ function JsonLd({ post, url, locale, slug }: {
     ],
   }
 
+  const faqSchema = post.faq?.length ? {
+    '@context': 'https://schema.org',
+    '@type': 'FAQPage',
+    mainEntity: post.faq.map(({ q, a }) => ({
+      '@type': 'Question',
+      name: q,
+      acceptedAnswer: { '@type': 'Answer', text: a },
+    })),
+  } : null
+
   return (
     <>
       <script
@@ -139,6 +149,12 @@ function JsonLd({ post, url, locale, slug }: {
         type="application/ld+json"
         dangerouslySetInnerHTML={{ __html: JSON.stringify(breadcrumbSchema) }}
       />
+      {faqSchema && (
+        <script
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{ __html: JSON.stringify(faqSchema) }}
+        />
+      )}
     </>
   )
 }
@@ -160,7 +176,7 @@ export default async function BlogPost({
 
   return (
     <article>
-      <JsonLd post={{ title: post.title, description: post.description, date: post.date, updatedAt: post.updatedAt, tags: post.tags, series: post.series, part: post.part }} url={url} locale={l} slug={slug} />
+      <JsonLd post={{ title: post.title, description: post.description, date: post.date, updatedAt: post.updatedAt, tags: post.tags, series: post.series, part: post.part, faq: post.faq }} url={url} locale={l} slug={slug} />
 
       {/* breadcrumb */}
       <div className="mb-8 text-xs" style={{ color: 'var(--text-dim)' }}>
@@ -208,6 +224,23 @@ export default async function BlogPost({
       <div className="prose">
         <MDXRemote source={post.content} components={{ TLDRCard }} />
       </div>
+
+      {/* FAQ section */}
+      {post.faq?.length ? (
+        <section className="mt-12 pt-8 border-t" style={{ borderColor: 'var(--border)' }}>
+          <h2 className="text-sm font-semibold mb-6 tracking-wider uppercase" style={{ color: 'var(--cyan)' }}>
+            {isZh ? '常見問題' : 'FAQ'}
+          </h2>
+          <dl className="space-y-6">
+            {post.faq.map(({ q, a }, i) => (
+              <div key={i}>
+                <dt className="text-sm font-semibold mb-1" style={{ color: 'var(--text-primary)' }}>{q}</dt>
+                <dd className="text-sm leading-relaxed" style={{ color: 'var(--text-dim)' }}>{a}</dd>
+              </div>
+            ))}
+          </dl>
+        </section>
+      ) : null}
 
       {/* footer nav */}
       <div className="mt-12 pt-6 border-t text-sm" style={{ borderColor: 'var(--border)' }}>

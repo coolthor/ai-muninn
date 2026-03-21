@@ -6,6 +6,15 @@ updatedAt: "2026-02-26"
 tags: ["Dev Workflow", "Claude Code", "Gemini", "Codex", "Multi-AI", "Code Review"]
 series: "AI Workflow"
 part: 3
+faq:
+  - q: "How do I get two AI models to review the same code and compare their answers?"
+    a: "Use a /debate command that routes the same prompt to Codex CLI (via mcp__pal__clink with cli_name='codex') and Gemini CLI (cli_name='gemini') in parallel, then synthesizes where they agree and disagree. Disagreements signal genuine uncertainty; agreements carry more weight than either opinion alone."
+  - q: "What is the difference between Gemini and Codex for code review?"
+    a: "Gemini leads with architecture — it challenges whether the approach is right before looking at implementation. Codex dives into the code first, finding type issues, edge cases, and function-level bugs. Running both catches structural flaws (Gemini) and concrete bugs (Codex) that a single reviewer misses."
+  - q: "When should I use multi-AI debate for code review instead of a single model?"
+    a: "Use /debate for major architectural decisions, security-sensitive code (auth, payments, order execution), and pre-launch reviews. Skip it for typos, config values, or changes already covered by a dedicated security review agent — the overhead of two model calls isn't worth it for low-stakes changes."
+  - q: "How do I pass code files to both Codex and Gemini CLI in Claude Code?"
+    a: "Use mcp__pal__clink with absolute_file_paths set for each model call. Codex reads all provided files before engaging; Gemini reasons about architecture from them. Pass continuation_id on follow-up calls to maintain context without re-uploading files."
 ---
 
 ## Preface
@@ -18,7 +27,7 @@ For the compliance and hook infrastructure that makes custom commands like this 
 
 ---
 
-## The Problem
+## Why Does Single-Model Code Review Have a Structural Flaw?
 
 Most AI-assisted code review has a structural flaw: the model agrees with you. Not because it's sycophantic (though that's also a risk), but because it was trained on similar code, with similar patterns, by developers with similar assumptions. Ask a model to review an architecture decision and it will generally validate whatever you've already committed to, because the inputs it was trained on probably looked similar.
 
@@ -28,7 +37,7 @@ When two models from different companies, trained on different data, disagree ab
 
 ---
 
-## How /debate Works
+## How Does /debate Work?
 
 The `/debate` command is a Claude Code skill. Claude acts as orchestrator: it formats the debate topic, sends it to both models via PAL MCP, collects their responses, and synthesizes the output.
 
@@ -63,7 +72,7 @@ Three modes are available:
 
 ---
 
-## Observed Behavioral Differences
+## What Are the Observed Behavioral Differences Between Gemini and Codex?
 
 After running this system across several projects, the behavioral split between the two models is consistent enough to be useful:
 

@@ -6,6 +6,15 @@ updatedAt: "2026-03-21"
 tags: ["openclaw", "Telegram", "streaming", "Bot API", "undici", "GLM"]
 series: "OpenClaw"
 part: 10
+faq:
+  - q: "How do I replace choppy editMessageText polling with live streaming in openclaw Telegram?"
+    a: "Patch sendOrEditStreamMessage in dist/reply-XaR8IPbY.js to call ctx.api.sendMessageDraft(chatId, draftId, text) instead of editMessageText. Generate a random draftId per turn. The draft bubble updates live as tokens arrive and disappears automatically when the final sendMessage is sent."
+  - q: "Why does my openclaw bot go silent for 20 seconds during reasoning with GLM-4.7-Flash?"
+    a: "With --reasoning-parser glm45 enabled, thinking tokens route to the reasoning field, not content. The streaming ticker fires on empty content strings and does nothing. Fix: remove --reasoning-parser glm45 and let think blocks appear inline in content. The patch filters <think>...</think> during streaming and shows content after </think>."
+  - q: "Why does sendMessageDraft streaming work in group chats but silently fail in private DMs?"
+    a: "threadParams is undefined in private DM chats. Accessing threadParams.message_thread_id without optional chaining throws a TypeError, crashes the streaming call, and the bot stops responding in DMs. Use threadParams?.message_thread_id to handle both contexts."
+  - q: "What draftId value should I use for Telegram sendMessageDraft?"
+    a: "Any non-zero integer. Use the same draftId throughout a turn to update the same bubble. A draftId of 0 is invalid and sendMessageDraft will appear to do nothing. Generate with Math.ceil(Math.random() * 1e9) per turn."
 ---
 
 ## Preface
@@ -106,7 +115,7 @@ const sendOrEditStreamMessage = async (text) => {
 
 ---
 
-## The Optional Chaining Trap
+## What Is the Optional Chaining Trap in Private DM Chats?
 
 The spread for `message_thread_id`:
 
@@ -126,7 +135,7 @@ The spread for `message_thread_id`:
 
 ---
 
-## The Reasoning Parser Problem
+## Why Does the Reasoning Parser Cause a 20-Second Silent Gap?
 
 With `--reasoning-parser glm45` enabled for GLM-4.7-Flash, the thinking tokens never reach `content`. The streaming ticker fires on empty strings and does nothing. For 20+ seconds the Telegram chat appears dead.
 

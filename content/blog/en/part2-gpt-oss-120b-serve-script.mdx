@@ -6,6 +6,15 @@ updatedAt: "2026-03-19"
 tags: ["DGX Spark", "SM121", "vLLM", "gpt-oss", "MXFP4", "Blackwell", "LLM Serving"]
 series: "gpt-oss-120B on DGX Spark"
 part: 1
+faq:
+  - q: "How do I serve gpt-oss-120B on DGX Spark (SM121) with vLLM at near-theoretical speed?"
+    a: "Use VLLM_MXFP4_BACKEND=marlin (not VLLM_NVFP4_GEMM_BACKEND — the latter silently does nothing). Confirm startup log shows 'Using backend: marlin', not 'Auto-selected: CUTLASS_FP4'. Remove --enforce-eager. With correct config, gpt-oss-120B hits ~59 tok/s on GB10 (273 GB/s bandwidth, 60 GB weights)."
+  - q: "What is the correct env var to force Marlin backend in vLLM for MXFP4 models?"
+    a: "VLLM_MXFP4_BACKEND=marlin — not VLLM_NVFP4_GEMM_BACKEND. In vLLM 0.17.1, VLLM_NVFP4_GEMM_BACKEND does not exist and is silently ignored. The startup log will show 'Auto-selected: CUTLASS_FP4' if the wrong variable is used, and repetition loops follow."
+  - q: "Why does tiktoken fail to load the gpt-oss tokenizer on an air-gapped machine?"
+    a: "tiktoken downloads o200k_base.tiktoken from OpenAI's CDN at startup. It caches using the SHA1 hash as the filename (fb374d419588a4632f3f557e76b4b70aebbca790 — no extension). Pre-download on an internet-connected machine and set TIKTOKEN_RS_CACHE_DIR to point to the directory containing the hash-named file."
+  - q: "Why does gpt-oss-120B return content: null even though the model is generating tokens?"
+    a: "--reasoning-parser openai_gptoss routes all output to the reasoning field and sets content to null. Standard OpenAI-compatible clients read content, so they get nothing. Remove --reasoning-parser openai_gptoss unless you specifically need the reasoning channel separated."
 ---
 
 ## Preface
@@ -22,7 +31,7 @@ Between zero and that number: six bugs. This is the path through them.
 
 ---
 
-## The Model
+## What Makes gpt-oss-120B Different from Other MXFP4 Models?
 
 `gpt-oss-120B` is Microsoft's open-source 120B model, MXFP4-quantized, in a format called **harmony**. It uses the `openai_harmony` tokenizer (which depends on tiktoken, not HuggingFace tokenizers). It has a `--reasoning-parser` designed specifically for its output format. These three facts each contribute exactly one bug to this story.
 
@@ -180,7 +189,7 @@ After this fix: `hi` → normal response. Longer story request → 3,970 chars, 
 
 ---
 
-## The Working Serve Script
+## What Does the Working Serve Script Look Like?
 
 ```bash
 #!/bin/bash
@@ -240,7 +249,7 @@ The arithmetic: GB10 has 273 GB/s memory bandwidth. 120B × 4-bit ≈ 60 GB. At 
 
 ---
 
-## What This Means for a Local Agent
+## What Does 59 tok/s at 131K Context Mean for a Local Agent?
 
 59 tok/s at 131K context, on a machine that fits under a desk.
 

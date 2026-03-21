@@ -6,6 +6,15 @@ updatedAt: "2026-03-19"
 tags: ["DGX Spark", "SM121", "Qwen3.5-122B", "vLLM", "NVFP4", "Marlin", "GDN", "LLM Serving"]
 series: "Qwen3.5-122B on DGX Spark"
 part: 1
+faq:
+  - q: "Why is Qwen3.5-122B running at 14 tok/s on DGX Spark even after applying all SM121 fixes?"
+    a: "Qwen3.5-122B is a hybrid architecture with GDN (Gated Delta Network) SSM layers that must stay in BF16. Marlin has optimized kernels for standard linear/MoE layers but no specialized kernel for GDN. Every GDN GEMM falls back to a generic compute path. On GB10 (273 GB/s), this averages throughput to ~14 tok/s instead of the theoretical ~30 tok/s ceiling."
+  - q: "Is 14 tok/s on Qwen3.5-122B a configuration error or a kernel gap?"
+    a: "A software kernel gap, not a configuration error. If you've set VLLM_MXFP4_BACKEND=marlin, --moe-backend marlin, and the startup log confirms 'Using backend: marlin', you've hit the ceiling. No flag fixes it. The bottleneck is a missing Marlin GDN kernel. Stop tuning and wait for the kernel to land."
+  - q: "What is the theoretical decode ceiling for Qwen3.5-122B NVFP4 on GB10?"
+    a: "~30 tok/s. The math: 122B × 4-bit ≈ 61 GB. At 273 GB/s bandwidth, moving 61 GB takes ~0.22 seconds per decode step. With optimized kernels for all layer types, the ceiling is ~30 tok/s. Without GDN kernel support, throughput averages to ~14 tok/s."
+  - q: "What is the practical choice between gpt-oss-120B and Qwen3.5-122B on DGX Spark today?"
+    a: "For interactive use, gpt-oss-120B at ~59 tok/s is the correct choice. Qwen3.5-122B at 14 tok/s is usable for offline batch workloads where latency matters less. Revisit Qwen3.5-122B when Marlin adds GDN kernel support."
 ---
 
 ## Preface
@@ -20,7 +29,7 @@ The analogy: imagine a 12-lane highway where six lanes are freshly paved and six
 
 ---
 
-## What I Wanted
+## What Was the Expected Performance Target?
 
 The goal was to use [Qwen3.5-122B-A12B-NVFP4](https://huggingface.co/Qwen/Qwen3.5-122B-A12B-NVFP4) as the primary model on the DGX Spark. 122B parameters, NVFP4 quantization, 128 GB unified memory — the math works out: 122B × 4-bit ≈ 61 GB, leaving room for KV cache. With gpt-oss-120B hitting [59 tok/s](/en/blog/part2-gpt-oss-120b-serve-script) on the same box, the expectation for 122B NVFP4 was in the same range. Not identical — larger model, different architecture — but comparable.
 
@@ -28,7 +37,7 @@ The goal was to use [Qwen3.5-122B-A12B-NVFP4](https://huggingface.co/Qwen/Qwen3.
 
 ---
 
-## What I Tried
+## What Configuration Changes Were Tried Before Diagnosing the Root Cause?
 
 After the Part 1 fixes (SM121 PTX path, Marlin thread race, SupportsQuant, CUTLASS_FP4 exclusion), the model loads and generates correct output. The first tokens arrive fast. Then throughput stabilizes at 14 tok/s.
 
@@ -45,7 +54,7 @@ Everything obvious was tried:
 
 ---
 
-## Where the Problem Actually Is
+## Where Is the Actual Performance Bottleneck?
 
 Qwen3.5-122B-A12B is a **hybrid architecture** — not a standard Transformer. It combines two types of layers:
 

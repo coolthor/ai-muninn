@@ -6,6 +6,15 @@ updatedAt: "2026-03-05"
 tags: ["DGX Spark", "GB10", "vLLM", "Ollama", "Qwen3.5", "Docker", "Blackwell", "AI Agent"]
 series: "DGX Spark"
 part: 2
+faq:
+  - q: "如何在 DGX Spark 上從 Ollama 遷移到 vLLM 以改善 TTFT？"
+    a: "用 Docker 跑 Qwen3.5-35B-A3B-FP8，使用 cu130-nightly image（不是 stable）。vLLM 的 prefix caching 讓 TTFT 從 Ollama 的 2-4 秒降到 0.12 秒（對重複 system prompt context）。decode 速度維持在約 47 tok/s。"
+  - q: "為什麼 --enable-chunked-prefill 讓 Qwen3.5-35B 吞吐量從 47 降到 5.7 tok/s？"
+    a: "Qwen3.5-35B-A3B 是 SSM+MoE hybrid 架構，含有 Mamba 風格的 recurrent layer。Chunked prefill 把 prompt 切成片段，但 SSM layer 需要跨片段傳遞 sequential state——overhead 不斷累積。SSM 或 SSM+MoE hybrid 模型一律不要用 --enable-chunked-prefill。"
+  - q: "如何在 vLLM 服務的 Qwen3.5 上停用 thinking mode？"
+    a: "每個請求都要帶 chat_template_kwargs: {enable_thinking: false}——這無法在 server 端統一設定。不加這個，Qwen3.5 預設生成 <think>...</think> token，client 端讀到的 content 是 null。同時確保 max_tokens 夠大，讓模型在思考之後還有 budget 輸出。"
+  - q: "為什麼在 128GB 的 GB10 重啟 vLLM 時會 OOM？"
+    a: "Ollama 的 KEEP_ALIVE=2h 讓 model 留在 unified memory pool 裡。啟動 vLLM 前，先用 'curl -s http://localhost:11434/api/ps' 確認有沒有 model 在記憶體，再用 'curl -X POST http://localhost:11434/api/generate -d {\"model\": \"MODEL_NAME\", \"keep_alive\": 0}' 卸載。"
 ---
 
 ## 前言
@@ -18,7 +27,7 @@ part: 2
 
 ---
 
-## 為什麼從 Ollama 換到 vLLM
+## 為什麼要從 Ollama 換到 vLLM？
 
 核心問題是 TTFT — 第一個 token 出來的時間。互動式聊天，2-3 秒的 TTFT 只是讓人不耐煩。一個每小時呼叫 model 幾十次的 always-on agent，這個延遲會累積成真正的問題。
 
@@ -215,7 +224,7 @@ pydantic.error_wrappers.ValidationError: max_num_batched_tokens (2048) must be >
 
 ---
 
-## 連接你的 Agent
+## 如何把 Agent 連接到 vLLM？
 
 vLLM 在 port 8000 上提供 OpenAI 相容的 API。接上 agent 很直接 — 唯一的額外步驟是每個 request 都要帶 `chat_template_kwargs`。
 

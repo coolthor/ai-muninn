@@ -8,6 +8,11 @@ function blogDir(locale: string) {
   return path.join(BLOG_ROOT, locale)
 }
 
+export interface FaqItem {
+  q: string
+  a: string
+}
+
 export interface BlogPost {
   slug: string
   title: string
@@ -18,6 +23,7 @@ export interface BlogPost {
   series?: string
   part?: number
   readingTime: number
+  faq?: FaqItem[]
 }
 
 export interface BlogPostWithContent extends BlogPost {
@@ -38,6 +44,7 @@ function parseFile(filePath: string, slug: string): BlogPost {
     series: data.series,
     part: data.part,
     readingTime: Math.ceil(wordCount / 200),
+    faq: data.faq,
   }
 }
 
@@ -73,6 +80,7 @@ export function getPost(slug: string, locale = 'en'): BlogPostWithContent | null
     series: data.series,
     part: data.part,
     readingTime: Math.ceil(wordCount / 200),
+    faq: data.faq,
     content,
   }
 }

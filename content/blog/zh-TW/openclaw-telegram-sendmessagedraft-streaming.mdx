@@ -6,6 +6,15 @@ updatedAt: "2026-03-21"
 tags: ["openclaw", "Telegram", "streaming", "Bot API", "GLM"]
 series: "OpenClaw"
 part: 10
+faq:
+  - q: "怎麼把 openclaw Telegram 的跳格式更新改成真正的即時串流？"
+    a: "把 dist/reply-XaR8IPbY.js 裡的 sendOrEditStreamMessage 改成呼叫 ctx.api.sendMessageDraft(chatId, draftId, text)，不再用 editMessageText。每個 turn 生成一個隨機的 draftId。草稿泡泡會隨 token 到來持續更新，最後的 sendMessage 送出後泡泡自動消失。"
+  - q: "為什麼 openclaw 配合 GLM-4.7-Flash 使用時，開始前會有 20 秒靜默？"
+    a: "啟用 --reasoning-parser glm45 後，思考 token 被路由到 reasoning 欄位，不進 content。串流 ticker 觸發空字串，什麼都不做。修法：移除 --reasoning-parser glm45，讓 think block 以 <think>...</think> 出現在 content 裡，patch 會過濾掉 </think> 之前的內容，之後的文字才推給使用者。"
+  - q: "為什麼 sendMessageDraft 串流在群組裡正常，但在私訊裡靜默失敗？"
+    a: "私訊沒有 thread 概念，threadParams 是 undefined。不加 optional chaining 直接存取 threadParams.message_thread_id 會 throw TypeError，串流呼叫失敗，bot 在私訊裡靜默停止回應。改用 threadParams?.message_thread_id 就能同時處理私訊和群組。"
+  - q: "sendMessageDraft 的 draftId 應該填什麼值？"
+    a: "任意非零整數。同一個 turn 內要用同一個 draftId 才能更新同一個泡泡。draftId 為 0 是無效值，sendMessageDraft 不會有任何反應。建議用 Math.ceil(Math.random() * 1e9) 每個 turn 生成。"
 ---
 
 ## 前言
@@ -107,7 +116,7 @@ const sendOrEditStreamMessage = async (text) => {
 
 ---
 
-## Optional Chaining 的坑
+## 私訊裡的 Optional Chaining 坑是什麼？
 
 注意 `message_thread_id` 那段的展開：
 
@@ -127,7 +136,7 @@ const sendOrEditStreamMessage = async (text) => {
 
 ---
 
-## Reasoning Parser 的處理
+## Reasoning Parser 為什麼會造成 20 秒的靜默？
 
 啟用 `--reasoning-parser glm45` 後，思考 token 永遠不進 `content`，串流 ticker 打空字串，Telegram 沉默 20 秒。
 

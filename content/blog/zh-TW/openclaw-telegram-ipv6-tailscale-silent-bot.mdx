@@ -6,6 +6,15 @@ updatedAt: "2026-03-19"
 tags: ["Node.js", "Tailscale", "IPv6", "undici", "Happy Eyeballs", "Telegram", "Debugging", "Networking"]
 series: "OpenClaw"
 part: 8
+faq:
+  - q: "openclaw bot 收到訊息但完全沒有回應，process 還在跑，怎麼診斷？"
+    a: "bot 在接收端沒問題，但發送端失敗了。確認方法：curl -6 https://api.telegram.org（如果沒有真正的 IPv6，應該立刻失敗）vs curl -4 https://api.telegram.org（應該成功）。如果安裝了 Tailscale，它注入的 IPv6 路由看起來有效，但實際上是死路。"
+  - q: "Tailscale 如何讓 Node.js Telegram bot 靜默失效？"
+    a: "Tailscale 注入 IPv6 路由到 utun 介面，但除非設定 exit node，不提供真正的 IPv6 網路連線。路由表說 IPv6 可用，Node.js undici（Happy Eyeballs，RFC 8305）先嘗試 IPv6，撞到 EHOSTUNREACH，整個 request 失敗，從不 fallback 到 IPv4。"
+  - q: "設了 net.setDefaultAutoSelectFamily(false) 為什麼對 undici 沒有效果？"
+    a: "那個 flag 影響的是 Node.js 內建的 net 模組，不是 undici。Node.js 18+ 的 fetch() 在內部使用 undici，undici 有自己獨立的 autoSelectFamily 設定。兩個系統是分開的，見 nodejs/node #54359。正確的修法是 OPENCLAW_TELEGRAM_DISABLE_AUTO_SELECT_FAMILY=1。"
+  - q: "怎麼修復 openclaw 裡的 Tailscale IPv6 陷阱？"
+    a: "在 launchd plist 的環境變數裡設 OPENCLAW_TELEGRAM_DISABLE_AUTO_SELECT_FAMILY=1。這會在初始化時就把 undici Agent 的 autoSelectFamily: false 設好，從根本阻止 IPv6 嘗試，而不是在 EHOSTUNREACH 之後才嘗試 fallback。"
 ---
 
 ## 前言
@@ -18,7 +27,7 @@ Bot 顯示在線。Process 在跑。發了一則訊息。沒有任何回應。
 
 ---
 
-## 事發經過
+## 失敗的情境是什麼？
 
 13:00 左右，openclaw gateway 停止回應 Telegram 訊息。沒有 crash。沒有明顯的 error。背後的 AI agent 已經穩定跑了好幾天。
 
@@ -121,7 +130,7 @@ Skills 正在載入。Agent 開始處理訊息了。
 
 ---
 
-## 真正發生的事
+## 真正是什麼在失敗？
 
 所有東西都在運作——直到 gateway 嘗試回應的那一刻。
 
@@ -137,7 +146,7 @@ Skills 正在載入。Agent 開始處理訊息了。
 
 ---
 
-## 真正的罪犯：一張說謊的路由表
+## 真正的罪犯是什麼？一張說謊的路由表
 
 檢查 IPv6 路由表：
 
@@ -205,7 +214,7 @@ IPv6：死路。IPv4：沒問題。Node.js：先試 IPv6，撞到 `EHOSTUNREACH`
 
 ---
 
-## 沒有發揮作用的 Fallback
+## 內建的 Fallback 機制為什麼沒有發揮作用？
 
 Gateway 程式碼有一個 fallback 機制。當它偵測到 `ETIMEDOUT` 或 `EHOSTUNREACH`，會 log：
 
@@ -247,7 +256,7 @@ Log 裡每兩分鐘出現一次相同的序列。
 
 ---
 
-## 標準解法——但在這裡沒用
+## 標準的 Node.js IPv6 解法為什麼在這裡沒用？
 
 Node.js IPv6 問題的標準建議：
 
@@ -311,7 +320,7 @@ autoSelectFamily=false (env:OPENCLAW_TELEGRAM_DISABLE_AUTO_SELECT_FAMILY)
 
 ---
 
-## 為什麼 Tailscale 會造成這個問題，其他 VPN 不會
+## 為什麼 Tailscale 會造成這個問題，而其他 VPN 不會？
 
 大多數 VPN 要不是完全接管路由（包含 IPv6），就是在設定時直接停用 IPv6。
 
