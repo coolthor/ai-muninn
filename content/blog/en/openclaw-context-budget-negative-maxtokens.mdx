@@ -1,0 +1,122 @@
+---
+title: "[AI Agent] openclaw + 131K Context: When max_tokens Goes Negative"
+description: "Connecting openclaw to a 131K context model and hitting 400 max_tokens must be at least 1, got -1292. The context budget math, the config key trap, and the fix."
+date: "2026-03-21"
+tags: ["openclaw", "context window", "vLLM", "gpt-oss", "configuration"]
+series: "OpenClaw"
+part: 9
+---
+
+## Preface
+
+A navigation system that thinks the remaining fuel is negative doesn't stop the engine — it just refuses to start the next trip. That's what happened when openclaw was connected to gpt-oss-120B with its full 131K context window and the config hadn't caught up.
+
+This is a short one. The symptom is a 400 error. The cause is one wrong number. The fix is two lines. But there's a second trap hiding in the config schema that cost more time than the math did.
+
+---
+
+## The Error
+
+After getting gpt-oss-120B running (covered in the [previous article](/en/blog/part2-gpt-oss-120b-serve-script)), the first message through openclaw returned:
+
+```
+400 max_tokens must be at least 1, got -1292
+```
+
+The model was running fine. The vLLM server was responding to curl requests correctly. The error was coming from openclaw's outbound request to the model — specifically, the `max_tokens` value in the API call was negative.
+
+---
+
+## The Budget Math
+
+openclaw calculates `max_tokens` like this:
+
+```
+max_tokens = contextWindow - reserveTokens - currentPromptTokens
+```
+
+The config at the time had `contextWindow: 32768`. The problem: openclaw's agent has a fixed overhead before any user message is processed — system prompt, memory-lancedb autoRecall injection, skill definitions. In practice this overhead runs around 9,600–12,000 tokens.
+
+With `contextWindow: 32768` and ~10K tokens of system overhead, a modest conversation history is enough to push `currentPromptTokens` past the `contextWindow - reserveTokens` ceiling. The result: `max_tokens` becomes negative. openclaw sends it to the model anyway. The model rejects it with a 400.
+
+Compaction is supposed to catch this first — it fires when context gets too full and trims history. But compaction only helps if there's room to operate. With a 32K context window nearly consumed by system overhead alone, compaction never gets a chance to trigger.
+
+---
+
+## Fix Part 1: Set contextWindow Correctly
+
+gpt-oss-120B was serving at `--max-model-len 131072`. The openclaw model config needed to match:
+
+```json
+{
+  "id": "gpt-oss-120b",
+  "contextWindow": 131072
+}
+```
+
+With 131K as the ceiling, the math works: 131072 − 8192 (reserveTokens) = ~123K available for prompt content. The ~10-12K system overhead is now a rounding error instead of a crisis.
+
+Compaction settings that work with this window:
+
+```json
+{
+  "mode": "safeguard",
+  "reserveTokens": 8192,
+  "keepRecentTokens": 32768,
+  "reserveTokensFloor": 4096,
+  "maxHistoryShare": 0.5
+}
+```
+
+`reserveTokens: 8192` leaves room for model output without eating into the prompt budget. `keepRecentTokens: 32768` means recent history is preserved during compaction. The key insight: `reserveTokens` doesn't need to be large — its job is to ensure the model has output space, not to buffer the system overhead.
+
+---
+
+## Fix Part 2: The Config Key Trap
+
+Before finding the right values, there's a prerequisite: the config key itself.
+
+Several variations were tried before finding the correct one:
+
+```json
+"contextLength": 131072        // ← rejected by schema
+"context_window": 131072       // ← rejected by schema
+"max_tokens": 131072           // ← accepted, but wrong semantics
+"maxTokens": 131072            // ← accepted, interferes with budget calc
+"contextWindow": 131072        // ← correct
+```
+
+The openclaw `ModelDefinitionSchema` uses camelCase throughout. Snake_case keys are silently ignored — no error, no warning, the config just doesn't take effect. `maxTokens` is accepted but shouldn't be set: it overrides the per-request output token limit rather than informing the context budget calculation, which makes the math wrong in a different way.
+
+`contextWindow` is the correct key. Config changes are hot-reloaded — no restart required.
+
+---
+
+## What Was Gained
+
+**What cost the most time:**
+The config key trap. The model was configured, the math was understood, the fix was clear — but setting `context_window: 131072` (snake_case) did nothing. The openclaw config schema validation is silent on unknown keys. The error persisted, the budget looked correct on paper, and it took reading the `ModelDefinitionSchema` source to find `contextWindow`.
+
+**Transferable diagnostics:**
+- `400 max_tokens must be at least 1, got -XXXX` → openclaw's context budget math produced a negative number. Check `contextWindow` value in the model config, not the serve script.
+- Config change has no effect → check camelCase. openclaw schema rejects snake_case silently.
+- Compaction never firing → `contextWindow` is set too small relative to system overhead. The overhead for openclaw agents with memory-lancedb is ~10-12K tokens minimum.
+
+**The pattern that applies everywhere:**
+When connecting an agent to a larger context model, the agent config must match the model's actual `max-model-len`. If the agent thinks it has 32K but the model has 131K, you get negative math. If the model has 32K but the agent thinks it has 131K, you get OOM. The config must be explicit.
+
+---
+
+## Setup Checklist
+
+For openclaw connecting to a large context model:
+
+1. Confirm `--max-model-len` in the vLLM serve script.
+2. Set `contextWindow` (camelCase) in the model definition to match exactly.
+3. Set `reserveTokens` ≤ 10K — it's for output headroom, not overhead buffering.
+4. Keep `keepRecentTokens` at a fraction of the total window (e.g., 32K of 131K).
+5. Verify hot-reload took effect — check openclaw logs for model config reload confirmation.
+
+---
+
+*Also in this series: [callhelp — Spawning Codex from the Agent Loop](/en/blog/openclaw-callhelp-spawning-cli-from-agent-loop) · [Tailscale, IPv6, and Silent Telegram Failures](/en/blog/openclaw-telegram-ipv6-tailscale-silent-bot)*

@@ -1,0 +1,122 @@
+---
+title: "[AI Agent] openclaw 接上 131K Context：max_tokens 變負數的那一刻"
+description: "openclaw 串接 gpt-oss-120B，第一條訊息就收到 400 max_tokens must be at least 1, got -1292。Context budget 的數學、config key 的坑、以及修法。"
+date: "2026-03-21"
+tags: ["openclaw", "context window", "vLLM", "gpt-oss", "configuration"]
+series: "OpenClaw"
+part: 9
+---
+
+## 前言
+
+導航系統算出剩餘油量是負數，不會讓引擎停下——它只是拒絕開始下一段旅程。openclaw 接上 gpt-oss-120B 的 131K context window 時就是這樣，config 沒跟上，數學就先崩了。
+
+這篇很短。症狀是一個 400 error，原因是一個錯誤的數字，修法是兩行。但 config schema 裡藏著第二個坑，比數學計算花了更多時間。
+
+---
+
+## 錯誤訊息
+
+gpt-oss-120B 跑起來之後（見[上一篇](/zh-TW/blog/part2-gpt-oss-120b-serve-script)），第一條訊息透過 openclaw 發出去，收到：
+
+```
+400 max_tokens must be at least 1, got -1292
+```
+
+模型本身沒問題，vLLM server 的 curl 測試正常。問題出在 openclaw 送出去的 API request——`max_tokens` 欄位是負數。
+
+---
+
+## Budget 的計算方式
+
+openclaw 計算 `max_tokens` 的公式：
+
+```
+max_tokens = contextWindow - reserveTokens - currentPromptTokens
+```
+
+當時的 config 設了 `contextWindow: 32768`。問題在於：openclaw agent 在任何使用者訊息之前，就已經有固定的 overhead——system prompt、memory-lancedb autoRecall 注入、skill 定義，實際量落在 9,600–12,000 tokens 之間。
+
+32768 的 context window，扣掉 ~10K 的系統 overhead，一旦對話歷史稍微長一點，`currentPromptTokens` 就超過 `contextWindow - reserveTokens` 的上限，`max_tokens` 變負數，openclaw 把它送給模型，模型回 400。
+
+Compaction 應該在這之前介入——它會在 context 快滿時修剪歷史。但 compaction 需要空間才能運作。context window 幾乎被系統 overhead 填滿的情況下，compaction 根本沒機會觸發。
+
+---
+
+## 修法一：設對 contextWindow
+
+gpt-oss-120B 的 serve script 用了 `--max-model-len 131072`，openclaw 的 model config 要跟上：
+
+```json
+{
+  "id": "gpt-oss-120b",
+  "contextWindow": 131072
+}
+```
+
+131K 當上限，數學就正常了：131072 − 8192 (reserveTokens) ≈ 123K 可用於 prompt。~10-12K 的系統 overhead 變成小數點誤差，不再是定時炸彈。
+
+搭配的 compaction 設定：
+
+```json
+{
+  "mode": "safeguard",
+  "reserveTokens": 8192,
+  "keepRecentTokens": 32768,
+  "reserveTokensFloor": 4096,
+  "maxHistoryShare": 0.5
+}
+```
+
+`reserveTokens: 8192` 是給模型輸出留的空間，不是用來 buffer 系統 overhead 的。`keepRecentTokens: 32768` 確保 compaction 時保留最近的對話。
+
+---
+
+## 修法二：Config Key 的坑
+
+找到正確數值之前，有個前提要先過：key 本身要寫對。
+
+試過很多種寫法：
+
+```json
+"contextLength": 131072        // ← schema 拒絕，無效
+"context_window": 131072       // ← schema 拒絕，無效
+"max_tokens": 131072           // ← 被接受，但語意錯誤
+"maxTokens": 131072            // ← 被接受，干擾 budget 計算
+"contextWindow": 131072        // ← 正確
+```
+
+openclaw 的 `ModelDefinitionSchema` 全部用 camelCase。snake_case 的 key 會被靜默忽略——沒有 error，沒有 warning，config 直接不生效。`maxTokens` 雖然合法，但它覆蓋的是每次請求的輸出 token 上限，不是 context budget 計算用的 context 大小，設了反而讓數學算錯。
+
+正確的 key 是 `contextWindow`。Config 支援 hot-reload，改了不用重啟。
+
+---
+
+## 收穫
+
+**最花時間的地方：**
+Config key 的坑。數學搞懂了，修法也清楚了，但寫 `context_window: 131072`（snake_case）什麼事都沒發生。openclaw 的 schema 驗證對未知 key 是靜默的。Error 繼續出現，紙上的 budget 看起來正確，最後是翻 `ModelDefinitionSchema` source 才找到 `contextWindow`。
+
+**可以複用的診斷方法：**
+- `400 max_tokens must be at least 1, got -XXXX` → openclaw 的 context budget 算出負數。檢查 model config 裡的 `contextWindow`，不是 serve script。
+- Config 改了沒效果 → 確認是 camelCase。openclaw schema 靜默拒絕 snake_case。
+- Compaction 從不觸發 → `contextWindow` 設得太小，小於系統 overhead。openclaw agent 加上 memory-lancedb 的最低 overhead 約 10-12K tokens。
+
+**通用規律：**
+接大 context 模型時，agent config 的 `contextWindow` 必須跟 vLLM 的 `--max-model-len` 一致。agent 以為有 32K 但模型有 131K，數學崩；模型有 32K 但 agent 以為有 131K，OOM。config 必須明確設定。
+
+---
+
+## 設置清單
+
+openclaw 接大 context 模型：
+
+1. 確認 vLLM serve script 的 `--max-model-len`。
+2. Model definition 裡設 `contextWindow`（camelCase），數值要完全一致。
+3. `reserveTokens` ≤ 10K——它是給輸出留空間的，不是 overhead buffer。
+4. `keepRecentTokens` 設為總 context 的一個比例（例如 131K 中的 32K）。
+5. 確認 hot-reload 生效——看 openclaw log 有沒有 model config reload 的確認訊息。
+
+---
+
+*同系列：[callhelp — 從 Agent Loop 喚起 Codex CLI](/zh-TW/blog/openclaw-callhelp-spawning-cli-from-agent-loop) · [Tailscale、IPv6 與沉默的 Telegram Bot](/zh-TW/blog/openclaw-telegram-ipv6-tailscale-silent-bot)*
