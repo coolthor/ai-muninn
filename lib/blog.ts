@@ -13,6 +13,7 @@ export interface BlogPost {
   title: string
   description: string
   date: string
+  updatedAt?: string
   tags: string[]
   series?: string
   part?: number
@@ -32,6 +33,7 @@ function parseFile(filePath: string, slug: string): BlogPost {
     title: data.title ?? slug,
     description: data.description ?? '',
     date: data.date ?? '',
+    updatedAt: data.updatedAt,
     tags: data.tags ?? [],
     series: data.series,
     part: data.part,
@@ -66,6 +68,7 @@ export function getPost(slug: string, locale = 'en'): BlogPostWithContent | null
     title: data.title ?? slug,
     description: data.description ?? '',
     date: data.date ?? '',
+    updatedAt: data.updatedAt,
     tags: data.tags ?? [],
     series: data.series,
     part: data.part,

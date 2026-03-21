@@ -1,0 +1,187 @@
+---
+title: "[AI Agent] openclaw Real-Time Streaming via Telegram Bot API 9.5 sendMessageDraft"
+description: "Replacing choppy editMessageText polling with Telegram's sendMessageDraft for live animated output. The patch, the think-block filter, and the optional chaining trap in DM chats."
+date: "2026-03-21"
+updatedAt: "2026-03-21"
+tags: ["openclaw", "Telegram", "streaming", "Bot API", "undici", "GLM"]
+series: "OpenClaw"
+part: 10
+---
+
+## Preface
+
+There's a difference between watching someone type and waiting for a letter. The original openclaw streaming approach was the letter: it collected 1000ms of output, sent it, waited, sent again. The result was a choppy, flickering experience that felt nothing like the real-time output the model was producing internally.
+
+Telegram Bot API 9.5 added `sendMessageDraft` — a method that creates an animated typing preview, updating live as new text is pushed. This is the patch to make openclaw use it.
+
+---
+
+## The Problem with `editMessageText` Streaming
+
+openclaw's default `streaming: "partial"` mode calls `editMessageText` every 1000ms with accumulated output. Two problems:
+
+**Problem 1: Choppy UX.** The message exists as a placeholder, gets replaced on each tick. Between updates, the user sees a frozen partial message. Fast models feel slow.
+
+**Problem 2: Reasoning model black hole.** With `--reasoning-parser` enabled for GLM-4.7-Flash, the model's thinking phase routes to the `reasoning` field, not `content`. During a 20-second thinking phase, `content` produces zero tokens — the streaming ticker fires on empty strings, does nothing, and the Telegram chat is completely silent while the model is actively working. The user has no indication anything is happening.
+
+---
+
+## sendMessageDraft
+
+Telegram Bot API 9.5 introduced `sendMessageDraft(chat_id, draft_id, text, ...)`. It works differently from `sendMessage` or `editMessageText`:
+
+- It creates an animated preview that appears as a "typing..." styled bubble
+- The same `draft_id` updates the same bubble in place, smoothly
+- When the final message is sent with `sendMessage`, the draft disappears automatically
+- `draft_id` is any non-zero integer — same ID = update the same draft
+
+grammY 1.41.0 already has `sendMessageDraft` in its runtime. No library update required.
+
+---
+
+## The Patch
+
+openclaw's streaming logic lives in the compiled dist at:
+```
+/opt/homebrew/lib/node_modules/openclaw/dist/reply-XaR8IPbY.js
+```
+
+The target function is `sendOrEditStreamMessage`, called inside `createTelegramDraftStream`. The replacement swaps `editMessageText` calls for `sendMessageDraft`:
+
+```javascript
+// Add before sendOrEditStreamMessage:
+const draftId = Math.ceil(Math.random() * 1e9);
+
+// Replace sendOrEditStreamMessage body:
+const sendOrEditStreamMessage = async (text) => {
+  if (streamState.stopped && !streamState.final) return false;
+  const trimmed = text.trimEnd();
+  if (!trimmed) return false;
+
+  let processedText;
+  if (!streamState.final) {
+    // Filter think blocks during streaming
+    const thinkEnd = trimmed.lastIndexOf("</think>");
+    if (thinkEnd !== -1) {
+      processedText = trimmed.slice(thinkEnd + "</think>".length).trimStart();
+    } else if (trimmed.includes("<think>")) {
+      return false; // still inside thinking phase
+    } else {
+      processedText = trimmed;
+    }
+    if (!processedText) return false;
+  } else {
+    processedText = trimmed;
+  }
+
+  const rendered = params.renderText?.(processedText) ?? { text: processedText };
+  const renderedText = rendered.text.trimEnd();
+  const renderedParseMode = rendered.parseMode;
+  if (!renderedText) return false;
+  if (renderedText.length > maxChars) {
+    streamState.stopped = true;
+    return false;
+  }
+  if (renderedText === lastSentText && renderedParseMode === lastSentParseMode) return true;
+  lastSentText = renderedText;
+  lastSentParseMode = renderedParseMode;
+
+  try {
+    await params.api.sendMessageDraft(chatId, draftId, renderedText, {
+      ...renderedParseMode ? { parse_mode: renderedParseMode } : {},
+      ...threadParams?.message_thread_id
+        ? { message_thread_id: threadParams.message_thread_id }
+        : {}
+    });
+    return true;
+  } catch (err) {
+    streamState.stopped = true;
+    params.warn?.(`telegram stream preview failed: ${err instanceof Error ? err.message : String(err)}`);
+    return false;
+  }
+};
+```
+
+`streamMessageId` stays `undefined`. When the caller sends the final message via `sendMessage`, the draft bubble is automatically dismissed by Telegram. No explicit draft cleanup needed.
+
+---
+
+## The Optional Chaining Trap
+
+The spread for `message_thread_id`:
+
+```javascript
+// WRONG — crashes in private DMs
+...threadParams.message_thread_id
+  ? { message_thread_id: threadParams.message_thread_id }
+  : {}
+
+// CORRECT — threadParams is undefined in private DMs
+...threadParams?.message_thread_id
+  ? { message_thread_id: threadParams.message_thread_id }
+  : {}
+```
+
+`threadParams` is `undefined` in private DM chats — there's no thread concept. Without optional chaining, accessing `.message_thread_id` on `undefined` throws, the streaming call fails, and the bot silently stops responding in DMs. The optional chaining `?.` makes DMs and group thread messages both work.
+
+---
+
+## The Reasoning Parser Problem
+
+With `--reasoning-parser glm45` enabled for GLM-4.7-Flash, the thinking tokens never reach `content`. The streaming ticker fires on empty strings and does nothing. For 20+ seconds the Telegram chat appears dead.
+
+Two fixes, either works:
+
+**Option A: Remove the reasoning parser.** Without `--reasoning-parser`, thinking appears as `<think>...</think>` inline in `content`. The patch above handles this — during streaming, content inside `<think>` tags is filtered, content after `</think>` is shown. The user sees real output as soon as the model exits its thinking phase.
+
+```bash
+# Remove --reasoning-parser glm45
+# Add --tool-call-parser glm47 (for tool calls)
+```
+
+**Option B: Keep the parser, accept the black hole.** If reasoning/content separation matters for downstream processing, keep `--reasoning-parser`. The draft stream won't fire during thinking, but `sendChatAction` (typing indicator) can fill the gap. Less clean.
+
+Option A was chosen. The think-block filter in the patch makes it transparent to the user.
+
+---
+
+## openclaw Config
+
+```json
+{
+  "channels": {
+    "telegram": {
+      "streaming": "partial"
+    }
+  }
+}
+```
+
+`streaming: "partial"` enables the draft stream path. Without it, `createTelegramDraftStream` is never called and the patch has no effect.
+
+---
+
+## What Was Gained
+
+**What cost the most time:**
+The optional chaining trap. The patch worked perfectly in group chats and completely silently failed in private DMs. The distinction — `threadParams` being `undefined` only in DMs — wasn't obvious from the function signature. Read every property access on an object that could be undefined.
+
+**Transferable diagnostics:**
+- Streaming works in groups but silently fails in DMs → check for unguarded property access on `threadParams` (or equivalent context object).
+- 20-second silence before first output with `--reasoning-parser` → the parser is routing thinking tokens away from `content`. Either remove the parser or accept the gap.
+- `sendMessageDraft` appears to do nothing → check `draftId` is non-zero and consistent within a turn. A `draftId` of `0` is invalid.
+
+**The pattern that applies everywhere:**
+When patching compiled dist files, the fix for groups isn't automatically the fix for DMs. Channel-specific state (`threadParams`, `chatId` type, thread existence) affects every path through the code. Test both contexts.
+
+---
+
+## Result
+
+Before: chunky 1000ms updates, 20-second silent gaps during reasoning.
+
+After: continuous animated draft that updates as tokens arrive, reasoning phase handled transparently, final message replaces the draft cleanly.
+
+---
+
+*Also in this series: [callhelp — Spawning Codex from the Agent Loop](/en/blog/openclaw-callhelp-spawning-cli-from-agent-loop) · [Tailscale, IPv6, and Silent Telegram Failures](/en/blog/openclaw-telegram-ipv6-tailscale-silent-bot)*

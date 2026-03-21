@@ -1,0 +1,188 @@
+---
+title: "[AI Agent] openclaw 用 Telegram Bot API 9.5 sendMessageDraft 做即時串流"
+description: "把 editMessageText 輪詢換成 sendMessageDraft，實現真正的動態串流輸出。patch 方式、thinking block 過濾、以及私訊裡的 optional chaining 坑。"
+date: "2026-03-21"
+updatedAt: "2026-03-21"
+tags: ["openclaw", "Telegram", "streaming", "Bot API", "GLM"]
+series: "OpenClaw"
+part: 10
+---
+
+## 前言
+
+看著人打字，跟等一封回信，是完全不同的體驗。openclaw 預設的串流方式是後者：每 1000ms 收集一批 token，送出去，等下一批。模型明明在飛速輸出，使用者看到的卻是一格一格跳動的靜態文字。
+
+Telegram Bot API 9.5 加了 `sendMessageDraft`——一個可以持續更新、帶動畫效果的草稿泡泡，token 到了就推，使用者看到的是真正的即時輸出。這是讓 openclaw 用上它的 patch。
+
+---
+
+## `editMessageText` 串流的問題
+
+openclaw 的 `streaming: "partial"` 模式每 1000ms 呼叫一次 `editMessageText`，把累積的輸出替換進去。有兩個問題：
+
+**問題一：跳格感。** 訊息以佔位符開始，每個 tick 替換一次。更新之間，使用者看到的是凍結的半句話。快速模型反而感覺很慢。
+
+**問題二：Reasoning model 的黑洞。** 對 GLM-4.7-Flash 啟用 `--reasoning-parser` 後，思考階段的 token 被路由到 `reasoning` 欄位，不進 `content`。思考階段可能長達 20 秒——這段時間 `content` 零 token，串流 ticker 每秒觸發空字串，Telegram 那邊完全靜止，使用者不知道模型在幹嘛。
+
+---
+
+## sendMessageDraft
+
+Telegram Bot API 9.5 的 `sendMessageDraft(chat_id, draft_id, text, ...)` 運作方式不同：
+
+- 建立一個帶動畫效果的預覽泡泡，看起來像「正在輸入...」
+- 相同的 `draft_id` 會順滑地更新同一個泡泡
+- 用 `sendMessage` 送出最終訊息後，草稿泡泡自動消失
+- `draft_id` 是任意非零整數
+
+grammY 1.41.0 已內建 `sendMessageDraft`，不需要更新套件。
+
+---
+
+## Patch 方式
+
+openclaw 的串流邏輯在 compiled dist：
+
+```
+/opt/homebrew/lib/node_modules/openclaw/dist/reply-XaR8IPbY.js
+```
+
+目標是 `createTelegramDraftStream` 裡的 `sendOrEditStreamMessage` 函式。替換後改用 `sendMessageDraft`：
+
+```javascript
+// 在 sendOrEditStreamMessage 前加：
+const draftId = Math.ceil(Math.random() * 1e9);
+
+// 替換 sendOrEditStreamMessage 函式本體：
+const sendOrEditStreamMessage = async (text) => {
+  if (streamState.stopped && !streamState.final) return false;
+  const trimmed = text.trimEnd();
+  if (!trimmed) return false;
+
+  let processedText;
+  if (!streamState.final) {
+    // 過濾 think block
+    const thinkEnd = trimmed.lastIndexOf("</think>");
+    if (thinkEnd !== -1) {
+      processedText = trimmed.slice(thinkEnd + "</think>".length).trimStart();
+    } else if (trimmed.includes("<think>")) {
+      return false; // 還在思考中
+    } else {
+      processedText = trimmed;
+    }
+    if (!processedText) return false;
+  } else {
+    processedText = trimmed;
+  }
+
+  const rendered = params.renderText?.(processedText) ?? { text: processedText };
+  const renderedText = rendered.text.trimEnd();
+  const renderedParseMode = rendered.parseMode;
+  if (!renderedText) return false;
+  if (renderedText.length > maxChars) {
+    streamState.stopped = true;
+    return false;
+  }
+  if (renderedText === lastSentText && renderedParseMode === lastSentParseMode) return true;
+  lastSentText = renderedText;
+  lastSentParseMode = renderedParseMode;
+
+  try {
+    await params.api.sendMessageDraft(chatId, draftId, renderedText, {
+      ...renderedParseMode ? { parse_mode: renderedParseMode } : {},
+      ...threadParams?.message_thread_id
+        ? { message_thread_id: threadParams.message_thread_id }
+        : {}
+    });
+    return true;
+  } catch (err) {
+    streamState.stopped = true;
+    params.warn?.(`telegram stream preview failed: ${err instanceof Error ? err.message : String(err)}`);
+    return false;
+  }
+};
+```
+
+`streamMessageId` 保持 `undefined`。最終 `sendMessage` 送出後，draft 泡泡自動消失，不需要手動清理。
+
+---
+
+## Optional Chaining 的坑
+
+注意 `message_thread_id` 那段的展開：
+
+```javascript
+// 錯誤——私訊裡會 crash
+...threadParams.message_thread_id
+  ? { message_thread_id: threadParams.message_thread_id }
+  : {}
+
+// 正確——threadParams 在私訊裡是 undefined
+...threadParams?.message_thread_id
+  ? { message_thread_id: threadParams.message_thread_id }
+  : {}
+```
+
+私訊（DM）沒有 thread 的概念，`threadParams` 是 `undefined`。沒有 optional chaining，存取 `.message_thread_id` 就 throw，串流失敗，bot 在私訊裡靜默停止回應。`?.` 讓私訊和群組 thread 都能正常運作。
+
+---
+
+## Reasoning Parser 的處理
+
+啟用 `--reasoning-parser glm45` 後，思考 token 永遠不進 `content`，串流 ticker 打空字串，Telegram 沉默 20 秒。
+
+兩種解法：
+
+**方案 A：移除 reasoning parser。** 沒有 `--reasoning-parser`，思考內容以 `<think>...</think>` 的形式出現在 `content` 裡。上面的 patch 會在串流時過濾掉 `<think>` 裡的內容，`</think>` 之後的文字才推給使用者。思考階段對使用者透明，輸出一結束就立刻看到。
+
+```bash
+# 移除 --reasoning-parser glm45
+# 改用 --tool-call-parser glm47（處理 tool call）
+```
+
+**方案 B：保留 parser，接受黑洞。** 如果下游需要分離 reasoning 和 content，保留 parser，用 `sendChatAction`（typing indicator）填補思考階段的空白。比較不乾淨。
+
+選了方案 A。Patch 裡的 think-block filter 讓使用者完全感知不到差異。
+
+---
+
+## openclaw Config
+
+```json
+{
+  "channels": {
+    "telegram": {
+      "streaming": "partial"
+    }
+  }
+}
+```
+
+`streaming: "partial"` 才會走進 `createTelegramDraftStream` 的路徑。沒有這個設定，patch 完全不會被呼叫到。
+
+---
+
+## 收穫
+
+**最花時間的地方：**
+Optional chaining 的坑。Patch 在群組裡完美運作，在私訊裡靜默失敗。`threadParams` 只有在私訊時才是 `undefined`，從函式簽名看不出來。每一個可能是 undefined 的物件存取都要加防禦。
+
+**可以複用的診斷方法：**
+- 群組有串流、私訊沒有 → 找 `threadParams`（或同類 context 物件）的未防禦屬性存取。
+- 啟用 `--reasoning-parser` 後輸出前 20 秒靜默 → parser 把思考 token 路由走了，`content` 是空的。移除 parser 或用 thinking block filter 處理。
+- `sendMessageDraft` 沒有反應 → 確認 `draftId` 是非零整數，且同一個 turn 內維持同一個 ID。
+
+**通用規律：**
+Patch 在群組能跑不代表在私訊也能跑。Channel-specific 的狀態（`threadParams`、`chatId` 型別、thread 是否存在）會影響所有程式路徑，兩個情境都要測。
+
+---
+
+## 結果
+
+改前：每秒一格的跳動更新，思考階段沉默 20 秒。
+
+改後：token 到就推，草稿泡泡持續更新，思考階段透明，最終訊息取代草稿，乾淨。
+
+---
+
+*同系列：[callhelp — 從 Agent Loop 喚起 Codex CLI](/zh-TW/blog/openclaw-callhelp-spawning-cli-from-agent-loop) · [Tailscale、IPv6 與沉默的 Telegram Bot](/zh-TW/blog/openclaw-telegram-ipv6-tailscale-silent-bot)*

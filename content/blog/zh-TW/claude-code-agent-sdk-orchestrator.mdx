@@ -1,0 +1,192 @@
+---
+title: "[Claude Code] claude-agent-sdk vs subprocess：中間 Turn 為什麼消失了"
+description: "用 claude -p subprocess 建 multi-agent orchestrator，發現中間 turn 全被靜默丟棄。SDK 遷移、session resume、並行執行、以及 setting_sources 的影響。"
+date: "2026-03-21"
+updatedAt: "2026-03-21"
+tags: ["Claude Code", "claude-agent-sdk", "multi-agent", "orchestrator", "Python", "asyncio"]
+series: "AI Workflow"
+part: 4
+---
+
+## 前言
+
+跑 subprocess 就像寄一封附回郵信封的信。你知道送出去什麼，最後會收到一封回覆。中間發生了什麼——思考過程、工具呼叫、草稿——你看不到。對一個需要即時顯示多個 agent 並行輸出的 orchestrator 來說，信件往返模型完全行不通。
+
+這篇是從 `claude -p` subprocess 遷移到 `claude-agent-sdk` 的過程，改了什麼，以及 subprocess 版本靜默丟掉了什麼。
+
+---
+
+## `claude -p` 的問題
+
+最初的 orchestrator 用 `subprocess.Popen` 呼叫 `claude -p`：
+
+```python
+result = subprocess.run(
+    ["claude", "-p", task, "--output-format", "text"],
+    capture_output=True, text=True
+)
+output = result.stdout
+```
+
+單次、fire-and-forget 的呼叫沒問題。其他情境都有問題。
+
+**`claude -p` 回傳的是什麼：** 只有最後一個 agent turn 的最終文字訊息。如果 agent 做了三次工具呼叫，在呼叫之間輸出了推理文字，最後輸出了摘要——subprocess 只回傳摘要。每一個中間 turn 都被丟掉了。
+
+對一個需要即時顯示多個 agent 輸出的 MUD 風格終端介面來說，這代表使用者看不到任何東西，直到每個 agent 跑完——然後所有輸出同時出現。跟完全沒有串流一樣。
+
+`--output-format stream-json --verbose` 存在，但解析原始 event stream 很脆，session resume 要手動處理，而且還是 subprocess，有一樣的生命週期限制。
+
+---
+
+## SDK 的做法
+
+`claude-agent-sdk`（Python）提供 `query()`，一個非同步 generator，每個 turn 產出一條訊息——包括工具呼叫之間的每一個中間 turn。
+
+```python
+from claude_agent_sdk import ClaudeAgentOptions, query
+from claude_agent_sdk.types import AssistantMessage, ResultMessage, SystemMessage, TextBlock
+
+async def run_agent(name: str, task: str, session_id: str | None = None):
+    options = ClaudeAgentOptions(
+        system_prompt=AGENT_CONFIGS[name]["system"],
+        disallowed_tools=["Task", "ExitPlanMode", "AskUserQuestion"],
+        permission_mode="bypassPermissions",
+        cwd=str(BASE_DIR),
+        setting_sources=["project", "local"],
+        **({"resume": session_id} if session_id else {}),
+    )
+
+    captured_session_id = session_id
+    async for message in query(prompt=task, options=options):
+        if isinstance(message, SystemMessage) and message.subtype == "init":
+            captured_session_id = message.data.get("session_id")
+        elif isinstance(message, AssistantMessage):
+            for block in message.content:
+                if isinstance(block, TextBlock) and block.text.strip():
+                    yield block.text, captured_session_id
+        elif isinstance(message, ResultMessage):
+            captured_session_id = message.session_id or captured_session_id
+
+    return captured_session_id
+```
+
+每個 `AssistantMessage` 對應 agent 的一個 turn。工具呼叫之間輸出的文字各自是一個 `TextBlock`。Orchestrator 即時拿到每一段中間輸出。
+
+---
+
+## Session Resume
+
+SDK 支援 session resume：傳入之前的 `session_id`，agent 從上次結束的地方繼續，完整 context 保留。
+
+```python
+# 第一次跑——沒有 session
+session_id = await run_agent("nanase", "check system health")
+
+# 存 session_id
+registry[name] = session_id
+save_registry(registry)
+
+# 後續跑——resume session
+session_id = await run_agent(
+    "nanase", "what was the root cause?",
+    session_id=registry.get(name)
+)
+```
+
+Session ID 從 `ResultMessage.session_id` 取得（優先），或 `SystemMessage.data["session_id"]` 作為備選。按 agent 名稱存在 registry 裡。
+
+注意：如果 agent 的 system prompt 或輸出格式改了，要刪掉 registry。舊 session 帶著舊 context，會跟新指令衝突。一個在舊 system prompt 下訓練成輸出 NDJSON 的 session，就算新 prompt 不再要求，還是會繼續輸出 NDJSON。
+
+---
+
+## 並行執行
+
+多個 agent 用 `asyncio.gather` 同時跑：
+
+```python
+assignments = [
+    ("nanase", "check docker containers"),
+    ("futaba", "review the diff in /tmp/patch.py"),
+    ("shion", "what positions should I open today"),
+]
+
+results = await asyncio.gather(*[
+    run_agent(name, task, registry.get(name))
+    for name, task in assignments
+])
+```
+
+每個 agent 獨立執行，產出輸出就 yield，orchestrator 把輸出 multiplex 到終端（或各自的顯示區）。
+
+需要互動輸入時（agent 需要使用者回答才能繼續），用 lock 序列化：
+
+```python
+_input_lock = asyncio.Lock()
+
+async def prompt_user(agent_name: str, question: str) -> str:
+    async with _input_lock:
+        return await asyncio.to_thread(input, f"\n{agent_name} ❓ > ")
+```
+
+Lock 防止兩個 agent 同時問問題。`asyncio.to_thread` 讓 event loop 在等使用者輸入時不被阻塞。
+
+---
+
+## Disallowed Tools
+
+一定要設：
+
+```python
+disallowed_tools=["Task", "ExitPlanMode", "AskUserQuestion"]
+```
+
+- `Task` — 防止 sub-agent 再生 sub-agent（打破 orchestrator 的控制模型）
+- `ExitPlanMode` — 防止 agent 進入 plan mode 無限等待
+- `AskUserQuestion` — 防止 agent 用內建問題 UI，繞過 orchestrator 的輸入處理
+
+沒有這些，sub-agent 可以生出自己的 sub-agent、在 plan mode 卡死、或跳出一個 orchestrator 無從回應的問題視窗。
+
+---
+
+## setting_sources
+
+```python
+setting_sources=["project", "local"]
+```
+
+沒有這個設定，sub-agent 會繼承 `~/.claude/CLAUDE.md` 和使用者全域設定裡所有 MCP server 的 tool schema。MCP server 多的系統，這代表每個 agent turn 都要載入數千 token 的 tool schema，而那些工具 sub-agent 永遠用不到。`setting_sources=["project", "local"]` 限制只載入 project 層級的設定，跳過全域 MCP schema。
+
+對頻繁呼叫的 orchestrator 影響顯著。每小時 20 次 agent 呼叫，每次 3K token 的無用 MCP schema，一小時就是 60K token 的 context 噪音。
+
+---
+
+## 收穫
+
+**最花時間的地方：**
+搞清楚 `claude -p` 實際上回傳什麼。文件說「跑一個 prompt，拿結果」——準確，但埋了關鍵限制：「結果」是最後一個 turn 的最終文字，不是所有 turn 的累積輸出。這不是 bug，是單次使用場景下的設計選擇。SDK 才是複雜 orchestration 的預設工具。
+
+**可以複用的診斷方法：**
+- Subprocess 輸出不完整或缺少工具呼叫結果 → 用了 `claude -p`，中間 turn 沒有回傳。遷移到 SDK。
+- Agent 無視新 system prompt，明明是全新執行 → session registry 有舊 ID。刪掉 registry 檔案。
+- MCP tool schema 出現在不該出現的 agent context → `setting_sources` 載入了 `~/.claude/CLAUDE.md` 帶進了 MCP server。設 `setting_sources=["project", "local"]`。
+
+**通用規律：**
+Subprocess 是 fire-and-forget 的正確工具。串流 async generator 是需要中間輸出、session 狀態或並行組合的正確工具。用錯了原始工具，等系統建好了再重構代價很大。
+
+---
+
+## 遷移清單
+
+從 `claude -p` subprocess 遷移到 `claude-agent-sdk`：
+
+1. 把 `subprocess.run(["claude", "-p", task])` 換成 `async for message in query(prompt=task, options=options)`。
+2. 加 `disallowed_tools=["Task", "ExitPlanMode", "AskUserQuestion"]`。
+3. 需要工具存取不問 permission 的話，設 `permission_mode="bypassPermissions"`。
+4. 設 `setting_sources=["project", "local"]` 避免載入全域 MCP schema。
+5. 從 `ResultMessage` 取 `session_id`，存進 registry。
+6. 後續呼叫傳 `resume=session_id`。
+7. 並行 agent 用 `asyncio.gather`，互動輸入用 `asyncio.to_thread + Lock`。
+
+---
+
+*同系列：[Debate System — 多個 Claude 互為 Peer Reviewer](/zh-TW/blog/claude-code-debate-system) · [讓 Claude Code 指令真的被遵守](/zh-TW/blog/claude-code-mandatory-instructions)*

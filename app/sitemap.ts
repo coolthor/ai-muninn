@@ -28,7 +28,9 @@ export default function sitemap(): MetadataRoute.Sitemap {
   const slugs = getAllSlugs('en')
   for (const slug of slugs) {
     const post = getPost(slug, 'en')
-    const lastModified = post?.date ? new Date(post.date) : new Date()
+    const lastModified = post?.updatedAt
+      ? new Date(post.updatedAt)
+      : post?.date ? new Date(post.date) : new Date()
     for (const locale of routing.locales) {
       entries.push({
         url: `${BASE_URL}/${locale}/blog/${slug}`,

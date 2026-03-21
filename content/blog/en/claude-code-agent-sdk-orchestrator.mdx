@@ -1,0 +1,189 @@
+---
+title: "[Claude Code] claude-agent-sdk vs subprocess: Why Intermediate Turns Disappear"
+description: "Building a multi-agent orchestrator with `claude -p` subprocess reveals a silent data loss problem. The SDK fix, session resume, parallel execution, and why setting_sources matters."
+date: "2026-03-21"
+updatedAt: "2026-03-21"
+tags: ["Claude Code", "claude-agent-sdk", "multi-agent", "orchestrator", "Python", "asyncio"]
+series: "AI Workflow"
+part: 4
+---
+
+## Preface
+
+Running a subprocess is like sending a letter with a return envelope. You know what you sent, and eventually you get one reply. What you don't see is everything that happened in between — the thinking, the tool calls, the intermediate drafts. For a multi-agent system that needs to display real-time output from parallel agents, the letter-and-reply model isn't enough.
+
+This is about migrating from `claude -p` subprocess to `claude-agent-sdk`, what changes, and what the subprocess version silently drops.
+
+---
+
+## The Problem with `claude -p`
+
+The initial orchestrator used `subprocess.Popen` with `claude -p`:
+
+```python
+result = subprocess.run(
+    ["claude", "-p", task, "--output-format", "text"],
+    capture_output=True, text=True
+)
+output = result.stdout
+```
+
+This works for single-turn, fire-and-forget calls. It breaks for anything else.
+
+**What `claude -p` returns:** Only the final text message of the last agent turn. If an agent makes three tool calls, emits reasoning text between them, and finally outputs a summary — the subprocess returns only the summary. Every intermediate turn is discarded.
+
+For a MUD-style terminal display where multiple agents run in parallel and stream their output in real-time, this means the user sees nothing until each agent finishes — then all output arrives at once. The UX is identical to no streaming at all.
+
+`--output-format stream-json --verbose` exists, but parsing the raw event stream is fragile, session resumption is manual, and it's still a subprocess with all the same lifecycle limitations.
+
+---
+
+## The SDK Approach
+
+`claude-agent-sdk` (Python) provides `query()`, an async generator that yields messages per turn — including every intermediate turn between tool calls.
+
+```python
+from claude_agent_sdk import ClaudeAgentOptions, query
+from claude_agent_sdk.types import AssistantMessage, ResultMessage, SystemMessage, TextBlock
+
+async def run_agent(name: str, task: str, session_id: str | None = None):
+    options = ClaudeAgentOptions(
+        system_prompt=AGENT_CONFIGS[name]["system"],
+        disallowed_tools=["Task", "ExitPlanMode", "AskUserQuestion"],
+        permission_mode="bypassPermissions",
+        cwd=str(BASE_DIR),
+        setting_sources=["project", "local"],
+        **({"resume": session_id} if session_id else {}),
+    )
+
+    captured_session_id = session_id
+    async for message in query(prompt=task, options=options):
+        if isinstance(message, SystemMessage) and message.subtype == "init":
+            captured_session_id = message.data.get("session_id")
+        elif isinstance(message, AssistantMessage):
+            for block in message.content:
+                if isinstance(block, TextBlock) and block.text.strip():
+                    yield block.text, captured_session_id
+        elif isinstance(message, ResultMessage):
+            captured_session_id = message.session_id or captured_session_id
+
+    return captured_session_id
+```
+
+Each `AssistantMessage` corresponds to one agent turn. Text emitted between tool calls appears as its own `TextBlock`. The orchestrator gets every intermediate output as it happens.
+
+---
+
+## Session Resume
+
+The SDK supports session resumption: pass a previous `session_id` and the agent picks up where it left off, with its full context intact.
+
+```python
+# First run — no session
+session_id = await run_agent("nanase", "check system health")
+
+# Store session_id
+registry[name] = session_id
+save_registry(registry)
+
+# Follow-up — resume session
+session_id = await run_agent("nanase", "what was the root cause?", session_id=registry.get(name))
+```
+
+Session IDs come from `ResultMessage.session_id` (preferred) or `SystemMessage.data["session_id"]` as fallback. Store them in a registry keyed by agent name.
+
+One caveat: if the agent's system prompt or output format changes, delete the registry. Old sessions carry stale context that conflicts with the new instructions. A stale session that was trained on NDJSON output will keep outputting NDJSON even if the new system prompt no longer requests it.
+
+---
+
+## Parallel Execution
+
+Multiple agents run concurrently with `asyncio.gather`:
+
+```python
+assignments = [
+    ("nanase", "check docker containers"),
+    ("futaba", "review the diff in /tmp/patch.py"),
+    ("shion", "what positions should I open today"),
+]
+
+results = await asyncio.gather(*[
+    run_agent(name, task, registry.get(name))
+    for name, task in assignments
+])
+```
+
+Each agent runs independently, yields output as it produces it. The orchestrator multiplexes output to the terminal (or to separate display panels).
+
+For interactive prompts — when an agent needs input before continuing — serialize with a lock:
+
+```python
+_input_lock = asyncio.Lock()
+
+async def prompt_user(agent_name: str, question: str) -> str:
+    async with _input_lock:
+        return await asyncio.to_thread(input, f"\n{agent_name} ❓ > ")
+```
+
+The lock prevents two agents from prompting simultaneously. `asyncio.to_thread` keeps the event loop unblocked while waiting for user input.
+
+---
+
+## Disallowed Tools
+
+Always set:
+
+```python
+disallowed_tools=["Task", "ExitPlanMode", "AskUserQuestion"]
+```
+
+- `Task` — prevents sub-agents from spawning further sub-agents (breaks the orchestrator's control model)
+- `ExitPlanMode` — prevents agents from entering plan mode, which blocks indefinitely
+- `AskUserQuestion` — prevents agents from using the built-in question UI, which bypasses the orchestrator's input handling
+
+Without these, a sub-agent can spawn its own sub-agents, stall in plan mode, or pop a question dialog that the orchestrator has no way to respond to.
+
+---
+
+## setting_sources
+
+```python
+setting_sources=["project", "local"]
+```
+
+Without this, sub-agents inherit `~/.claude/CLAUDE.md` and all MCP server tool schemas from the user's global settings. For a system with many MCP servers, this means each agent turn loads thousands of tokens of tool schemas that the sub-agent will never use. `setting_sources=["project", "local"]` limits loading to project-level settings only, skipping global MCP schemas.
+
+The savings are significant for agents that run frequently. An orchestrator making 20 agent calls per hour with 3K tokens of unnecessary MCP schema per call is burning 60K tokens on context noise.
+
+---
+
+## What Was Gained
+
+**What cost the most time:**
+Understanding what `claude -p` actually returns. The docs describe it as "run a prompt and get the result" — which is accurate, but buries the key limitation: "the result" means the final text of the final turn, not the accumulated output of all turns. This isn't a bug, it's a design choice for single-turn use. The SDK is the intended tool for anything more complex.
+
+**Transferable diagnostics:**
+- Subprocess output is incomplete or missing tool call results → you're using `claude -p` and the intermediate turns aren't returned. Migrate to the SDK.
+- Agent ignores new system prompt despite fresh run → session registry has a stale ID. Delete the registry file.
+- MCP tool schemas appearing in agent context when they shouldn't → `setting_sources` is loading `~/.claude/CLAUDE.md` which references the MCP servers. Set `setting_sources=["project", "local"]`.
+
+**The pattern that applies everywhere:**
+A subprocess is the right tool for fire-and-forget. A streaming async generator is the right tool for anything that needs intermediate output, session state, or parallel composition. Choosing the wrong primitive costs significant refactor time once the system is built.
+
+---
+
+## Migration Checklist
+
+From `claude -p` subprocess to `claude-agent-sdk`:
+
+1. Replace `subprocess.run(["claude", "-p", task])` with `async for message in query(prompt=task, options=options)`.
+2. Add `disallowed_tools=["Task", "ExitPlanMode", "AskUserQuestion"]`.
+3. Set `permission_mode="bypassPermissions"` if the agent needs tool access without prompts.
+4. Set `setting_sources=["project", "local"]` to avoid loading global MCP schemas.
+5. Capture `session_id` from `ResultMessage` and store in a registry.
+6. Pass `resume=session_id` for follow-up calls.
+7. Use `asyncio.gather` for parallel agents, `asyncio.to_thread + Lock` for interactive prompts.
+
+---
+
+*Also in this series: [The Debate System — Multiple Claude Instances as Peer Reviewers](/en/blog/claude-code-debate-system) · [Mandatory Instructions That Actually Stick](/en/blog/claude-code-mandatory-instructions)*

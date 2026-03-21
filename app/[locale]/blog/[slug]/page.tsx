@@ -4,6 +4,7 @@ import { MDXRemote } from 'next-mdx-remote/rsc'
 import { getAllSlugs, getPost, hasTranslation } from '@/lib/blog'
 import { routing } from '@/i18n/routing'
 import type { Metadata } from 'next'
+import TLDRCard from '@/components/TLDRCard'
 
 const BASE_URL = 'https://ai-muninn.com'
 
@@ -66,7 +67,7 @@ export async function generateMetadata({
 }
 
 function JsonLd({ post, url, locale, slug }: {
-  post: { title: string; description: string; date: string; tags: string[]; series?: string; part?: number }
+  post: { title: string; description: string; date: string; updatedAt?: string; tags: string[]; series?: string; part?: number }
   url: string
   locale: string
   slug: string
@@ -78,7 +79,7 @@ function JsonLd({ post, url, locale, slug }: {
     headline: post.title,
     description: post.description,
     datePublished: post.date,
-    dateModified: post.date,
+    dateModified: post.updatedAt ?? post.date,
     url,
     inLanguage: isZh ? 'zh-TW' : 'en',
     author: {
@@ -159,7 +160,7 @@ export default async function BlogPost({
 
   return (
     <article>
-      <JsonLd post={{ title: post.title, description: post.description, date: post.date, tags: post.tags, series: post.series, part: post.part }} url={url} locale={l} slug={slug} />
+      <JsonLd post={{ title: post.title, description: post.description, date: post.date, updatedAt: post.updatedAt, tags: post.tags, series: post.series, part: post.part }} url={url} locale={l} slug={slug} />
 
       {/* breadcrumb */}
       <div className="mb-8 text-xs" style={{ color: 'var(--text-dim)' }}>
@@ -182,6 +183,11 @@ export default async function BlogPost({
         </h1>
         <div className="flex flex-wrap items-center gap-4 text-xs" style={{ color: 'var(--text-dim)' }}>
           <span>{post.date}</span>
+          {post.updatedAt && post.updatedAt !== post.date && (
+            <span style={{ color: 'var(--cyan)', opacity: 0.7 }}>
+              {isZh ? `更新於 ${post.updatedAt}` : `updated ${post.updatedAt}`}
+            </span>
+          )}
           <span>{post.readingTime} {isZh ? '分鐘閱讀' : 'min read'}</span>
           {post.tags.slice(0, 4).map(tag => (
             <span key={tag}>#{tag.toLowerCase().replace(/\s+/g, '-')}</span>
@@ -200,7 +206,7 @@ export default async function BlogPost({
 
       {/* content */}
       <div className="prose">
-        <MDXRemote source={post.content} />
+        <MDXRemote source={post.content} components={{ TLDRCard }} />
       </div>
 
       {/* footer nav */}

@@ -1,0 +1,135 @@
+---
+title: "[vLLM] GB10 上的 FP8 KV Cache：為什麼輸出會在 500 Token 後崩成重複迴圈"
+description: "vLLM serve script 加了 --kv-cache-dtype fp8，GB10 上輸出在約 500 token 後退化成重複字。根本原因：沒有 calibration data，q_scale 預設 1.0。"
+date: "2026-03-21"
+updatedAt: "2026-03-21"
+tags: ["vLLM", "FP8", "KV cache", "GB10", "DGX Spark", "quantization", "SM121"]
+series: "DGX Spark"
+part: 5
+---
+
+## 前言
+
+優化有前提條件。前提條件沒滿足，你得到的不是比較差的優化——你得到的是看起來有效、然後在第 500 個 token 悄悄崩潰的東西。
+
+這是 GB10 上 FP8 KV cache 的故事：症狀是什麼、根本原因是什麼、以及為什麼這個優化本來就不該用在這裡。
+
+---
+
+## 症狀
+
+Serve script 加了兩個 flag 想省記憶體：
+
+```bash
+--kv-cache-dtype fp8 --calculate-kv-scales
+```
+
+啟動正常。前幾條回應正常。然後，大概在較長輸出的第 500 個 token 之後，模型開始重複。不是輕微飄移——是硬重複：
+
+```
+模型持續分析情況，分析情況持續分析情況持續分析...
+```
+
+調 temperature 沒用。調 `repetition_penalty` 沒用。迴圈一旦開始，就不會停。
+
+vLLM 啟動 log 有一行警告，很容易被略過：
+
+```
+W  Calculating KV cache scales for FP8 activation, but no calibration
+   data found. Using default scale q_scale=1.0
+```
+
+---
+
+## 根本原因
+
+FP8 KV cache 量化需要 per-layer scale factors——把每一層 activation 的 float16/bfloat16 分佈對應到 FP8 範圍時不失真所需要的值。這些 scale factors 來自用代表性 dataset 跑 calibration。
+
+沒有 calibration data，vLLM 退回 `q_scale=1.0`。這是一個均勻 scale，對 activation 分佈不做任何假設。短輸出時，近似誤差勉強可以接受。長序列時，累積的量化誤差不斷疊加，大約 500 token 後精度劣化到 logits 不可靠，輸出崩成重複迴圈。
+
+`--calculate-kv-scales` 這個 flag 的用途是：你有 calibration data，要 vLLM 載入並套用。沒有 `--kv-cache-scales-path` 指向實際的 scale factors，這個 flag 等於什麼都沒做，只留下一行警告。
+
+---
+
+## 修法
+
+移除這兩個 flag：
+
+```bash
+# 舊版——在 ~500 token 後導致重複迴圈
+vllm serve /models/qwen35 \
+  --kv-cache-dtype fp8 \
+  --calculate-kv-scales \
+  ...
+
+# 修後——BF16 KV cache，不需要 calibration
+vllm serve /models/qwen35 \
+  ...
+```
+
+沒有這兩個 flag，vLLM 用 BF16 做 KV cache。任意長度的輸出都穩定。
+
+---
+
+## 為什麼這個優化在這裡不該用
+
+FP8 KV cache 用精度換記憶體。這個 tradeoff 值得做的條件：
+
+1. VRAM 是真正的瓶頸
+2. 有 calibration data 可以設正確的 scale factors
+
+這兩個條件在 GB10 上都不成立。
+
+GB10 有 128 GB unified memory。跑 Qwen3.5-35B，BF16 KV cache，200K context，90% GPU utilization，實測還有約 63 GiB 可用於 KV cache。記憶體根本不是瓶頸——不量化也放得下幾十萬個 token。
+
+Calibration data 的問題也不是調個 flag 能繞過的。生成 calibration data 需要對模型跑代表性 prompt，記錄 per-layer activation 統計，是一個獨立的離線步驟，不是 serve time 的設定。
+
+---
+
+## 更大的規律
+
+這個模式——技術上正確的優化，前提不滿足時悄悄降級——在 vLLM/本地 LLM 的設定裡不只出現一次：
+
+**`--reasoning-parser qwen3`**：把 `<think>...</think>` 輸出路由到 `reasoning` 欄位，`content` 保持乾淨。模型正常結束思考時沒問題。模型只輸出思考 token 沒有最終答案時，`content` 永遠是 `null`，client 什麼都拿不到。
+
+**`--enforce-eager`**：停用 CUDAGraph 用於 debug。留在 production serve script 裡，decode 速度靜默減半。沒有 error，沒有 warning。
+
+共同點：flag 被接受，server 啟動，前幾條輸出看起來正常，問題在後面才出現。Startup log 是唯一的訊號——但要知道在找什麼才看得出來。
+
+FP8 KV cache 的訊號：
+
+```
+Using default scale q_scale=1.0
+```
+
+這行出現，代表優化沒有以有意義的方式啟動。要嘛提供 calibration data，要嘛拿掉這兩個 flag。
+
+---
+
+## 收穫
+
+**最花時間的地方：**
+失敗模式跟其他導致重複迴圈的原因看起來一模一樣——temperature、top_p、模型品質、prompt 格式。標準的 debug 路徑（調 sampling 參數、換 prompt）都沒用，要繞一圈才回頭看 startup log。Log 從一開始就有答案。
+
+**可以複用的診斷方法：**
+- 重複迴圈在固定 token 數後才開始（不是立刻）→ 精度劣化，不是 sampling 參數問題。查 KV cache dtype 和量化是否有 calibration。
+- Startup log 出現 `q_scale=1.0` → FP8 KV cache 在沒有 calibration 的狀況下跑。移除 `--kv-cache-dtype fp8` 或提供 `--kv-cache-scales-path`。
+- GB10（128GB unified memory）：BF16 KV cache 幾乎永遠是正確的預設值。FP8 KV cache 的優化壓力適用於 VRAM 有限的 GPU，不適用於 128GB unified memory 的系統。
+
+**通用規律：**
+先看 startup log，再 debug 模型行為。重複、亂碼、品質劣化，幾乎都可以從 server 初始化找到線索，不是從輸出本身。
+
+---
+
+## 清單
+
+啟用 FP8 KV cache 之前：
+
+1. 確認 VRAM 真的是瓶頸。不是的話，用 BF16。
+2. 查 startup log 有沒有 `q_scale=1.0`。有的話，沒有 calibration data。
+3. 要用 FP8 KV cache，先跑 calibration，設好 `--kv-cache-scales-path`。
+4. 用長輸出（1000+ token）測試。FP8 精度問題不會立刻出現。
+
+---
+
+*同系列：[DGX Spark：為什麼你的模型輸出一堆驚嘆號](/zh-TW/blog/part1-why-your-dgx-spark-says-exclamation-marks) · [vLLM + Qwen3.5 on DGX Spark](/zh-TW/blog/dgx-spark-vllm-qwen35-setup)*

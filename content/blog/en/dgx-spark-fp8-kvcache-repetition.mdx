@@ -1,0 +1,135 @@
+---
+title: "[vLLM] FP8 KV Cache on GB10: Why Outputs Collapse into Repetition Loops"
+description: "Adding --kv-cache-dtype fp8 to a vLLM serve script on GB10 causes outputs to degrade into repetition after ~500 tokens. Root cause: missing calibration data, q_scale defaults to 1.0."
+date: "2026-03-21"
+updatedAt: "2026-03-21"
+tags: ["vLLM", "FP8", "KV cache", "GB10", "DGX Spark", "quantization", "SM121"]
+series: "DGX Spark"
+part: 5
+---
+
+## Preface
+
+Optimization has a prerequisite condition. When the condition isn't met, you don't get a worse version of the optimization — you get something that looks like it worked and then quietly fails at output token 500.
+
+This is about FP8 KV cache on GB10, what the failure looks like, and why the optimization was wrong to apply here in the first place.
+
+---
+
+## The Symptom
+
+The vLLM serve script had two flags added for memory efficiency:
+
+```bash
+--kv-cache-dtype fp8 --calculate-kv-scales
+```
+
+Startup looked normal. First responses looked normal. Then, around 500 tokens into a longer output, the model started repeating. Not subtle drift — hard repetition:
+
+```
+The model continues to analyze the situation, analyzing the situation continues to analyze...
+```
+
+Temperature adjustments had no effect. `repetition_penalty` had no effect. The loop always won once it started.
+
+The vLLM startup log had a warning that was easy to miss:
+
+```
+W  Calculating KV cache scales for FP8 activation, but no calibration
+   data found. Using default scale q_scale=1.0
+```
+
+---
+
+## Root Cause
+
+FP8 quantization for KV cache requires per-layer scale factors — values that map the float16/bfloat16 distribution of each layer's activations to the FP8 range without losing precision. These scale factors come from a calibration run against a representative dataset.
+
+Without calibration data, vLLM falls back to `q_scale=1.0`. This is a uniform scale that makes no assumptions about the actual activation distribution. For short outputs, the approximation is acceptable. For long sequences, the accumulated quantization error compounds. Around 500 tokens, precision degrades enough that the model's logits become unreliable and the output collapses into repetition.
+
+`--calculate-kv-scales` exists for the case where you have calibration data and want vLLM to load and apply it. Without `--kv-cache-scales-path` pointing to actual scale factors, the flag is a no-op with a warning.
+
+---
+
+## The Fix
+
+Remove both flags:
+
+```bash
+# BEFORE — causes repetition after ~500 tokens
+vllm serve /models/qwen35 \
+  --kv-cache-dtype fp8 \
+  --calculate-kv-scales \
+  ...
+
+# AFTER — BF16 KV cache, no calibration needed
+vllm serve /models/qwen35 \
+  ...
+```
+
+Without these flags, vLLM uses BF16 for KV cache. Outputs are stable at any length.
+
+---
+
+## Why This Optimization Didn't Apply Here
+
+FP8 KV cache trades memory for precision. The tradeoff is worth it when:
+
+1. VRAM is the limiting constraint
+2. Calibration data is available to set correct scale factors
+
+Neither was true on GB10.
+
+GB10 has 128 GB of unified memory. Running Qwen3.5-35B with BF16 KV cache at 200K context and 90% GPU utilization leaves approximately 63 GiB available for KV cache. At that scale, memory isn't the constraint — there's room for hundreds of thousands of tokens without quantization.
+
+The calibration dataset issue isn't a configuration problem to work around. Generating a calibration dataset requires running the model on representative prompts and recording per-layer activation statistics. It's a separate offline step, not a flag to set at serve time.
+
+---
+
+## The Broader Pattern
+
+This instance — technically-valid optimization that silently degrades when prerequisites aren't met — appears in other places in the vLLM / local LLM stack:
+
+**`--reasoning-parser qwen3`**: Routes `<think>...</think>` output to the `reasoning` field, keeping `content` clean. Works correctly when the model reliably exits thinking. When the model produces only thinking tokens (no final answer), `content` stays `null` and the client gets nothing.
+
+**`--enforce-eager`**: Disables CUDAGraph for debugging. Silently halves decode speed when left in a production serve script. No error, no warning.
+
+The common thread: the flag is accepted, the server starts, early outputs look fine, failure appears later. The startup log is the only signal — and only if you know what to look for.
+
+For FP8 KV cache, the signal is:
+
+```
+Using default scale q_scale=1.0
+```
+
+If that line appears, the optimization is not active in a meaningful sense. Either provide calibration data or remove the flags.
+
+---
+
+## What Was Gained
+
+**What cost the most time:**
+The failure mode looks identical to other causes of repetition loops — temperature, top_p, model quality, prompt format. The standard debugging path (adjusting sampling parameters, trying different prompts) doesn't help and takes time before the startup log is examined. The log was the answer from the start.
+
+**Transferable diagnostics:**
+- Repetition loop that starts at a consistent token count (not immediately) → precision degradation, not a sampling parameter issue. Check KV cache dtype and whether quantization is calibrated.
+- `q_scale=1.0` in startup log → FP8 KV cache is running without calibration. Remove `--kv-cache-dtype fp8` or provide `--kv-cache-scales-path`.
+- On GB10 with 128GB unified memory: BF16 KV cache is almost always the right default. FP8 KV cache optimization pressure applies to GPUs with limited VRAM, not to systems with 128GB of unified memory.
+
+**The pattern that applies everywhere:**
+Read the startup log before debugging model behavior. Repetition, garbage output, and degraded quality are almost always diagnosable from server initialization — not from the outputs themselves.
+
+---
+
+## Checklist
+
+Before enabling FP8 KV cache:
+
+1. Confirm VRAM is actually the limiting constraint. If not, use BF16.
+2. Check startup log for `q_scale=1.0`. If present, calibration data is missing.
+3. Generate calibration data with `--kv-cache-scales-path` before enabling FP8 KV cache in production.
+4. Test at long outputs (1000+ tokens). Repetition from FP8 precision loss doesn't appear immediately.
+
+---
+
+*Also in this series: [DGX Spark: Why Your Model Outputs `!!!!!`](/en/blog/part1-why-your-dgx-spark-says-exclamation-marks) · [vLLM + Qwen3.5 on DGX Spark](/en/blog/dgx-spark-vllm-qwen35-setup)*
