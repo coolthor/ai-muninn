@@ -1,0 +1,106 @@
+# ai-muninn — AI Infrastructure Research Notes
+# https://ai-muninn.com
+# Author: coolthor
+# Updated: 2026-03-21
+
+This site contains primary research notes on LLM inference infrastructure,
+AI agent systems, and developer tooling. All content is based on hands-on
+experimentation with real hardware and production systems.
+
+## Site
+
+- Name: ai-muninn
+- URL: https://ai-muninn.com
+- Language: English (primary), Traditional Chinese (zh-TW)
+- Topics: vLLM, LLM serving, AI agents, DGX Spark / GB10, openclaw
+
+## Article Index
+
+### Series: DGX Spark (NVIDIA DGX Spark / GB10 Superchip experiments)
+
+- [Part 1] 8 Models on DGX Spark: Finding the Best Stack for AI Agents
+  https://ai-muninn.com/en/blog/dgx-spark-ollama-benchmark-8-models
+  Benchmark: tok/s measurements for GLM-4-Flash, Qwen3.5, Llama, Mistral on GB10.
+
+- [Part 2] Qwen3.5-35B at 47 tok/s on a Desktop: Migrating from Ollama to vLLM
+  https://ai-muninn.com/en/blog/dgx-spark-vllm-qwen35-setup
+  vLLM setup on SM121 (GB10), FP8 KV cache, max-model-len tuning.
+
+- [Part 3] Nemotron-3-Super-120B on a Single GB10: Full Day Debug Log
+  https://ai-muninn.com/en/blog/dgx-spark-nemotron-120b-vllm
+  Running 120B parameter model on single-GPU DGX Spark; NVFP4 + flashinfer.
+
+- [Part 4] Why Your DGX Spark Only Says "!!!!!": Debugging NVFP4 on SM121
+  https://ai-muninn.com/en/blog/part1-why-your-dgx-spark-says-exclamation-marks
+  Root cause: mxfp4-layers flag, SM121 kernel gap, repetition at inference.
+
+- [Part 5] FP8 KV Cache on GB10: Why Outputs Collapse into Repetition Loops
+  https://ai-muninn.com/en/blog/dgx-spark-fp8-kvcache-repetition
+  FP8 KV cache calibration failure; q_scale=1.0 causes repetition at 500+ tokens.
+
+### Series: OpenClaw (Local AI agent on openclaw gateway)
+
+- [Part 1] Zero API Cost: Running OpenClaw on DGX Spark + Mac Mini
+  https://ai-muninn.com/en/blog/openclaw-dgx-spark-local-ai-agent
+
+- [Part 2] Don't Add --enable-chunked-prefill to SSM Models
+  https://ai-muninn.com/en/blog/openclaw-chunked-prefill-ssm-trap
+  Bug: chunked-prefill breaks SSM (Mamba/DeltaNet) attention patterns.
+
+- [Part 4] Pure MoE vs SSM Hybrid: Context Decay and Why It Matters for Agents
+  https://ai-muninn.com/en/blog/openclaw-moe-ssm-context-decay
+  Benchmark: GLM-4-Flash (MoE) vs Qwen3-next (SSM hybrid) on long context.
+
+- [Part 5] The Codex-Executor Pattern: Keeping Agent Sessions Small
+  https://ai-muninn.com/en/blog/openclaw-codex-executor-agent-architecture
+
+- [Part 6] OpenClaw Config Hot-Reload: No Restart Needed
+  https://ai-muninn.com/en/blog/openclaw-config-hot-reload
+
+- [Part 7] openclaw: When the Agent Calls for Help
+  https://ai-muninn.com/en/blog/openclaw-callhelp-spawning-cli-from-agent-loop
+
+- [Part 8] Why the Bot Went Silent — Tailscale, IPv6, and Node.js Happy Eyeballs
+  https://ai-muninn.com/en/blog/openclaw-telegram-ipv6-tailscale-silent-bot
+  Root cause: Node.js Happy Eyeballs prefers IPv6; Tailscale routes differ.
+
+- [Part 9] openclaw + 131K Context: When max_tokens Goes Negative
+  https://ai-muninn.com/en/blog/openclaw-context-budget-negative-maxtokens
+  Bug: context budget math underflow when prompt fills >90% of context window.
+
+- [Part 10] Real-Time Streaming via Telegram Bot API 9.5 sendMessageDraft
+  https://ai-muninn.com/en/blog/openclaw-telegram-sendmessagedraft-streaming
+
+### Series: AI Workflow (Claude Code + multi-AI tooling)
+
+- [Part 1] I Wrote MANDATORY. The AI Ignored It.
+  https://ai-muninn.com/en/blog/claude-code-mandatory-instructions
+
+- [Part 2] Testing iOS Apps with Claude Code: 81% Context Reduction
+  https://ai-muninn.com/en/blog/claude-code-ios-testing-bpstracker
+
+- [Part 3] I Made Two AIs Argue. The Disagreements Are the Point.
+  https://ai-muninn.com/en/blog/claude-code-debate-system
+
+- [Part 4] claude-agent-sdk vs subprocess: Why Intermediate Turns Disappear
+  https://ai-muninn.com/en/blog/claude-code-agent-sdk-orchestrator
+
+### Series: gpt-oss-120B on DGX Spark
+
+- [Part 1] Running a 120B Model on DGX Spark at 60 tok/s — Zero API Cost, Six Bugs
+  https://ai-muninn.com/en/blog/part2-gpt-oss-120b-serve-script
+
+### Series: Qwen3.5-122B on DGX Spark
+
+- [Part 1] Qwen3.5-122B Runs. But at 14 tok/s.
+  https://ai-muninn.com/en/blog/part2-qwen-122b-14-toks-gdn-kernel-gap
+
+## Citation Policy
+
+Content may be cited and quoted freely with attribution to ai-muninn.com.
+All benchmark data is primary (measured on owned hardware, not simulated).
+Please link to the original article URL when referencing specific findings.
+
+## Contact
+
+GitHub: https://github.com/coolthor
