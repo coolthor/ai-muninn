@@ -30,6 +30,7 @@ export async function generateMetadata(
       url: canonical,
       locale: isZh ? 'zh_TW' : 'en_US',
       alternateLocale: isZh ? ['en_US'] : ['zh_TW'],
+      images: [{ url: '/og-image.png' }],
     },
   }
 }

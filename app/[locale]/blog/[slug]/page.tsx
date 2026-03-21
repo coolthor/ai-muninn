@@ -58,19 +58,21 @@ export async function generateMetadata({
       ...(post.series && { section: post.series }),
     },
     twitter: {
-      card: 'summary',
+      card: 'summary_large_image',
       title: post.title,
       description: post.description,
     },
   }
 }
 
-function JsonLd({ post, url, locale }: {
+function JsonLd({ post, url, locale, slug }: {
   post: { title: string; description: string; date: string; tags: string[]; series?: string; part?: number }
   url: string
   locale: string
+  slug: string
 }) {
-  const schema: Record<string, unknown> = {
+  const isZh = locale === 'zh-TW'
+  const articleSchema: Record<string, unknown> = {
     '@context': 'https://schema.org',
     '@type': 'TechArticle',
     headline: post.title,
@@ -78,7 +80,7 @@ function JsonLd({ post, url, locale }: {
     datePublished: post.date,
     dateModified: post.date,
     url,
-    inLanguage: locale === 'zh-TW' ? 'zh-TW' : 'en',
+    inLanguage: isZh ? 'zh-TW' : 'en',
     author: {
       '@type': 'Person',
       name: 'coolthor',
@@ -100,11 +102,43 @@ function JsonLd({ post, url, locale }: {
       position: post.part,
     }),
   }
+
+  const breadcrumbSchema = {
+    '@context': 'https://schema.org',
+    '@type': 'BreadcrumbList',
+    itemListElement: [
+      {
+        '@type': 'ListItem',
+        position: 1,
+        name: isZh ? '首頁' : 'Home',
+        item: `${BASE_URL}/${locale}`,
+      },
+      {
+        '@type': 'ListItem',
+        position: 2,
+        name: isZh ? '技術筆記' : 'Blog',
+        item: `${BASE_URL}/${locale}/blog`,
+      },
+      {
+        '@type': 'ListItem',
+        position: 3,
+        name: post.title,
+        item: url,
+      },
+    ],
+  }
+
   return (
-    <script
-      type="application/ld+json"
-      dangerouslySetInnerHTML={{ __html: JSON.stringify(schema) }}
-    />
+    <>
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(articleSchema) }}
+      />
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(breadcrumbSchema) }}
+      />
+    </>
   )
 }
 
@@ -125,7 +159,7 @@ export default async function BlogPost({
 
   return (
     <article>
-      <JsonLd post={{ title: post.title, description: post.description, date: post.date, tags: post.tags, series: post.series, part: post.part }} url={url} locale={l} />
+      <JsonLd post={{ title: post.title, description: post.description, date: post.date, tags: post.tags, series: post.series, part: post.part }} url={url} locale={l} slug={slug} />
 
       {/* breadcrumb */}
       <div className="mb-8 text-xs" style={{ color: 'var(--text-dim)' }}>

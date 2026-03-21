@@ -1,5 +1,5 @@
 import type { MetadataRoute } from 'next'
-import { getAllSlugs } from '@/lib/blog'
+import { getAllSlugs, getPost } from '@/lib/blog'
 import { routing } from '@/i18n/routing'
 
 const BASE_URL = 'https://ai-muninn.com'
@@ -27,10 +27,12 @@ export default function sitemap(): MetadataRoute.Sitemap {
   // Use en slugs as the canonical set; zh-TW posts have the same slugs
   const slugs = getAllSlugs('en')
   for (const slug of slugs) {
+    const post = getPost(slug, 'en')
+    const lastModified = post?.date ? new Date(post.date) : new Date()
     for (const locale of routing.locales) {
       entries.push({
         url: `${BASE_URL}/${locale}/blog/${slug}`,
-        lastModified: new Date(),
+        lastModified,
         changeFrequency: 'monthly',
         priority: 0.8,
       })
