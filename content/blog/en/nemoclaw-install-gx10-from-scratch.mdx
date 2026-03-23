@@ -1,0 +1,246 @@
+---
+title: "[AI Agent] Installing NemoClaw on a GX10 from Scratch"
+description: "Step-by-step NemoClaw install on ASUS GX10 Ascent (GB10, SM121). Covers Node upgrade, BASH_SOURCE installer bug, cgroup v2 Docker fix, OpenShell binary gotcha, and onboard completion."
+date: "2026-03-23"
+updatedAt: "2026-03-23"
+tags: ["NemoClaw", "OpenClaw", "OpenShell", "AI Agent", "NVIDIA", "DGX Spark", "GX10", "GB10"]
+series: "NemoClaw"
+part: 2
+---
+
+Installing software from a curl-pipe-bash script on unusual hardware is a trust exercise. You run the script, something fails loud, and then you spend thirty minutes figuring out whether anything actually installed.
+
+This picks up where [Part 1](/en/blog/nemoclaw-what-it-is-why-it-exists) left off. That article covered what NemoClaw is and why it exists. This one is the install log from a GX10 (ASUS GX10 Ascent, GB10 chip, SM121 — same architecture as DGX Spark) to a running `my-assistant` sandbox.
+
+Environment going in:
+- Ubuntu 24.04, kernel `6.17.0-1008-nvidia`
+- aarch64 (ARM)
+- Node.js v18.19.1
+- Docker 28.5.1, user already in `docker` group
+- No OpenShell, no NemoClaw
+
+<TLDRCard>
+NemoClaw on GX10 (GB10/SM121) needs four fixes that aren't in the official docs: upgrade Node.js to v22, manually run `sudo npm link` after the installer, install OpenShell from the tar.gz release (not the binary URL in the docs — that 404s), and add `cgroupns=host` to Docker daemon.json before onboard. After those, `nemoclaw setup-spark` and `NEMOCLAW_NON_INTERACTIVE=1 nemoclaw onboard` complete cleanly.
+</TLDRCard>
+
+## Step 1: Upgrade Node.js to v22
+
+NemoClaw requires Node.js 20+. The GX10 had v18.19.1 shipped with the system. The installer checks this early:
+
+```
+Error: Node.js version 18.19.1 is not supported. Please upgrade to 20 or later.
+```
+
+Upgraded to v22 via NodeSource:
+
+```bash
+curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
+sudo apt-get install -y nodejs
+node --version
+# v22.22.1
+```
+
+v22 is fine even though the error only mentions 20+.
+
+## Step 2: Run the NemoClaw Installer
+
+```bash
+curl -fsSL https://www.nvidia.com/nemoclaw.sh | bash
+```
+
+The installer exited with code 243 and printed:
+
+```
+nemoclaw.sh: line 47: BASH_SOURCE[0]: unbound variable
+```
+
+This is a `set -euo pipefail` issue: `BASH_SOURCE[0]` is unset when the script runs inside a `curl | bash` subshell. The error fires in the script's cleanup block — after the actual installation is already complete. Running `nemoclaw --version` immediately after:
+
+```
+nemoclaw v0.1.0
+```
+
+The CLI is installed at `~/.nemoclaw/source`. The error is cosmetic but it is loud.
+
+## Step 3: Fix npm link Permissions
+
+The installer tries to create a global symlink. That step failed:
+
+```
+npm error code EACCES
+npm error syscall symlink
+npm error path /usr/local/lib/node_modules/nemoclaw
+npm error dest /usr/local/bin/nemoclaw
+npm error errno -13
+```
+
+Standard npm global install permission issue on a system-managed Node.js. Fixed manually:
+
+```bash
+cd ~/.nemoclaw/source
+sudo npm link
+```
+
+After this, `nemoclaw` is callable from any directory.
+
+## Step 4: Install OpenShell CLI
+
+NemoClaw's `onboard` command requires the `openshell` CLI to be present. The official `spark-install.md` says to install it like this:
+
+```bash
+# This URL 404s — do NOT use
+ARCH=$(uname -m)
+curl -fsSL "https://github.com/NVIDIA/OpenShell/releases/latest/download/openshell-linux-${ARCH}" \
+  -o /usr/local/bin/openshell
+```
+
+That URL returned HTTP 404. The actual release format is a tar.gz, not a bare binary. The correct install for aarch64 Linux:
+
+```bash
+curl -fsSL \
+  "https://github.com/NVIDIA/OpenShell/releases/download/v0.0.13/openshell-aarch64-unknown-linux-musl.tar.gz" \
+  -o /tmp/openshell.tar.gz
+tar xzf /tmp/openshell.tar.gz -C /tmp
+sudo mv /tmp/openshell /usr/local/bin/openshell
+openshell --version
+# openshell 0.0.13
+```
+
+For x86_64, replace `aarch64-unknown-linux-musl` with `x86_64-unknown-linux-musl`.
+
+To get the current latest version programmatically:
+
+```bash
+curl -s https://api.github.com/repos/NVIDIA/OpenShell/releases/latest \
+  | python3 -c "import sys,json; r=json.load(sys.stdin); print(r['tag_name'])"
+# v0.0.13
+```
+
+## Step 5: Fix Docker for cgroup v2
+
+Ubuntu 24.04 ships with cgroup v2 (`cgroup2fs`). OpenShell's gateway container starts k3s internally, and k3s tries to create cgroup v1-style paths that don't exist under cgroup v2. Without a fix, onboard fails with:
+
+```
+K8s namespace not ready
+openat2 /sys/fs/cgroup/kubepods/pids.max: no such file or directory
+Failed to start ContainerManager: failed to initialize top level QOS containers
+```
+
+Verify cgroup version first:
+
+```bash
+stat -fc %T /sys/fs/cgroup/
+# cgroup2fs   ← affected
+# tmpfs       ← cgroup v1, no fix needed
+```
+
+If `cgroup2fs`, add `cgroupns=host` to Docker's daemon config:
+
+```bash
+sudo python3 -c "
+import json, os
+path = '/etc/docker/daemon.json'
+d = json.load(open(path)) if os.path.exists(path) else {}
+d['default-cgroupns-mode'] = 'host'
+json.dump(d, open(path, 'w'), indent=2)
+"
+sudo systemctl restart docker
+```
+
+This makes all containers use the host cgroup namespace, which is what k3s expects. The existing containers (`open-webui`, `pipelines`, etc.) survived the restart without issues.
+
+## Step 6: Get an NVIDIA API Key
+
+`nemoclaw setup-spark` and `nemoclaw onboard` both require a key from [build.nvidia.com/settings/api-keys](https://build.nvidia.com/settings/api-keys). The key starts with `nvapi-`. The free tier is valid for 30 days.
+
+The key can be passed as an environment variable to skip the interactive prompt:
+
+```bash
+export NVIDIA_API_KEY=nvapi-...
+```
+
+## Step 7: Run setup-spark
+
+```bash
+NVIDIA_API_KEY=nvapi-... nemoclaw setup-spark
+```
+
+Output:
+
+```
+>>> User 'coolthor' already in docker group
+>>> Docker daemon already configured for cgroupns=host
+
+>>> DGX Spark Docker configuration complete.
+>>> Next step: run 'nemoclaw onboard' to set up your sandbox.
+```
+
+`setup-spark` checks Docker group membership and the daemon config, then exits. On GX10 — after the manual fixes above — it completes in under a second with nothing to do. On a fresh DGX Spark straight from the box it would apply the fixes automatically.
+
+## Step 8: Run onboard
+
+The default `nemoclaw onboard` is interactive — it prompts for sandbox name, model selection, and other configuration. Since this was running over SSH without a TTY, the interactive mode stalled. Passing `NEMOCLAW_NON_INTERACTIVE=1` uses defaults throughout:
+
+```bash
+NVIDIA_API_KEY=nvapi-... NEMOCLAW_NON_INTERACTIVE=1 nemoclaw onboard
+```
+
+The output scrolled through 7 stages:
+
+```
+[1/7] Preflight checks
+  ✓ Docker is running
+  ✓ openshell CLI: openshell 0.0.13
+  ✓ Port 8080 available (OpenShell gateway)
+  ✓ NVIDIA GPU detected: 1 GPU(s), 122502 MB VRAM
+
+[2/7] Starting OpenShell gateway
+  Gateway nemoclaw ready.
+  ✓ Active gateway set to 'nemoclaw'
+
+[3/7] Creating sandbox
+...
+
+[7/7] Done
+```
+
+The k3s startup logs printed during stage 2 are verbose — hundreds of lines of Kubernetes reconciler output. They're not errors. The process completed cleanly.
+
+Verification:
+
+```bash
+nemoclaw status
+# Sandboxes:
+#   my-assistant * (nvidia/nemotron-3-super-120b-a12b)
+
+nemoclaw my-assistant status
+# Phase: Ready
+```
+
+The sandbox is up, policy enforcement is active, and the agent is connected to `nvidia/nemotron-3-super-120b-a12b` via NVIDIA's cloud inference API.
+
+## What Was Gained
+
+**What cost the most time:** The OpenShell binary URL. `spark-install.md` documents a URL that 404s on the current release. The actual asset is a tar.gz with a different naming convention. The error from `curl -fsSL` on a 404 is silent by default — it just saves an HTML error page as the binary, which then fails with a confusing "Exec format error" on execution. Running `curl -v` would have shown the 404 immediately.
+
+**Transferable diagnostic:** When a binary fails with `Exec format error` on Linux, the first thing to check is whether the download actually succeeded. `file <binary>` will show `ASCII text` instead of `ELF` if you saved an HTML page. GitHub's release asset naming is not consistent across versions — always look at the actual release page, not docs that reference a specific URL.
+
+**The pattern that applies everywhere:** `curl | bash` installers on non-x86 hardware with strict bash mode have two independent failure points: the download step (architecture mismatch, URL rot) and the script's own bash compatibility. Both can fail silently in ways that look like a complete install failure when only part of the process failed. Check artifacts after every step.
+
+## Installation Checklist
+
+For NemoClaw on GX10 / DGX Spark (aarch64, Ubuntu 24.04, cgroup v2):
+
+1. `node --version` → must be 20+. If not: install via NodeSource v22
+2. `curl -fsSL https://www.nvidia.com/nemoclaw.sh | bash` → ignore exit code 243
+3. `cd ~/.nemoclaw/source && sudo npm link`
+4. Download OpenShell from GitHub releases (tar.gz), not the URL in the docs
+5. Check `stat -fc %T /sys/fs/cgroup/` → if `cgroup2fs`, add `cgroupns=host` to daemon.json
+6. Get NVIDIA API key from build.nvidia.com (30-day free)
+7. `NVIDIA_API_KEY=nvapi-... nemoclaw setup-spark`
+8. `NVIDIA_API_KEY=nvapi-... NEMOCLAW_NON_INTERACTIVE=1 nemoclaw onboard`
+9. `nemoclaw status` → should show sandbox in Ready phase
+
+---
+
+*Also in this series: [Part 1 — NemoClaw: What It Is, Why It Exists, and How It Works](/en/blog/nemoclaw-what-it-is-why-it-exists)*
