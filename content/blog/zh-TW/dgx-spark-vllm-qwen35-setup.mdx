@@ -1,6 +1,6 @@
 ---
 title: "[vLLM] Qwen3.5-35B 跑到 47 tok/s：從 Ollama 遷移到 vLLM"
-description: "在 DGX Spark（GB10，128GB）上從 Ollama 換到 vLLM。Prefix caching 讓 TTFT 從幾秒降到 0.12s。六個坑：thinking mode、記憶體衝突、docker 重啟、warmup、SSM + chunked prefill，以及參數耦合。"
+description: "TTFT 從幾秒降到 0.12s。DGX Spark GB10 上 Qwen3.5-35B 從 Ollama 換到 vLLM 的實戰筆記，含六個坑：SSM + chunked prefill 陷阱、記憶體衝突、docker 重啟順序。"
 date: "2026-03-05"
 updatedAt: "2026-03-05"
 tags: ["DGX Spark", "GB10", "vLLM", "Ollama", "Qwen3.5", "Docker", "Blackwell", "AI Agent"]

@@ -1,6 +1,6 @@
 ---
 title: "[vLLM] Qwen3.5-35B at 47 tok/s on a Desktop: Migrating from Ollama to vLLM"
-description: "Moving from Ollama to vLLM on a DGX Spark (GB10, 128GB). Prefix caching drops TTFT from seconds to 0.12s. Six gotchas: thinking mode, memory fights, docker restart, warmup, SSM + chunked prefill, and parameter coupling."
+description: "TTFT 3s → 0.12s after switching from Ollama to vLLM on DGX Spark GB10. Six real gotchas: SSM + chunked prefill trap, memory conflicts, docker restart order."
 date: "2026-03-05"
 updatedAt: "2026-03-05"
 tags: ["DGX Spark", "GB10", "vLLM", "Ollama", "Qwen3.5", "Docker", "Blackwell", "AI Agent"]
