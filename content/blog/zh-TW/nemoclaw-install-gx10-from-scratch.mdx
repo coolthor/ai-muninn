@@ -1,6 +1,6 @@
 ---
-title: "[AI Agent] 在 GX10 上從零安裝 NemoClaw"
-description: "ASUS GX10 Ascent（GB10, SM121）完整安裝 NemoClaw 的踩坑記錄。涵蓋 Node 升級、BASH_SOURCE installer bug、cgroup v2 Docker 修復、OpenShell binary 404，以及 onboard 完成。"
+title: "30 分鐘搞定 NemoClaw 安裝：DGX Spark 完整教學"
+description: "在 DGX Spark（GX10, GB10）上安裝 NVIDIA NemoClaw 的完整指南。涵蓋 Docker cgroup v2 修復、OpenShell 設定、Node 升級，以及每個踩坑點。30 分鐘內跑起第一個 Agent。2026 年更新。"
 date: "2026-03-23"
 updatedAt: "2026-03-23"
 tags: ["NemoClaw", "OpenClaw", "OpenShell", "AI Agent", "NVIDIA", "DGX Spark", "GX10", "GB10"]
@@ -221,9 +221,9 @@ Sandbox 起來了，policy enforcement 啟動，agent 連到 NVIDIA 雲端的 `n
 
 **花最多時間的地方：** OpenShell binary URL。`spark-install.md` 文件裡的 URL 在當前版本是 404。實際的 asset 是 tar.gz，命名規則也不同。更麻煩的是 `curl -fsSL` 在 404 時預設不報錯——它會把 HTML 錯誤頁存成 binary，然後在執行時出現 `Exec format error`，讓人以為是架構問題而不是下載問題。加 `-v` flag 就能立刻看到 404。
 
-**可以帶走的診斷方式：** Binary 出現 `Exec format error` 時，先跑 `file <binary>`。如果顯示 `ASCII text` 而不是 `ELF`，就是下載到了 HTML 錯誤頁。GitHub release asset 的命名在不同版本之間不一致，不要信任文件裡寫死的 URL，直接去 release 頁面確認。
+**下次遇到類似問題先想到：** Binary 出現 `Exec format error` 時，先跑 `file <binary>`。如果顯示 `ASCII text` 而不是 `ELF`，就是下載到了 HTML 錯誤頁。GitHub release asset 的命名在不同版本之間不一致，不要信任文件裡寫死的 URL，直接去 release 頁面確認。
 
-**到處都適用的那個規律：** `curl | bash` 安裝腳本在非 x86 硬體 + strict bash mode 下有兩個獨立的失敗點：下載步驟（架構不符、URL 失效）和腳本本身的 bash 相容性。兩個都可能靜默失敗，從外面看起來像全部失敗，但實際上只有一部分失敗。每個步驟後都確認 artifacts 是否存在。
+**記住這一件事：** `curl | bash` 安裝腳本在非 x86 硬體 + strict bash mode 下有兩個獨立的失敗點：下載步驟（架構不符、URL 失效）和腳本本身的 bash 相容性。兩個都可能靜默失敗，從外面看起來像全部失敗，但實際上只有一部分失敗。每個步驟後都確認 artifacts 是否存在。
 
 ## 安裝 Checklist
 
