@@ -17,6 +17,8 @@ faq:
     a: "If the repetition starts at a consistent token count (not immediately) and sampling parameters have no effect, it's precision degradation — not a temperature or top_p issue. Check the startup log for 'q_scale=1.0'. If that line appears, FP8 KV cache is running uncalibrated."
 ---
 
+
+<VideoEmbed src="/videos/fp8-kvcache-bug.mp4" />
 ## Preface
 
 Optimization has a prerequisite condition. When the condition isn't met, you don't get a worse version of the optimization — you get something that looks like it worked and then quietly fails at output token 500.

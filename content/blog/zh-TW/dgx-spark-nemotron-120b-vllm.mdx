@@ -17,6 +17,8 @@ faq:
     a: "decode 速度 13-16 tok/s，17 個 shard 的載入時間約 8 分鐘。以 200K context、fp8 KV cache、0.85 GPU utilization 計算，約分配 35GB 給 KV cache。比同硬體上的 Qwen3.5-35B（47 tok/s）慢約 3 倍，和它大約 3 倍的 active parameter 數量一致。"
 ---
 
+
+<VideoEmbed src="/videos/nemotron-120b-debug.mp4" />
 ## 前言
 
 同一座工廠，不同的生產線。GB10 和 B200 都是 Blackwell。它們共享製程、共享行銷家族，但在 kernel 層面幾乎沒有相容性。讓某個 model 在 SM121 上跑起來，不代表下一個 model 能用同樣的方式跑——甚至不代表能跑。
@@ -178,7 +180,7 @@ Qwen3.5 那篇提到的 SSM 參數耦合問題在這裡也適用：`--max-num-ba
 
 Nemotron 在 GB10 上跑起來了。200K context window 在長 system prompt 下可以正常使用。SM121 專屬的修法組合（Marlin backend、正確的環境變數、stable image）對這個 model 有效。
 
-這次 debug 可以遷移的教訓：在 SM121 上，在得出「硬體不相容」的結論之前，先確認 kernel path。失敗症狀——`cudaErrorIllegalInstruction` 或靜默的錯誤輸出——看起來像硬體問題。它不是。它是 kernel targeting 問題。修法通常只差一個 flag。
+這次 debug 的心得：在 SM121 上，在得出「硬體不相容」的結論之前，先確認 kernel path。失敗症狀——`cudaErrorIllegalInstruction` 或靜默的錯誤輸出——看起來像硬體問題。它不是。它是 kernel targeting 問題。修法通常只差一個 flag。
 
 具體的診斷：在 startup log 找 `[NVFP4] Using backend: marlin`。如果看到的是 `Auto-selected`，代表你的 configuration 有某個東西沒有被讀到。NVFP4 的環境變數（`VLLM_NVFP4_GEMM_BACKEND`）跟 MXFP4 的環境變數（`VLLM_MXFP4_BACKEND`）不同，不能互換。MoE backend 必須用 CLI flag 設定（`--moe-backend marlin`），沒有對應的環境變數。
 

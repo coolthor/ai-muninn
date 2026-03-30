@@ -17,6 +17,8 @@ faq:
     a: "在 launchd plist 的環境變數裡設 OPENCLAW_TELEGRAM_DISABLE_AUTO_SELECT_FAMILY=1。這會在初始化時就把 undici Agent 的 autoSelectFamily: false 設好，從根本阻止 IPv6 嘗試，而不是在 EHOSTUNREACH 之後才嘗試 fallback。"
 ---
 
+
+<VideoEmbed src="/videos/telegram-routing.mp4" />
 ## 前言
 
 Bot 顯示在線。Process 在跑。發了一則訊息。沒有任何回應。
@@ -347,7 +349,7 @@ scutil --nwi | grep -A5 "IPv6"
 **最花時間的部分：**
 sticky fallback 的 log 行在主動誤導我。`enabling sticky IPv4-only dispatcher` 聽起來像是修好了。花了讀 source code 才理解它在每次 provider 重啟時都會重置。一個說「已修復」但修復無法在重啟後存活的 log 行，比沒有 log 行還糟。
 
-**可遷移的診斷方法：**
+**下次遇到類似問題先想到：**
 - `sendChatAction` 後靜默失敗 → 檢查在真正的 request 之前有沒有 IPv6 嘗試在發生
 - `net.setDefaultAutoSelectFamily(false)` 沒有效果 → 你在用 undici（Node.js 18+），不是 `net` 模組；它們是分開的
 - Fallback 機制在每次啟動都 log「已啟用」→ flag 大概住在一個每次重新建立的 closure 裡

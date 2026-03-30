@@ -17,6 +17,8 @@ faq:
     a: "如果重複從固定 token 數開始（不是一開始就出現）且調整 sampling 參數無效，那是精度退化問題，不是 temperature 或 top_p 的事。查看 startup log 是否有 'q_scale=1.0'。這行出現就代表 FP8 KV cache 在沒有 calibration 的情況下運行。"
 ---
 
+
+<VideoEmbed src="/videos/fp8-kvcache-bug.mp4" />
 ## 前言
 
 優化有前提條件。前提條件沒滿足，你得到的不是比較差的優化——你得到的是看起來有效、然後在第 500 個 token 悄悄崩潰的東西。
@@ -125,7 +127,7 @@ Using default scale q_scale=1.0
 - Startup log 出現 `q_scale=1.0` → FP8 KV cache 在沒有 calibration 的狀況下跑。移除 `--kv-cache-dtype fp8` 或提供 `--kv-cache-scales-path`。
 - GB10（128GB unified memory）：BF16 KV cache 幾乎永遠是正確的預設值。FP8 KV cache 的優化壓力適用於 VRAM 有限的 GPU，不適用於 128GB unified memory 的系統。
 
-**通用規律：**
+**記住這一件事：**
 先看 startup log，再 debug 模型行為。重複、亂碼、品質劣化，幾乎都可以從 server 初始化找到線索，不是從輸出本身。
 
 ---

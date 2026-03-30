@@ -17,6 +17,8 @@ faq:
     a: "Tasks where the agent recognizes a gap: code generation where it's uncertain about correctness, debugging an error it hasn't seen before, or domains it's less confident in. The agent decides — callhelp is just a tool available in the loop, not a routing rule."
 ---
 
+
+<VideoEmbed src="/videos/callhelp-spawning.mp4" />
 ## Preface
 
 Every local agent hits a ceiling. The model is good enough for most things, but occasionally a task arrives that requires stronger reasoning, better code generation, or simply a second opinion from a model that's had more training on the problem domain. The standard answer is to route those tasks to a cloud API. The less obvious answer is to let the agent make that call itself — by spawning a CLI tool mid-reasoning and reading the output.

@@ -17,6 +17,8 @@ faq:
     a: "吞吐量崩潰但 server 看起來正常（請求成功、沒有 error），先查 configuration flag，再查 model 和硬體。SSM 模型的第一個嫌疑是 --enable-chunked-prefill。同時也要確認沒有 Ollama 記憶體衝突，以及每個請求是否都帶了 enable_thinking: false。"
 ---
 
+
+<VideoEmbed src="/videos/chunked-prefill-ssm.mp4" />
 ## 前言
 
 流水線讓組裝更快，前提是每個站的東西不需要按順序交給下一站。如果需要，你就把一條生產線變成了一個瓶頸。

@@ -1,0 +1,112 @@
+---
+title: "[AI Agent] openclaw + ChatGPT OAuth: GPT-5.4 Without Buying API Credits"
+description: "openclaw 2026.3.13 added OpenAI OAuth login. One command gives your agent GPT-5.4's 1M context window using a ChatGPT Plus subscription instead of API credits."
+date: "2026-03-24"
+updatedAt: "2026-03-24"
+tags: ["openclaw", "GPT-5.4", "ChatGPT", "OAuth", "AI agent"]
+series: "OpenClaw"
+part: 11
+---
+
+
+<VideoEmbed src="/videos/chatgpt-oauth.mp4" />
+A lock that opens with a face instead of a key still opens the door. openclaw's new `openai-codex` provider does exactly that — your ChatGPT Plus subscription becomes the credential, and your agent gets GPT-5.4 without a separate API billing account.
+
+This is Part 11 of the [OpenClaw series](/en/blog/openclaw-dgx-spark-local-ai-agent). The setup covered here takes about five minutes, but there are three non-obvious steps that aren't in the release notes.
+
+<TLDRCard>
+`openclaw models auth login --provider openai-codex` adds GPT-5.4 (1,050,000-token context) to your openclaw agent using a ChatGPT Plus account. No OpenAI API key required. Three gotchas: needs an interactive terminal, gateway must restart after auth, and the default model must be set separately.
+</TLDRCard>
+
+## What Changed in 2026.3.13
+
+The `openai-codex` provider shipped in earlier builds, but auth was broken — successful logins were re-validated against the public OpenAI Responses API, which rejected the Codex OAuth tokens. The fix landed in [2026.3.13](https://github.com/openclaw/openclaw/releases/tag/v2026.3.13-1):
+
+> *OpenAI Codex OAuth/login parity: keep `openclaw models auth login --provider openai-codex` on the built-in path even without provider plugins, preserve Pi-generated authorize URLs without local scope rewriting, and stop validating successful Codex sign-ins against the public OpenAI Responses API after callback.*
+
+In practice: the login flow now completes cleanly, and `auth.profiles` gets written to `~/.openclaw/openclaw.json`.
+
+## Running the Auth Flow
+
+The command is one line:
+
+```bash
+openclaw models auth login --provider openai-codex
+```
+
+It opens a browser pointed at `https://auth.openai.com/oauth/authorize`, you log in with your ChatGPT account, and the callback writes the token.
+
+**Gotcha 1: this requires an interactive TTY.** Running it over SSH fails immediately:
+
+```
+Error: models auth login requires an interactive TTY.
+```
+
+Run it directly on the machine where openclaw is installed — either sit at it, or use screen sharing / remote desktop. `ssh -t` does not help here because the OAuth callback runs on localhost.
+
+After a successful login, the terminal shows:
+
+```
+◇  OpenAI OAuth complete
+Config overwrite: /Users/coolthor/.openclaw/openclaw.json (sha256 b6289... -> d6fae...)
+Updated ~/.openclaw/openclaw.json
+Auth profile: openai-codex:default (openai-codex/oauth)
+Default model available: openai-codex/gpt-5.4 (use --set-default to apply)
+```
+
+The config is written and the gateway detects the change via file watcher (`config change detected; evaluating reload`). But GPT-5.4 will not appear in `openclaw models list` yet.
+
+## Setting the Default Model
+
+**Gotcha 2: the model isn't automatically set as default.** The auth output says "use --set-default to apply" but that flag only works during an interactive `auth login` session, not after the fact.
+
+Set it via config:
+
+```bash
+openclaw config set agents.defaults.model.primary openai-codex/gpt-5.4
+```
+
+Output confirms the write and tells you what's still needed:
+
+```
+Updated agents.defaults.model.primary. Restart the gateway to apply.
+```
+
+## Restarting the Gateway
+
+**Gotcha 3: the gateway must restart.** The dynamic config reload handles most changes, but model provider registration isn't one of them.
+
+```bash
+# macOS launchd
+launchctl stop ai.openclaw.gateway
+launchctl start ai.openclaw.gateway
+```
+
+After restart, `openclaw models list` shows the new entry and your agent will use GPT-5.4 by default.
+
+## What GPT-5.4 Adds
+
+The model ships with a 1,050,000-token context window and 128,000 max output tokens. For an agent running long research sessions or processing large documents over Telegram, this removes the context ceiling that local 120B models hit around 128K.
+
+The tradeoff: GPT-5.4 runs on OpenAI's servers, not locally. Anything the agent sends goes through ChatGPT's backend. For a personal agent handling trading notes or private data, that's worth thinking about before switching primary models.
+
+## What Was Gained
+
+**What cost the most time:** The TTY requirement. The error message is clear, but "interactive TTY" doesn't immediately suggest "use screen sharing." SSH with `-t` feels like it should work and doesn't.
+
+**Transferable diagnostics:** When an openclaw config change doesn't reflect in `models list`, the cause is almost always a missing gateway restart. The file-watcher reload is real but partial — it handles credentials and routing, not provider registration.
+
+**The pattern that applies everywhere:** Auth flows that open a local callback (`localhost:1455/auth/callback`) cannot be proxied through SSH. The browser, the CLI process, and the callback listener all need to run on the same machine.
+
+## Checklist
+
+1. Update openclaw to 2026.3.13 or later
+2. On the gateway machine directly (not via SSH): run `openclaw models auth login --provider openai-codex`
+3. Complete the ChatGPT login in the browser that opens
+4. Run `openclaw config set agents.defaults.model.primary openai-codex/gpt-5.4`
+5. Restart the gateway: `launchctl stop ai.openclaw.gateway && launchctl start ai.openclaw.gateway`
+6. Verify with `openclaw models list`
+
+---
+
+*Also in this series: [Part 10 — Telegram sendMessageDraft Streaming](/en/blog/openclaw-telegram-sendmessagedraft-streaming)*

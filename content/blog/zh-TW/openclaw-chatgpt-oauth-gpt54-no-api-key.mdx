@@ -1,0 +1,102 @@
+---
+title: "[AI Agent] openclaw + ChatGPT OAuth：不買 API 額度也能用 GPT-5.4"
+description: "openclaw 2026.3.13 加入了 OpenAI OAuth 登入。一行指令讓你的 agent 用 ChatGPT Plus 訂閱取得 GPT-5.4 的 100 萬 token context，不需要另外買 API credits。"
+date: "2026-03-24"
+updatedAt: "2026-03-24"
+tags: ["openclaw", "GPT-5.4", "ChatGPT", "OAuth", "AI agent"]
+series: "OpenClaw"
+part: 11
+---
+
+
+<VideoEmbed src="/videos/chatgpt-oauth.mp4" />
+用臉開的鎖和用鑰匙開的鎖，門還是同一扇。openclaw 新的 `openai-codex` provider 就是這個概念——你的 ChatGPT Plus 訂閱變成憑證，agent 直接拿到 GPT-5.4，不需要另一個 OpenAI 帳單帳戶。
+
+這是 [OpenClaw 系列](/zh-TW/blog/openclaw-dgx-spark-local-ai-agent) 的第 11 篇。設定本身大概五分鐘，但有三個步驟在 release notes 裡沒寫清楚。
+
+<TLDRCard>
+`openclaw models auth login --provider openai-codex` 讓你用 ChatGPT Plus 帳號把 GPT-5.4（100 萬 token context）加進 openclaw，不需要 OpenAI API key。三個地雷：需要互動式 terminal、auth 後要重啟 gateway、default model 要另外設定。
+</TLDRCard>
+
+## 2026.3.13 改了什麼
+
+`openai-codex` provider 更早的版本就有，但 auth 流程有 bug——登入成功後會把 Codex OAuth token 拿去打 OpenAI Responses API 做驗證，然後被拒絕。[2026.3.13](https://github.com/openclaw/openclaw/releases/tag/v2026.3.13-1) 修掉了這個問題，現在登入流程可以正常完成，token 會寫進 `~/.openclaw/openclaw.json`。
+
+## 跑 Auth 流程
+
+一行指令：
+
+```bash
+openclaw models auth login --provider openai-codex
+```
+
+它會開瀏覽器到 `https://auth.openai.com/oauth/authorize`，用 ChatGPT 帳號登入，callback 回來後 token 就寫好了。
+
+**地雷一：需要互動式 terminal。** 透過 SSH 跑會直接噴錯：
+
+```
+Error: models auth login requires an interactive TTY.
+```
+
+要在安裝 openclaw 的機器上直接執行——坐在那台電腦前，或用螢幕分享/遠端桌面。`ssh -t` 沒用，因為 OAuth callback 是跑在 localhost，不能被 proxy 過去。
+
+登入成功後 terminal 會顯示：
+
+```
+◇  OpenAI OAuth complete
+Config overwrite: /Users/coolthor/.openclaw/openclaw.json (sha256 b6289... -> d6fae...)
+Updated ~/.openclaw/openclaw.json
+Auth profile: openai-codex:default (openai-codex/oauth)
+Default model available: openai-codex/gpt-5.4 (use --set-default to apply)
+```
+
+Config 已經寫進去，gateway 的 file watcher 也會偵測到變更。但這時候跑 `openclaw models list` 還看不到 GPT-5.4。
+
+## 設定 Default Model
+
+**地雷二：model 不會自動設成 default。** auth 輸出說「use --set-default to apply」，但那個 flag 只在互動式 `auth login` session 裡有效，事後沒辦法用。
+
+用 config 指令設定：
+
+```bash
+openclaw config set agents.defaults.model.primary openai-codex/gpt-5.4
+```
+
+## 重啟 Gateway
+
+**地雷三：gateway 要重啟。** 動態 config reload 可以處理大部分的設定變更，但 model provider registration 不在其中。
+
+```bash
+# macOS launchd
+launchctl stop ai.openclaw.gateway
+launchctl start ai.openclaw.gateway
+```
+
+重啟後 `openclaw models list` 就會出現新的 model，agent 也會開始用 GPT-5.4 作為 primary。
+
+## GPT-5.4 帶來什麼
+
+100 萬 token context window，128,000 token 最大輸出。對一個透過 Telegram 跑長篇研究或處理大文件的 agent 來說，這消除了本地 120B 模型大約在 128K 撞到的上限。
+
+代價是：GPT-5.4 跑在 OpenAI 的 server，不是本機。agent 傳送的任何內容都會經過 ChatGPT 後端。如果 agent 在處理交易紀錄或其他私人資料，換 primary model 之前要想清楚。
+
+## 整理一下學到什麼
+
+**最花時間的地方：** TTY 那關。錯誤訊息寫得清楚，但「互動式 TTY」不會直接讓人想到「去開螢幕分享」。`ssh -t` 看起來應該能解決，試了才發現沒用。
+
+**下次遇到類似問題可以先想到的：** openclaw config 改了但 `models list` 沒反應，幾乎都是少了重啟 gateway 這步。file-watcher reload 是真的有，但只管憑證和路由，provider registration 要完整重啟才會生效。
+
+**記住這一件事：** 只要 auth flow 的 callback 是 localhost（像這裡的 `localhost:1455/auth/callback`），就沒辦法透過 SSH 跑。瀏覽器、CLI、callback listener 三個要在同一台機器上，缺一不可。
+
+## 操作清單
+
+1. 確認 openclaw 版本 ≥ 2026.3.13
+2. 在 gateway 機器上直接執行（不是透過 SSH）：`openclaw models auth login --provider openai-codex`
+3. 在自動開啟的瀏覽器完成 ChatGPT 登入
+4. 執行 `openclaw config set agents.defaults.model.primary openai-codex/gpt-5.4`
+5. 重啟 gateway：`launchctl stop ai.openclaw.gateway && launchctl start ai.openclaw.gateway`
+6. 用 `openclaw models list` 確認
+
+---
+
+*同系列其他文章：[第 10 篇 — Telegram sendMessageDraft Streaming](/zh-TW/blog/openclaw-telegram-sendmessagedraft-streaming)*

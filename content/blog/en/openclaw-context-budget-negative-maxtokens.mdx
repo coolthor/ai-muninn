@@ -17,6 +17,8 @@ faq:
     a: "Set contextWindow: 131072, reserveTokens: 8192 (output headroom), keepRecentTokens: 32768, and maxHistoryShare: 0.5. The reserveTokens value only needs to cover model output space — it doesn't need to buffer system prompt overhead, which is already within the 131K ceiling."
 ---
 
+
+<VideoEmbed src="/videos/context-budget.mp4" />
 ## Preface
 
 A navigation system that thinks the remaining fuel is negative doesn't stop the engine — it just refuses to start the next trip. That's what happened when openclaw was connected to gpt-oss-120B with its full 131K context window and the config hadn't caught up.

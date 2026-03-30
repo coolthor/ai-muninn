@@ -17,6 +17,8 @@ faq:
     a: "--reasoning-parser openai_gptoss 把所有輸出放進 reasoning 欄位，讓 content 變成 null。標準 OpenAI 相容 client 只讀 content，所以什麼都收不到。除非你需要 reasoning channel 分離，否則移除 --reasoning-parser openai_gptoss。"
 ---
 
+
+<VideoEmbed src="/videos/gpt-oss-120b.mp4" />
 ## 前言
 
 目標很簡單：讓跑在這台機器上的 openclaw agent 有一個 120B 的大腦。本地推論，沒有 API 配額，沒有 rate limit，沒有每個 token 的費用。一個隨時可用、速度貼近硬體頻寬上限、不會把資料傳出去的模型。
@@ -269,7 +271,7 @@ DGX Spark 讓這件事可行的原因是統一記憶體架構：128 GB 的記憶
 - **坑 6（錯誤環境變數）** 最難找，因為它完全隱形。沒有 error，沒有 warning。啟動 log 是唯一的訊號。在除錯任何模型行為之前，先讀啟動 log。
 - **坑 5（harmony system message）** 沒有辦法靠設定繞過——需要改原始碼。任何帶 system prompt 的 client 都會靜默踩到，如果沒有打 patch 的話。
 
-**可轉移的診斷模式：**
+**下次遇到類似問題先想到：**
 - gpt-oss 出現重複迴圈 → 看啟動 log 有沒有 `Auto-selected: CUTLASS_FP4`。如果有，你的 Marlin env var 沒有被讀到。
 - response 裡 `content: null` → 要麼 reasoning parser 把輸出路由到錯誤的欄位，要麼模型在生成 reasoning token。先查 parser flag。
 - 內網機器 tokenizer 下載失敗 → tiktoken 用 SHA1 hash 當快取檔名。這個機制沒有任何文件。繞過方法是預先下載並把 `TIKTOKEN_RS_CACHE_DIR` 指向該目錄。

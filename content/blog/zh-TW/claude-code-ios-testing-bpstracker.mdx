@@ -17,6 +17,8 @@ faq:
     a: "使用 Fastlane：capture_ios_screenshots 負責多裝置、多語言截圖，deliver 負責 metadata 和 binary 上傳。Claude 可以直接透過 Bash 呼叫 Fastlane lane。在 CLAUDE.md 加入 max_retries: 0 的規定，並要求在任何重試前必須先讀取錯誤輸出，防止無限迴圈。"
 ---
 
+
+<VideoEmbed src="/videos/ios-context-saving.mp4" />
 ## 前言
 
 用 LLM 測試 iOS app，有點像叫人靠拍照來認識一棟建築。每走一步拍一張，可以運作，但照片很貴，拍到第十五張你會開始想說——用文字描述是不是快多了？
@@ -158,7 +160,7 @@ end
 | 降幅 | — | 81% |
 | 主觀測試速度 | 慢 | 明顯快 |
 
-**可轉移的模式：**
+**同樣的道理放哪都適用：**
 
 screenshot 和 describe 的取捨適用於任何有 MCP 工具能回傳 UI 狀態文字描述的場景。原則一樣：用最便宜的、能包含所需資訊的表示方式。圖片只有在資訊本身是視覺性的時候才需要——顏色、layout、動畫。
 

@@ -8,6 +8,8 @@ series: "NemoClaw"
 part: 1
 ---
 
+
+<VideoEmbed src="/videos/nemoclaw-arch.mp4" />
 OpenClaw 在我的本地 Mac 上跑了一段時間，扮演個人 AI agent。GTC 2026 NVIDIA 宣布了 NemoClaw，第一眼看起來像是換個名字的同一個東西。但它不是。
 
 <TLDRCard>
@@ -68,9 +70,9 @@ OpenShell 不是可選的鷹架——它是預設的入口點。NemoClaw CLI（`
 
 **花最多時間的地方：** 在文件裡把 OpenClaw 和 NemoClaw 分清楚。NVIDIA 的發布資料把它們當成一件事講。差異要等到你問「NemoClaw 比 OpenClaw 多了什麼」才會浮出來——而答案完全就是 OpenShell。
 
-**可以帶走的診斷方式：** 當一個工具被描述為「基於 X 打造」，有趣的問題永遠是包裝層加了什麼，而不是它繼承了什麼。NemoClaw 的情況是，包裝層就是整個安全故事。拿掉它，你回到一個沒有部署邊界的通用 agent。
+**值得養成的習慣：** 當一個工具被描述為「基於 X 打造」，有趣的問題永遠是包裝層加了什麼，而不是它繼承了什麼。NemoClaw 的情況是，包裝層就是整個安全故事。拿掉它，你回到一個沒有部署邊界的通用 agent。
 
-**到處都適用的那個規律：** 開源 agent 框架 + 圍欄層，是每個想從個人使用跨到「可以交給別人用」的 agent 工具都會走的路。NemoClaw 不是第一個這樣做的，而 OpenShell 的具體形狀（gateway process、policy 檔、scoped filesystem）值得記下來，做為設計同類東西的參考點。
+**記住這一件事：** 開源 agent 框架 + 圍欄層，是每個想從個人使用跨到「可以交給別人用」的 agent 工具都會走的路。NemoClaw 不是第一個這樣做的，而 OpenShell 的具體形狀（gateway process、policy 檔、scoped filesystem）值得記下來，做為設計同類東西的參考點。
 
 ## 下一步
 

@@ -17,6 +17,8 @@ faq:
     a: "Agent 自己認識到有能力缺口時：對程式碼正確性不確定的 code generation 任務、沒遇過的 debug 錯誤、或較不熟悉的 domain。由 agent 自己決定——callhelp 只是 loop 裡的一個可用 tool，不是硬性 routing 規則。"
 ---
 
+
+<VideoEmbed src="/videos/callhelp-spawning.mp4" />
 ## 前言
 
 每個本地 agent 都有天花板。大部分任務跑得動，但偶爾會出現一個問題：需要更強的推理、更準的 code generation，或者只是一個對這個 domain 訓練更多的模型來給第二意見。標準答案是把那些任務丟給 cloud API。比較少人想到的答案是讓 agent 自己做這個決定——在推理途中 spawn 一個 CLI tool，讀回 stdout，繼續跑。

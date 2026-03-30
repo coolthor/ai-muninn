@@ -1,0 +1,166 @@
+---
+title: "[AI Agent] NemoClaw 不靠雲端：把 Nemotron 換成本地 Ollama 模型"
+description: "怎麼把 NemoClaw 的推理後端指向本地 Ollama 或 vLLM endpoint。Config 位置、模型替換，以及雲端消失後 OpenShell 仍然在做什麼。"
+date: "2026-03-24"
+updatedAt: "2026-03-24"
+tags: ["NemoClaw", "OpenClaw", "OpenShell", "Ollama", "vLLM", "AI Agent", "NVIDIA", "GX10", "Local Inference"]
+series: "NemoClaw"
+part: 3
+---
+
+
+<VideoEmbed src="/videos/nemoclaw-local.mp4" />
+用雲端推理跑 agent 很方便，直到免費 30 天到期。然後面臨選擇：付錢用 NVIDIA 的 API，或是把 stack 指向桌上那台機器。
+
+這篇接 [Part 2](/zh-TW/blog/nemoclaw-install-gx10-from-scratch) 繼續。上一篇把 NemoClaw 裝好、把 `my-assistant` sandbox 跑到 `Phase: Ready`。那時候所有推理都走 `integrate.api.nvidia.com` 上的 `nvidia/nemotron-3-super-120b-a12b`。這篇講怎麼把它換成同一台 GX10 上的本地 [Ollama](https://ollama.com) endpoint。
+
+<TLDRCard>
+NemoClaw 的推理後端是 OpenAI-compatible，可以在每個 sandbox 的 `~/.nemoclaw/sandboxes/<name>/config.yaml` 裡設定。換成本地 Ollama endpoint（`http://localhost:11434/v1`）需要改三個欄位：endpoint URL、model name、api_key（設成 `"ollama"`）。OpenShell 的 filesystem 和工具政策跟推理後端無關——不管跑哪個模型都照樣執行。
+</TLDRCard>
+
+## 為什麼要換後端
+
+三個原因，按常見度排序：
+
+**費用。** NVIDIA API 免費 30 天，到期就要付費。GX10 有 128GB unified memory 和 273 GB/s 記憶體頻寬——拿來當雲端 API 的中轉站是浪費。
+
+**隱私。** 每個傳給 Nemotron 雲端的 prompt 都會離開機器。對一個有 filesystem 存取和記憶功能的個人 agent 來說，這個暴露面不小。
+
+**模型選擇。** 預設的 `nvidia/nemotron-3-super-120b-a12b` 能力很強，但有自己的立場——針對「幫助性」和內容安全做過調整，在某些使用場景會擋路。本地模型拿掉了這層限制。這帶出一個值得直接說清楚的問題。
+
+## Uncensored 模型的問題
+
+這次載的模型是 [HauhauCS/Qwen3.5-35B-A3B-Uncensored-HauhauCS-Aggressive](https://huggingface.co/HauhauCS/Qwen3.5-35B-A3B-Uncensored-HauhauCS-Aggressive)——Qwen3.5-35B-A3B 的 fine-tune，拿掉了標準安全過濾器。
+
+自然會問：如果模型沒有內容限制，是什麼在阻止 agent 做任何被要求的事？
+
+OpenShell。這就是 NemoClaw 常被忽略的架構重點。
+
+OpenShell 在**工具執行層**執行政策，不是在**語言模型層**。當 agent 決定呼叫工具——讀檔案、執行指令、發網路請求——OpenShell 在執行前攔截這個呼叫，對照政策設定。此時模型的內容偏好無關緊要。Sandbox 允許存取 `/sandbox` 和 `/tmp`，允許 allowlist 裡的工具。其他的在 gateway 層就被擋掉，工具根本不會跑到。
+
+雲端推理加了第二層（模型自己的內容拒絕）。本地 uncensored 推理拿掉了這層。但 OpenShell 那層——真正控制 agent 能對 filesystem 和網路做什麼的那層——不管換什麼模型都在。
+
+也就是說：uncensored 模型 + OpenShell sandbox 是一個一致的組合。模型可以不受內容限制地推理和回應；agent 的行為仍然被 sandbox 政策約束。這兩件事是正交的。
+
+## 找 Config
+
+`nemoclaw onboard` 完成後，sandbox 設定在：
+
+```
+~/.nemoclaw/sandboxes/<sandbox-name>/config.yaml
+```
+
+非互動式 onboard 的預設 sandbox 名稱：
+
+```bash
+cat ~/.nemoclaw/sandboxes/my-assistant/config.yaml
+```
+
+相關的段落：
+
+```yaml
+inference:
+  endpoint: "https://integrate.api.nvidia.com/v1"
+  model: "nvidia/nemotron-3-super-120b-a12b"
+  api_key: "nvapi-..."
+```
+
+只有這裡參照了 NVIDIA 雲端。OpenShell gateway config（`~/.openshell/gateways/nemoclaw/`）和 sandbox policy 檔案都不碰推理路由。
+
+## 換成 Ollama
+
+Ollama 在 `http://localhost:11434/v1` 提供 OpenAI-compatible API。Model name 用 `ollama pull` 或 `ollama run` 完成後 Ollama 顯示的名稱。
+
+先確認已載入的模型：
+
+```bash
+ollama list
+```
+
+然後更新 sandbox config：
+
+```bash
+# 先備份
+cp ~/.nemoclaw/sandboxes/my-assistant/config.yaml \
+   ~/.nemoclaw/sandboxes/my-assistant/config.yaml.nemotron-backup
+```
+
+編輯 `~/.nemoclaw/sandboxes/my-assistant/config.yaml`：
+
+```yaml
+inference:
+  endpoint: "http://localhost:11434/v1"
+  model: "hauhaucs/qwen3.5-35b-a3b-uncensored-hauhaucs-aggressive:latest"
+  api_key: "ollama"
+```
+
+`api_key` 欄位是 config schema 的必填項，但 Ollama 會忽略它的值。設成 `"ollama"` 滿足 schema 又不會造成混淆。
+
+重啟 sandbox 讓設定生效：
+
+```bash
+nemoclaw my-assistant restart
+```
+
+確認新後端已啟用：
+
+```bash
+nemoclaw my-assistant status
+# Phase: Ready
+# Model: hauhaucs/qwen3.5-35b-a3b-uncensored-hauhaucs-aggressive:latest
+```
+
+## 測試切換結果
+
+連進 sandbox 發一個測試訊息：
+
+```bash
+nemoclaw connect my-assistant
+```
+
+第一次回應的延遲會比 Nemotron 雲端高——Ollama 如果模型還沒在記憶體裡，需要先載入。之後的回應都從記憶體跑。
+
+一個值得注意的行為差異：Qwen3.5-35B-A3B 是 thinking model。Ollama 預設開啟 thinking，也就是說 agent 在回應前會先生成推理 token。對使用者來說看起來是一段長時間沉默再突然輸出。如果互動延遲無法接受，Ollama 支援透過 system prompt 或 `think: false` 參數關閉 thinking——但 NemoClaw 沒有直接暴露這個參數。vLLM 路徑在這裡處理得比較乾淨。
+
+## vLLM 的替代路徑
+
+如果 Ollama 的延遲不夠好，已經在 port 8000 跑的 vLLM container 可以直接換上：
+
+```yaml
+inference:
+  endpoint: "http://localhost:8000/v1"
+  model: "qwen3.5-35b"
+  api_key: "none"
+```
+
+Model name `qwen3.5-35b` 是啟動 container 時設的 `--served-model-name`。vLLM 的 OpenAI-compatible server 接管剩下的部分，行為完全一樣。
+
+vLLM 對 thinking mode 的處理也更乾淨——container 啟動時帶的 `--reasoning-parser qwen3` flag 讓 vLLM 在把回應傳給 client 之前就把推理 token 剝掉。Agent 看到的是乾淨輸出，不帶內部獨白。
+
+取捨是：Ollama 設定快、換模型容易、同時支援多個模型在記憶體裡。vLLM 熱請求 TTFT 更低（約 0.12s vs Ollama 的約 0.4s），structured output 和 tool call 的處理也更穩。
+
+這個場景——GX10、個人使用、一次跑一個模型——兩個都行。便利性選 Ollama；生產行為選 vLLM。
+
+## 這次學到了什麼
+
+**花最多時間的地方：** 找 config 檔案。NemoClaw 的文件沒提到 per-sandbox 推理設定在哪。`~/.nemoclaw/sandboxes/` 這個目錄結構不在任何 `nemoclaw` CLI 指令的輸出裡——v0.1.0 沒有 `nemoclaw config show` 之類的東西。找到它要在 onboard 後直接 list 目錄。
+
+**下次遇到類似問題先想到：** 工具的 config 路徑沒有文件時，先看 `~/.toolname/`。如果工具遵循 XDG convention，也查一下 `~/.config/toolname/`。`ls -la ~/.nemoclaw/` 在 onboard 後就能看到完整結構。
+
+**記住這一件事：** 內容政策（模型拒絕說什麼）和 sandbox 政策（agent 被允許做什麼）在不同層運作，可以獨立設定。把它們當成同一個問題處理是分類錯誤——要麼過度限制模型，要麼放鬆了 agent 的行動邊界，兩者都不是對的取捨。
+
+## 切換 Checklist
+
+把 NemoClaw 指向本地推理後端：
+
+1. `cat ~/.nemoclaw/sandboxes/my-assistant/config.yaml` → 找到現在的推理設定
+2. 備份設定檔
+3. 更新 `endpoint`、`model`、`api_key` 欄位
+4. `ollama list` 或查 vLLM `/v1/models` 確認 model name
+5. `nemoclaw my-assistant restart`
+6. `nemoclaw my-assistant status` → 確認 model name 已更新
+7. `nemoclaw connect my-assistant` → 發測試訊息
+
+---
+
+*本系列其他文章：[Part 1 — NemoClaw 是什麼、為什麼存在、怎麼運作的](/zh-TW/blog/nemoclaw-what-it-is-why-it-exists) · [Part 2 — 在 GX10 上從零安裝 NemoClaw](/zh-TW/blog/nemoclaw-install-gx10-from-scratch)*

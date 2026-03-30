@@ -17,6 +17,8 @@ faq:
     a: "Ollama 的 KEEP_ALIVE=2h 讓 model 留在 unified memory pool 裡。啟動 vLLM 前，先用 'curl -s http://localhost:11434/api/ps' 確認有沒有 model 在記憶體，再用 'curl -X POST http://localhost:11434/api/generate -d {\"model\": \"MODEL_NAME\", \"keep_alive\": 0}' 卸載。"
 ---
 
+
+<VideoEmbed src="/videos/vllm-qwen35.mp4" />
 ## 前言
 
 從手工具換到流水線，做出來的東西沒有變，但每小時產量不同。輸出品質一樣，經濟效益不同。

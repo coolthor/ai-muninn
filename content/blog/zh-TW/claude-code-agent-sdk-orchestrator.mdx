@@ -17,6 +17,8 @@ faq:
     a: "刪除 session registry 檔案。舊的 session_id 帶著過去的 context，包括該 session 中訓練好的輸出格式。解決方法：刪除 registry，讓 agent 在下次執行時建立新 session。"
 ---
 
+
+<VideoEmbed src="/videos/agent-orchestrator.mp4" />
 ## 前言
 
 跑 subprocess 就像寄一封附回郵信封的信。你知道送出去什麼，最後會收到一封回覆。中間發生了什麼——思考過程、工具呼叫、草稿——你看不到。對一個需要即時顯示多個 agent 並行輸出的 orchestrator 來說，信件往返模型完全行不通。
@@ -179,7 +181,7 @@ setting_sources=["project", "local"]
 - Agent 無視新 system prompt，明明是全新執行 → session registry 有舊 ID。刪掉 registry 檔案。
 - MCP tool schema 出現在不該出現的 agent context → `setting_sources` 載入了 `~/.claude/CLAUDE.md` 帶進了 MCP server。設 `setting_sources=["project", "local"]`。
 
-**通用規律：**
+**記住這一件事：**
 Subprocess 是 fire-and-forget 的正確工具。串流 async generator 是需要中間輸出、session 狀態或並行組合的正確工具。用錯了原始工具，等系統建好了再重構代價很大。
 
 ---

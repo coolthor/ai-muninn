@@ -1,0 +1,166 @@
+---
+title: "[AI Agent] NemoClaw Without the Cloud: Swapping Nemotron for a Local Ollama Model"
+description: "How to point NemoClaw's inference backend to a local Ollama or vLLM endpoint. Config location, model swap, and what OpenShell still enforces when the cloud is gone."
+date: "2026-03-24"
+updatedAt: "2026-03-24"
+tags: ["NemoClaw", "OpenClaw", "OpenShell", "Ollama", "vLLM", "AI Agent", "NVIDIA", "GX10", "Local Inference"]
+series: "NemoClaw"
+part: 3
+---
+
+
+<VideoEmbed src="/videos/nemoclaw-local.mp4" />
+Running an agent through cloud inference is convenient until the 30-day free tier runs out. Then it's a decision: pay for NVIDIA's API, or point the stack at the hardware already sitting on the desk.
+
+This continues from [Part 2](/en/blog/nemoclaw-install-gx10-from-scratch), which covered getting NemoClaw installed and the `my-assistant` sandbox into `Phase: Ready`. At that point, the agent was routing all inference to `integrate.api.nvidia.com` via the `nvidia/nemotron-3-super-120b-a12b` model. This article covers replacing that with a local [Ollama](https://ollama.com) endpoint running on the same GX10.
+
+<TLDRCard>
+NemoClaw's inference backend is OpenAI-compatible and configurable per-sandbox via `~/.nemoclaw/sandboxes/<name>/config.yaml`. Pointing it at a local Ollama endpoint (`http://localhost:11434/v1`) requires three changes: endpoint URL, model name, and API key (set to `"ollama"`). OpenShell's filesystem and tool policy enforcement is independent of the inference backend — it applies regardless of which model is running.
+</TLDRCard>
+
+## Why Swap the Backend
+
+Three reasons, in order of how often they come up:
+
+**Cost.** The free NVIDIA API tier is 30 days. After that, running inference through `integrate.api.nvidia.com` requires a paid account. The GX10 has 128GB unified memory and a 273 GB/s memory bus — using it as a proxy to a cloud API is waste.
+
+**Privacy.** Every prompt sent to Nemotron cloud leaves the machine. For a personal agent with filesystem access and memory, that's a meaningful surface area.
+
+**Model choice.** The default `nvidia/nemotron-3-super-120b-a12b` is capable but opinionated — tuned for helpfulness and content safety in ways that can get in the way of certain use cases. A local model removes that constraint. Which brings up a point worth addressing directly.
+
+## The Uncensored Model Question
+
+The model being loaded here is [HauhauCS/Qwen3.5-35B-A3B-Uncensored-HauhauCS-Aggressive](https://huggingface.co/HauhauCS/Qwen3.5-35B-A3B-Uncensored-HauhauCS-Aggressive) — a fine-tune of Qwen3.5-35B-A3B with the standard safety filters removed.
+
+The natural question: if the model has no content restrictions, what's stopping the agent from doing whatever it's asked?
+
+OpenShell. And this is the important architectural point that gets lost when people treat NemoClaw as just a chatbot wrapper.
+
+OpenShell enforces policy at the **tool execution layer**, not the **language model layer**. When the agent decides to call a tool — read a file, execute a command, make a network request — OpenShell intercepts that call before it executes and checks it against the policy configuration. The model's content preferences are irrelevant at this point. The sandbox allows access to `/sandbox` and `/tmp`. It allows tools that appear in the allowlist. Everything else is blocked at the gateway, before the tool runs.
+
+Cloud inference adds a second layer (the model's own content refusals). Local uncensored inference removes that layer. But the OpenShell layer — the one that actually controls what the agent *does* to the filesystem and network — stays in place either way.
+
+This means: uncensored model + OpenShell sandbox is a coherent configuration. The model can reason and respond without content restrictions; the agent's actions are still bounded by what the sandbox permits. The two concerns are orthogonal.
+
+## Finding the Config
+
+After `nemoclaw onboard` completes, the sandbox configuration lives under:
+
+```
+~/.nemoclaw/sandboxes/<sandbox-name>/config.yaml
+```
+
+For the default sandbox name from non-interactive onboard:
+
+```bash
+cat ~/.nemoclaw/sandboxes/my-assistant/config.yaml
+```
+
+The relevant section:
+
+```yaml
+inference:
+  endpoint: "https://integrate.api.nvidia.com/v1"
+  model: "nvidia/nemotron-3-super-120b-a12b"
+  api_key: "nvapi-..."
+```
+
+This is the only place that references the NVIDIA cloud. The OpenShell gateway config (`~/.openshell/gateways/nemoclaw/`) and the sandbox policy files don't touch inference routing.
+
+## Switching to Ollama
+
+Ollama exposes an OpenAI-compatible API at `http://localhost:11434/v1`. The model name to use is whatever Ollama calls it after `ollama pull` or `ollama run` completes.
+
+Check what's loaded:
+
+```bash
+ollama list
+```
+
+Then update the sandbox config:
+
+```bash
+# Back up first
+cp ~/.nemoclaw/sandboxes/my-assistant/config.yaml \
+   ~/.nemoclaw/sandboxes/my-assistant/config.yaml.nemotron-backup
+```
+
+Edit `~/.nemoclaw/sandboxes/my-assistant/config.yaml`:
+
+```yaml
+inference:
+  endpoint: "http://localhost:11434/v1"
+  model: "hauhaucs/qwen3.5-35b-a3b-uncensored-hauhaucs-aggressive:latest"
+  api_key: "ollama"
+```
+
+The `api_key` field is required by the config schema but Ollama ignores its value. Setting it to `"ollama"` satisfies the schema without confusion.
+
+Restart the sandbox to pick up the change:
+
+```bash
+nemoclaw my-assistant restart
+```
+
+Verify the new backend is active:
+
+```bash
+nemoclaw my-assistant status
+# Phase: Ready
+# Model: hauhaucs/qwen3.5-35b-a3b-uncensored-hauhaucs-aggressive:latest
+```
+
+## Testing the Swap
+
+Connect to the sandbox and send a test message:
+
+```bash
+nemoclaw connect my-assistant
+```
+
+The first response will have higher latency than Nemotron cloud — Ollama needs to load the model into memory if it isn't already warm. Subsequent responses come from memory.
+
+One behavioral difference worth noting: Qwen3.5-35B-A3B is a thinking model. By default, Ollama runs it with thinking enabled, which means the agent generates reasoning tokens before responding. This looks like a long pause before output starts. If the latency is unacceptable for interactive use, Ollama supports disabling thinking via the model's system prompt or via a `think: false` parameter in the request — but NemoClaw doesn't expose that parameter directly. The vLLM path handles this more cleanly.
+
+## The vLLM Alternative
+
+If Ollama's latency profile isn't acceptable, the vLLM container already running on port 8000 is a direct drop-in:
+
+```yaml
+inference:
+  endpoint: "http://localhost:8000/v1"
+  model: "qwen3.5-35b"
+  api_key: "none"
+```
+
+The model name `qwen3.5-35b` is the `--served-model-name` set when the container was started. vLLM's OpenAI-compatible server handles the rest identically.
+
+vLLM also handles thinking mode more cleanly — the `--reasoning-parser qwen3` flag started with the container tells vLLM to strip reasoning tokens from the response before it reaches the client. The agent sees clean output without internal monologue.
+
+The tradeoff: Ollama is faster to set up, easier to swap models, and handles multiple models in memory simultaneously. vLLM gives lower TTFT on warm requests (~0.12s vs Ollama's ~0.4s) and cleaner handling of structured output and tool calls.
+
+For this setup — GX10, personal use, single model running at a time — either works. Ollama wins on convenience; vLLM wins on production behavior.
+
+## What Was Gained
+
+**What cost the most time:** Locating the config file. NemoClaw's documentation doesn't mention where per-sandbox inference config lives. The `~/.nemoclaw/sandboxes/` directory structure isn't surfaced by any `nemoclaw` CLI command — there's no `nemoclaw config show` or equivalent in v0.1.0. Finding it required listing the directory after onboard.
+
+**Transferable diagnostic:** When a tool's config path isn't documented, check `~/.toolname/` first. For CLI tools that follow XDG conventions, also check `~/.config/toolname/`. `ls -la ~/.nemoclaw/` after onboard makes the layout visible immediately.
+
+**The pattern that applies everywhere:** Content policy (what the model refuses to say) and sandbox policy (what the agent is permitted to do) operate at different layers. They can be configured independently. Treating them as the same concern is a category error that leads to either over-restricting the model or under-restricting the agent's capabilities — neither of which is the right tradeoff.
+
+## Swap Checklist
+
+To point NemoClaw at a local inference backend:
+
+1. `cat ~/.nemoclaw/sandboxes/my-assistant/config.yaml` → find current inference config
+2. Back up the file
+3. Update `endpoint`, `model`, and `api_key` fields
+4. `ollama list` or check vLLM `/v1/models` to confirm model name
+5. `nemoclaw my-assistant restart`
+6. `nemoclaw my-assistant status` → verify model name updated
+7. `nemoclaw connect my-assistant` → send a test message
+
+---
+
+*Also in this series: [Part 1 — NemoClaw: What It Is, Why It Exists, and How It Works](/en/blog/nemoclaw-what-it-is-why-it-exists) · [Part 2 — Installing NemoClaw on a GX10 from Scratch](/en/blog/nemoclaw-install-gx10-from-scratch)*

@@ -17,6 +17,8 @@ faq:
     a: "設定 contextWindow: 131072、reserveTokens: 8192（model 輸出空間）、keepRecentTokens: 32768、maxHistoryShare: 0.5。reserveTokens 只需要涵蓋 model 輸出空間——不需要 buffer system prompt overhead，因為 overhead 已經在 131K 上限之內。"
 ---
 
+
+<VideoEmbed src="/videos/context-budget.mp4" />
 ## 前言
 
 導航系統算出剩餘油量是負數，不會讓引擎停下——它只是拒絕開始下一段旅程。openclaw 接上 gpt-oss-120B 的 131K context window 時就是這樣，config 沒跟上，數學就先崩了。
@@ -112,7 +114,7 @@ Config key 的坑。數學搞懂了，修法也清楚了，但寫 `context_windo
 - Config 改了沒效果 → 確認是 camelCase。openclaw schema 靜默拒絕 snake_case。
 - Compaction 從不觸發 → `contextWindow` 設得太小，小於系統 overhead。openclaw agent 加上 memory-lancedb 的最低 overhead 約 10-12K tokens。
 
-**通用規律：**
+**記住這一件事：**
 接大 context 模型時，agent config 的 `contextWindow` 必須跟 vLLM 的 `--max-model-len` 一致。agent 以為有 32K 但模型有 131K，數學崩；模型有 32K 但 agent 以為有 131K，OOM。config 必須明確設定。
 
 ---
