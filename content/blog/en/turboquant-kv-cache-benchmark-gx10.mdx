@@ -1,0 +1,202 @@
+---
+title: "[Benchmark] TurboQuant on GX10: Is 3-bit KV Cache Compression Actually Lossless?"
+description: "Real benchmark numbers for Google's TurboQuant on a GB10/SM121 (DGX Spark) — actual compression ratios, Qwen2.5-3B accuracy validation, and why Qwen3.5-35B's hybrid attention architecture makes things complicated."
+date: "2026-03-30"
+tags: ["TurboQuant", "KV Cache", "Quantization", "vLLM", "Benchmark", "Qwen3.5", "GX10", "SM121"]
+series: "DGX Spark"
+part: 3
+locale: "en"
+---
+
+<VideoEmbed src="/videos/turboquant-explainer.mp4" caption="TurboQuant in 30 seconds: PolarQuant + QJL two-stage compression" />
+
+The memory bottleneck in LLM inference isn't the model weights — it's the KV cache. An 8K-context Qwen2.5-3B already needs 289MB for KV alone, and it scales linearly. At long contexts or with large models, this becomes genuinely painful.
+
+On March 24, Google Research published [TurboQuant](https://research.google/blog/turboquant-redefining-ai-efficiency-with-extreme-compression/) (ICLR 2026), claiming 3-bit KV cache compression with 6x memory reduction and zero accuracy loss. Six independent implementations appeared within five days. This is a hands-on validation run on a GX10 (GB10/SM121).
+
+---
+
+## What TurboQuant Does: 30-Second Version
+
+Standard quantization maps floats to fixed bit widths. TurboQuant does two things instead:
+
+**Stage 1: PolarQuant**
+Apply a random rotation to each KV vector, convert to polar coordinates, then quantize per-dimension. The rotation spreads energy uniformly, making each dimension statistically predictable — so you can precompute mathematically optimal quantization bins (Lloyd-Max algorithm) once, offline. No calibration data, no fine-tuning required.
+
+**Stage 2: QJL (Quantized Johnson-Lindenstrauss)**
+Stage 1 leaves residual error. QJL projects that residual through a random Gaussian matrix using the Johnson-Lindenstrauss transform, keeping only the sign bit (+1 or −1). This single-bit sketch makes attention score computation provably unbiased — something MSE-only quantization cannot guarantee.
+
+Paper claims: 3-bit, 6x memory, 8x attention logit speedup on H100, zero accuracy loss across LongBench/RULER/Needle-in-Haystack.
+
+---
+
+## Setup
+
+- **Machine**: GX10, NVIDIA GB10 (SM121), 128GB unified memory, 273 GB/s bandwidth
+- **Python env**: `~/.python-vllm-custom` venv (torch 2.10+cu130, transformers 5.3.0)
+- **Implementation**: [tonbistudio/turboquant-pytorch](https://github.com/tonbistudio/turboquant-pytorch) (from-scratch PyTorch, community implementation)
+- **Validation model**: Qwen2.5-3B-Instruct (local, fp16)
+
+Installation:
+
+```bash
+source ~/.python-vllm-custom/bin/activate
+pip install accelerate scipy -q
+
+# Note: directory name must be a valid Python module name (no hyphens)
+git clone https://github.com/tonbistudio/turboquant-pytorch ~/experiments/turboquant-pytorch
+mv ~/experiments/turboquant-pytorch ~/experiments/turboquant
+
+cd ~/experiments && python -m turboquant.test_turboquant
+```
+
+---
+
+## Test 1: Synthetic Benchmark
+
+No model download needed — validates the math directly.
+
+### Lloyd-Max Codebook
+
+Quantization distortion at different dimensionalities and bit widths:
+
+```
+d=128, bits=3: distortion/coord=0.000270
+d=256, bits=3: distortion/coord=0.000135
+```
+
+Higher dimensions → lower per-dimension distortion. High-dimensional vector quantization has this property, which is why TurboQuant's random rotation trick works.
+
+### MSE-Only vs QJL: Bias Confirmed
+
+```
+bits=2: MSE-only bias=+0.001052  (biased)
+bits=3: MSE-only bias=+0.000191  (biased)
+```
+
+After QJL correction:
+
+```
+bits=3: bias=-0.000317  (≈ 0)
+bits=4: bias=+0.000559  (≈ 0)
+```
+
+This is one of the paper's core claims: MSE-only quantization introduces systematic bias in attention score computation. QJL eliminates it. Verified on GB10, matches the paper.
+
+### Needle-in-Haystack (Synthetic)
+
+| bits | seq=512 | seq=2048 | seq=8192 |
+|------|---------|----------|----------|
+| 2-bit | EXACT | EXACT | EXACT |
+| 3-bit | EXACT | EXACT | EXACT |
+| 4-bit | EXACT | EXACT | EXACT |
+
+Perfect retrieval across all bit widths and sequence lengths.
+
+### GB10 Speed Numbers
+
+```
+GPU: NVIDIA GB10
+Config: d=128, bits=3, seq_len=8192, n_queries=64
+Quantize 8192 keys:          31.04 ms
+Inner product (64q × 8192k): 11.16 ms
+Full-precision matmul:        0.02 ms
+Memory: 2048 KB (fp16) → 384 KB (TQ-3bit) = 5.3x
+```
+
+The 0.02ms vs 11ms gap matters: this PyTorch implementation has no fused CUDA kernel. The paper's 8x speedup requires optimized kernels on H100. On GB10 (SM121, non-mainstream hardware), using standard PyTorch ops, there is currently no speed advantage. **Memory savings are real. Speed gains require upstream kernel support.**
+
+---
+
+## Test 2: Real Model Validation (Qwen2.5-3B-Instruct)
+
+Using actual model KV cache vectors, three context lengths (2K/4K/8K), needle-in-haystack scenario.
+
+### Compression and Accuracy
+
+| bits | Ratio | Cosine sim (2K) | Cosine sim (8K) | Top-1 match (8K) |
+|------|-------|-----------------|-----------------|------------------|
+| 4-bit | 3.8x | 0.9987 | 0.9982 | 84.7% |
+| **3-bit** | **5.0x** | **0.9959** | **0.9943** | **80.6%** |
+| 2-bit | 7.3x | 0.9891 | 0.9846 | 69.4% |
+
+Original KV cache: 289MB at 8K context (fp16). After 3-bit TurboQuant: 57.6MB.
+
+A few notes:
+
+**3-bit is the sweet spot.** Cosine similarity 0.9943, Top-1 match 80.6%. For most long-context tasks, attention doesn't need perfect per-head top-1 retrieval — getting the overall distribution right is sufficient.
+
+**Quality degrades slightly with longer context.** 3-bit cosine sim drops from 0.9959 at 2K to 0.9943 at 8K. The effect is small but present. Quantization error accumulates across longer sequences.
+
+**Don't use 2-bit in production.** 69.4% Top-1 match will hurt on tasks requiring precise token retrieval from long context.
+
+---
+
+## The Qwen3.5-35B Situation
+
+The obvious next step was testing on the production model. That's where things got interesting.
+
+### Hybrid Attention: Only 25% of Layers Have a KV Cache
+
+From `~/models/qwen35-35b-hf/` config:
+
+```python
+layer_types: [
+    "linear_attention", "linear_attention", "linear_attention", "full_attention",
+    "linear_attention", "linear_attention", "linear_attention", "full_attention",
+    ...  # full_attention every 4th layer
+]
+# full_attention layers: [3, 7, 11, 15, 19, 23, 27, 31, 35, 39]
+num_key_value_heads: 2
+head_dim: 256
+```
+
+Of 40 layers, only 10 are standard full attention. The other 30 are GatedDeltaNet (linear attention with fixed-size state, no KV cache). TurboQuant only compresses full attention KV — that's 10/40 = **25% of layers**. And those 10 layers have `num_key_value_heads=2`, meaning the KV cache per layer is already very small.
+
+### Memory Math
+
+fp16, 200K context:
+```
+2 KV heads × 256 dim × 2 bytes × 10 layers × 200K tokens ≈ 2GB
+TurboQuant 3-bit → ~400MB
+```
+
+The GX10 vLLM setup already uses `--kv-cache-dtype fp8` (8-bit), bringing KV to ~1GB. TurboQuant 3-bit would bring it to ~400MB — saving 600MB.
+
+In other words: for Qwen3.5-35B-A3B, TurboQuant's memory benefit is much smaller than the paper suggests for dense models. This isn't a flaw in TurboQuant — it's a property of the hybrid attention architecture. Compare a pure dense model like Llama-3.1-70B with all 80 layers doing full attention: there, you'd see close to the paper's claimed 6x.
+
+---
+
+## Is It Usable Now?
+
+**Not in production.** vLLM PR [#38280](https://github.com/vllm-project/vllm/issues/38171) is under review. llama.cpp has multiple community forks but nothing merged to main. Official implementation expected Q2 2026.
+
+**Yes for learning and experimentation.** `pip install turboquant` or `tonbistudio/turboquant-pytorch` gets you running Python-level validation and algorithm understanding in under 10 minutes.
+
+**The path forward:**
+
+```
+vLLM PR #38280 merges
+    ↓
+--kv-cache-dtype turboquant3
+    ↓
+Retest Qwen3.5-35B (expected: context capacity 1.8M → ~4.8M tokens)
+```
+
+---
+
+## What Took the Most Time
+
+Figuring out that `qwen35-35b-hf/` is a multimodal model (`Qwen3_5MoeForConditionalGeneration`), not a text-only model. transformers can't load an fp8 MoE + vision encoder into 89GB of system RAM. That cost an hour.
+
+**Transferable lesson**: For any hybrid attention model (Mamba hybrid, GLA, DeltaNet, RetNet variants), calculate what fraction of layers are full attention before estimating TurboQuant's benefit. Architecture changes the algorithm's applicable scope.
+
+---
+
+## TL;DR
+
+- TurboQuant 3-bit validates correctly on GB10: 5x compression, cosine sim 0.9943, Needle-in-Haystack EXACT
+- QJL bias correction is real and effective — MSE-only has systematic bias, QJL eliminates it
+- No speed benefit on GB10 currently: needs fused kernels, current PyTorch implementation is ~500x slower than matmul
+- Qwen3.5-35B-A3B only has 25% of layers with KV cache (hybrid attention) — TurboQuant benefit is much lower than for dense models
+- Wait for vLLM PR #38280 to merge before enabling in production

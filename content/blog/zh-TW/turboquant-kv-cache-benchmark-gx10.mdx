@@ -1,0 +1,219 @@
+---
+title: "[Benchmark] TurboQuant 實測：KV Cache 3-bit 壓縮，真的零損失？"
+description: "Google TurboQuant 在 GX10 (GB10/SM121) 上的實測數據 — 3-bit KV cache 壓縮的真實壓縮率、Qwen2.5-3B 精度驗證、以及 Qwen3.5-35B 的 hybrid attention 架構為什麼讓事情變得複雜。"
+date: "2026-03-30"
+tags: ["TurboQuant", "KV Cache", "Quantization", "vLLM", "Benchmark", "Qwen3.5", "GX10", "SM121"]
+series: "DGX Spark"
+part: 3
+locale: "zh-TW"
+---
+
+<VideoEmbed src="/videos/turboquant-explainer.mp4" caption="TurboQuant 30 秒動畫說明：PolarQuant + QJL 兩階段壓縮" />
+
+LLM 推理的記憶體瓶頸不在模型權重，在 KV cache。一個 8K context 的 Qwen2.5-3B，KV cache 就要 289MB，而且隨 context 線性增長。這個問題在長 context 推理和大模型上會放大到讓人難受的程度。
+
+3/24 Google Research 發了一篇 [TurboQuant](https://research.google/blog/turboquant-redefining-ai-efficiency-with-extreme-compression/)（ICLR 2026），宣稱能把 KV cache 壓到 3-bit，記憶體少 6x，精度零損失。社群五天內就冒出六個獨立實作。這篇是在 GX10（GB10/SM121）上的親測記錄。
+
+---
+
+## TurboQuant 是什麼：30 秒懶人包
+
+傳統量化是把浮點數對應到固定 bit 寬度。TurboQuant 用兩個步驟：
+
+**步驟一：PolarQuant**
+把每個 KV 向量做隨機旋轉，轉成極座標後再量化。旋轉後的向量分布更均勻，每個維度都可以用 Lloyd-Max 演算法找到最佳化的量化點。重點：不需要 calibration data，不需要 fine-tuning。
+
+**步驟二：QJL（Quantized Johnson-Lindenstrauss）**
+第一步會有殘差誤差。QJL 用 Johnson-Lindenstrauss 變換把殘差投影到 1-bit（只保留正負號）。數學上能保證 attention score 計算是 unbiased 的——這是 MSE-only 量化做不到的。
+
+論文數字：3-bit，6x 記憶體，H100 上 attention logit 計算快 8x，across LongBench/RULER/Needle-in-Haystack 零精度損失。
+
+---
+
+## 環境
+
+- **機器**：GX10，NVIDIA GB10（SM121），128GB unified memory，273 GB/s bandwidth
+- **vLLM venv**：torch 2.10+cu130，transformers 5.3.0
+- **實作**：[tonbistudio/turboquant-pytorch](https://github.com/tonbistudio/turboquant-pytorch)（PyTorch from-scratch 實作，非官方）
+- **驗證模型**：Qwen2.5-3B-Instruct（本機，fp16）
+
+安裝：
+
+```bash
+source ~/.python-vllm-custom/bin/activate
+pip install accelerate scipy -q
+
+# 注意：目錄名需要是合法 Python module name
+git clone https://github.com/tonbistudio/turboquant-pytorch ~/experiments/turboquant-pytorch
+mv ~/experiments/turboquant-pytorch ~/experiments/turboquant
+
+cd ~/experiments && python -m turboquant.test_turboquant
+```
+
+---
+
+## 測試一：Synthetic Benchmark
+
+不需要下載模型，直接驗證演算法數學正確性。
+
+```bash
+cd ~/experiments && python -m turboquant.test_turboquant
+```
+
+### Lloyd-Max Codebook
+
+不同維度（d=64/128/256）和 bit 寬度的量化失真：
+
+```
+d=128, bits=3: distortion/coord=0.000270
+d=256, bits=3: distortion/coord=0.000135
+```
+
+維度越高，每個維度的失真越小——高維向量量化的數學有這個好性質。
+
+### MSE-Only vs QJL：bias 差異確認
+
+```
+bits=2: MSE-only bias=+0.001052  (有 bias)
+bits=3: MSE-only bias=+0.000191  (有 bias)
+```
+
+QJL correction 後：
+
+```
+bits=3: bias=-0.000317  (≈ 0)
+bits=4: bias=+0.000559  (≈ 0)
+```
+
+這是論文的核心主張之一：MSE-only 量化對 attention score 有系統性偏差，QJL 校正消除它。在 GB10 上親自驗證，結果如論文所述。
+
+### Needle-in-Haystack（Synthetic）
+
+| bits | seq=512 | seq=2048 | seq=8192 |
+|------|---------|----------|----------|
+| 2-bit | EXACT | EXACT | EXACT |
+| 3-bit | EXACT | EXACT | EXACT |
+| 4-bit | EXACT | EXACT | EXACT |
+
+2/3/4-bit 全部精準找到。
+
+### GB10 速度
+
+```
+GPU: NVIDIA GB10
+Config: d=128, bits=3, seq_len=8192, n_queries=64
+Quantize 8192 keys:          31.04 ms
+Inner product (64q × 8192k): 11.16 ms
+Full-precision matmul:        0.02 ms
+Memory: 2048 KB (fp16) → 384 KB (TQ-3bit) = 5.3x
+```
+
+這裡有個重要的數字：full-precision matmul 只要 0.02ms，但 TurboQuant inner product 要 11ms。
+
+**原因**：這個 PyTorch 實作沒有寫 fused CUDA kernel。論文的 8x speedup 是在 H100 上有優化 kernel 的結果。在 GB10 這個非主流硬體（SM121）上，用現成的 PyTorch ops，目前沒有速度優勢。**記憶體節省是真的，速度優勢要等上游 kernel 支援。**
+
+---
+
+## 測試二：Real Model Validation（Qwen2.5-3B-Instruct）
+
+用真實模型的 KV cache 向量驗證，3 種 context 長度（2K/4K/8K），needle-in-haystack 場景。
+
+```bash
+# validate.py 中把 MODEL_NAME 改成本機路徑，移除 bitsandbytes dependency
+python -m turboquant.validate
+```
+
+### 壓縮率與精度
+
+| bits | 壓縮比 | Cosine sim (2K) | Cosine sim (8K) | Top-1 match (8K) |
+|------|--------|-----------------|-----------------|------------------|
+| 4-bit | 3.8x | 0.9987 | 0.9982 | 84.7% |
+| **3-bit** | **5.0x** | **0.9959** | **0.9943** | **80.6%** |
+| 2-bit | 7.3x | 0.9891 | 0.9846 | 69.4% |
+
+原始 KV cache 大小：289MB（8K context, fp16）。3-bit 壓後：57.6MB。
+
+幾個觀察：
+
+**3-bit 是甜蜜點。** Cosine similarity 0.9943，Top-1 match 80.6%。在長 context 任務上，不是每個 attention head 都需要精準的 top-1——整體分布夠好就行。
+
+**品質隨 context 微幅下降。** 3-bit cosine sim 從 2K 的 0.9959 降到 8K 的 0.9943。幅度小，但存在。更長的 context 壓縮後誤差會累積。
+
+**2-bit 不建議生產使用。** 69.4% Top-1 match 在 attention-heavy 任務（需要精確找到特定 token）可能出問題。
+
+---
+
+## Qwen3.5-35B 的特殊情況
+
+本來想直接在 production 模型上測，結果發現了一個架構特性值得記錄。
+
+### Hybrid Attention：只有 25% 的層有 KV cache
+
+`~/models/qwen35-35b-hf/` 的 config：
+
+```python
+layer_types: [
+    "linear_attention", "linear_attention", "linear_attention", "full_attention",  # 0-3
+    "linear_attention", "linear_attention", "linear_attention", "full_attention",  # 4-7
+    ...  # 每 4 層才有一個 full_attention
+]
+# full_attention 層：[3, 7, 11, 15, 19, 23, 27, 31, 35, 39]
+num_key_value_heads: 2
+head_dim: 256
+```
+
+40 層裡，只有 10 層是傳統的 full attention，其他 30 層是 GatedDeltaNet（線性注意力，狀態固定大小，不用 KV cache）。
+
+TurboQuant 只能壓縮 full_attention 的 KV cache，也就是 10/40 = **25% 的層**。而且 `num_key_value_heads=2`，每層的 KV cache 本來就已經很小。
+
+### 記憶體估算
+
+fp16，200K context：
+```
+2 KV heads × 256 dim × 2 bytes × 10 layers × 200K tokens ≈ 2GB
+TurboQuant 3-bit → ~400MB
+```
+
+現在 GX10 vLLM 用 `--kv-cache-dtype fp8`（8-bit），KV cache 已是 1GB。TurboQuant 3-bit 再壓：~400MB，節省 600MB。
+
+換句話說：對 Qwen3.5-35B-A3B，TurboQuant 的記憶體節省效益比論文測的 dense 模型小很多。這不是 TurboQuant 的問題，是 hybrid attention 架構的特性。
+
+對比，如果跑一個純 dense 模型（像 Llama-3.1-70B），全部 80 層都有 KV cache，效益就接近論文的 6x。
+
+---
+
+## 現在能用嗎？
+
+**不能在生產環境直接用。** vLLM PR [#38280](https://github.com/vllm-project/vllm/issues/38171) 還在 review，llama.cpp 有多個 fork 但尚未合併 main。官方實作預計 Q2 2026。
+
+**可以學習和實驗。** `pip install turboquant` 或 `tonbistudio/turboquant-pytorch` 可以跑 Python 驗證，理解演算法。
+
+**等時機：**
+
+```
+vLLM PR #38280 合併
+    ↓
+--kv-cache-dtype turboquant3
+    ↓
+測 Qwen3.5-35B 的實際效果（預計 context 1.8M → 4.8M tokens）
+```
+
+---
+
+## 什麼值得學
+
+**最花時間的**：搞清楚 `qwen35-35b-hf/` 是 multimodal model（`Qwen3_5MoeForConditionalGeneration`），不是純文字模型。transformers 無法在 89GB 記憶體裡載入 fp8 MoE + vision encoder，掉進去花了一個小時。
+
+**可遷移的診斷**：對任何 hybrid attention 模型（Mamba hybrid、GLA、DeltaNet、RetNet 混合架構），算 TurboQuant 效益前先確認有多少層是 full attention。架構改變了算法的適用範圍。
+
+**一句話 takeaway**：TurboQuant 的數學是對的，3-bit 是可用的，但效益取決於模型架構——hybrid attention 讓它的節省比論文說的少。
+
+---
+
+## TL;DR
+
+- TurboQuant 3-bit 在 GB10 上驗證正確：5x 壓縮，cosine sim 0.9943，Needle-in-Haystack EXACT
+- QJL bias 校正是真實有效的（MSE-only 有系統性偏差，QJL 消除）
+- 速度優勢目前不存在於 GB10：需要 fused kernel，目前的 PyTorch 實作比 matmul 慢 500x
+- Qwen3.5-35B-A3B 只有 25% 的層有 KV cache（hybrid attention），TurboQuant 效益遠低於 dense 模型
+- 等 vLLM PR #38280 合併，再決定是否在 production 上開啟

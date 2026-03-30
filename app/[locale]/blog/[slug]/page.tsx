@@ -5,6 +5,7 @@ import { getAllSlugs, getPost, hasTranslation, type FaqItem } from '@/lib/blog'
 import { routing } from '@/i18n/routing'
 import type { Metadata } from 'next'
 import TLDRCard from '@/components/TLDRCard'
+import VideoEmbed from '@/components/VideoEmbed'
 
 const BASE_URL = 'https://ai-muninn.com'
 
@@ -222,7 +223,7 @@ export default async function BlogPost({
 
       {/* content */}
       <div className="prose">
-        <MDXRemote source={post.content} components={{ TLDRCard }} />
+        <MDXRemote source={post.content} components={{ TLDRCard, VideoEmbed }} />
       </div>
 
       {/* FAQ section */}
