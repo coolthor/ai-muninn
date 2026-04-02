@@ -6,6 +6,7 @@ import { routing } from '@/i18n/routing'
 import type { Metadata } from 'next'
 import TLDRCard from '@/components/TLDRCard'
 import VideoEmbed from '@/components/VideoEmbed'
+import ShareButtons from '@/components/ShareButtons'
 
 const BASE_URL = 'https://ai-muninn.com'
 
@@ -243,8 +244,13 @@ export default async function BlogPost({
         </section>
       ) : null}
 
+      {/* share */}
+      <div className="mt-12 pt-6 border-t" style={{ borderColor: 'var(--border)' }}>
+        <ShareButtons url={url} title={post.title} />
+      </div>
+
       {/* footer nav */}
-      <div className="mt-12 pt-6 border-t text-sm" style={{ borderColor: 'var(--border)' }}>
+      <div className="mt-6 text-sm">
         <Link href={`/${l}/blog`} style={{ color: 'var(--text-dim)' }} className="hover:text-[var(--cyan)] transition-colors">
           {isZh ? '← 返回文章列表' : '← back to blog'}
         </Link>
