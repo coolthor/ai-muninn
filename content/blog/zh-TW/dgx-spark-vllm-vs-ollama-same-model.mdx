@@ -1,0 +1,173 @@
+---
+title: "[Benchmark] 同模型 vLLM vs Ollama：為什麼 GB10 上差 30%"
+description: "同一個 Gemma 4 26B-A4B、同一張 GPU，vLLM NVFP4 跑 52 tok/s，Ollama Q4_K_M 只有 40。根因：Marlin kernel、CUDA graphs，以及 Ollama 靜默的 CPU/GPU split 陷阱。"
+date: "2026-04-05"
+updatedAt: "2026-04-05"
+tags: ["vLLM", "Ollama", "benchmark", "DGX Spark", "GB10", "Gemma 4", "NVFP4", "inference"]
+series: "DGX Spark"
+part: 8
+faq:
+  - q: "為什麼 vLLM 在同樣的模型上比 Ollama 快？"
+    a: "三個因素：(1) vLLM 用 Marlin NVFP4 kernel 搭配 CUDA graph capture，減少 kernel launch overhead；(2) torch.compile 把 Ollama 的 llama.cpp 逐步執行的操作融合了；(3) NVFP4 權重格式原生對齊 tensor core layout，GGUF Q4_K_M 需要額外的 runtime dequantization。"
+  - q: "為什麼 Ollama 在 DGX Spark 上有時候突然變慢一半？"
+    a: "Ollama 偵測到 GPU 記憶體不足時會靜默把模型拆分到 CPU 和 GPU。vLLM container 釋放 GPU 後，Ollama 可能仍看到舊的記憶體估計。用 ollama ps 檢查 — 如果不是 100% GPU，先 unload（keep_alive:0）再重載。"
+  - q: "DGX Spark 上生產環境該用 vLLM 還是 Ollama？"
+    a: "生產用 vLLM（52 tok/s、OpenAI 相容 API、並發、tool calling）。快速測試用 Ollama（40 tok/s、設定簡單、不需要 Docker）。兩者可共存但不能同時吃滿 GPU 頻寬。"
+---
+
+<VideoEmbed src="/videos/vllm-vs-ollama-gb10.mp4" />
+
+<TLDRCard>
+同一個 Gemma 4 26B-A4B 在 GB10 上，vLLM 跑 **52 tok/s**、Ollama 跑 **40 tok/s** — 差 30% 來自 Marlin kernel、CUDA graphs 和 torch.compile 融合。Ollama 還有一個靜默 CPU/GPU split 陷阱，會把速度砍到 16 tok/s。
+</TLDRCard>
+
+## 前言
+
+同模型、同權重、同 GPU、同記憶體匯流排。一個 runtime 快 30%。有趣的不是哪個快，而是為什麼，以及這個差距對你有沒有意義。
+
+這篇是 [Part 7：Gemma 4 NVFP4 52 tok/s](/zh-TW/blog/dgx-spark-gemma4-26b-nvfp4-52-toks) 的同伴篇。部署過程中兩個 runtime 都測了，數字差異大到值得獨立寫。
+
+---
+
+## 數據
+
+兩個 runtime 都在乾淨 GPU 上跑 — 沒有其他程序，Ollama models 在測試前完全 unload。
+
+| | vLLM NVFP4 | Ollama Q4_K_M |
+|---|---|---|
+| **Decode 速度** | 52 tok/s | 40 tok/s |
+| **穩定性** | ±0.1 tok/s | ±2 tok/s |
+| **模型大小** | 16.5 GB | 17 GB |
+| **量化** | NVFP4 (W4A16 via Marlin) | Q4_K_M (GGUF) |
+| **並發** | 有（OpenAI API） | 無 |
+| **Tool calling** | 有 | 無 |
+| **Vision** | 有 | 有 |
+| **設定複雜度** | Docker + patch file | `ollama pull` |
+
+壓力測試差距更明顯。3 個並發 vLLM request 合計 **114.6 tok/s**。Ollama 不支援並發 — 排隊等。
+
+---
+
+## 為什麼差 30%
+
+### Kernel 差異
+
+vLLM 在 SM121 上用兩個 NVFP4 backend：
+- **FLASHINFER_CUTLASS** 處理 dense linear 層 — 最佳化的 FP4 GEMM，融合 activation quantization
+- **Marlin** 處理 MoE 層 — 把 FP4 解壓回 BF16，但用高度最佳化的記憶體存取模式
+
+Ollama 用 llama.cpp 的 GGUF runtime 做 Q4_K_M dequantization。這條 dequant 路徑是通用的 — 所有 GGUF 格式走同一條管線。Marlin 的 kernel 是格式專用的，可以直接利用權重的記憶體布局。
+
+### CUDA graphs 和 torch.compile
+
+vLLM 在 warmup 後把整個 forward pass 捕捉成 CUDA graph。常見的 decode 路徑 kernel launch overhead 降到接近零。啟動 log 顯示：
+
+```
+Profiling CUDA graph memory: PIECEWISE=51, FULL=35
+torch.compile took 36.01 s in total
+```
+
+Ollama 不用 CUDA graphs。每個 token 生成都獨立 launch kernel。在 GB10 上 — GPU 很快但 kernel launch overhead 相對較大（ARM host CPU）— 這個差距很明顯。
+
+### 權重格式對齊
+
+NVFP4 權重存成 `[N, K/2] uint8` 加上 `[N, K/16] fp8_e4m3` scales — 這剛好就是 Marlin 期望的格式。載入和推論時都不需要格式轉換。
+
+Q4_K_M 的權重用 block 格式存，最佳化目標是 CPU 可攜性。GPU dequantization 路徑可以用，但每個 block 多一步 reshape。
+
+---
+
+## 靜默陷阱：Ollama CPU/GPU Split
+
+這個坑花的時間比 benchmark 本身還多。
+
+停掉 vLLM container 後第一次跑 Ollama：**16 tok/s**。預期 ~40 tok/s。模型一樣，GPU 空閒。怎麼了？
+
+```bash
+$ ollama ps
+NAME          SIZE     PROCESSOR          UNTIL
+gemma4:26b    20 GB    66%/34% CPU/GPU    2 hours from now
+```
+
+66% CPU、34% GPU。Ollama 判斷 GPU 空間不夠，靜默把三分之二的模型搬到系統記憶體。在 GB10 的統一記憶體架構上，CPU inference 慢很多 — 頻寬是共享的，但計算路徑走的是 ARM CPU core 而不是 GPU tensor core。
+
+修法：
+
+```bash
+# 完全 unload 模型
+curl -s http://localhost:11434/api/generate \
+  -d '{"model":"gemma4:26b","keep_alive":0}'
+
+# 等 3 秒讓 GPU 記憶體釋放
+sleep 3
+
+# 重載 — 應該顯示 100% GPU
+ollama run gemma4:26b "test"
+ollama ps  # 確認：100% GPU
+```
+
+重載後：**40 tok/s**。Ollama 的 GPU 記憶體估算器在載入時檢查可用空間。如果之前的程序（即使是已停止的 Docker container）留下了過期的記憶體 metadata，Ollama 會低估空間然後 split。
+
+沒有任何警告。`ollama ps` 是唯一能檢查的方式，而大多數人 debug 速度問題時不會去看那裡。
+
+---
+
+## 什麼時候用哪個
+
+**vLLM** 適合：
+- 提供 API 服務（OpenAI 相容端點）
+- 多客戶端或並發 request
+- 需要 tool calling 或 structured output
+- 最大 throughput 重要
+- 24/7 運行（Docker `--restart unless-stopped`）
+
+**Ollama** 適合：
+- 快速測試模型（`ollama run model "prompt"`）
+- 互動式終端對話
+- 連續試多個模型
+- 設定時間比 throughput 重要
+- 沒有 Docker 環境
+
+兩者可以共存在同一台機器，但不能同時吃滿 GPU 頻寬。實用的模式：vLLM 做常駐 server，Ollama 做 ad-hoc 測試（先停 vLLM 再用）。
+
+---
+
+## 這次學到什麼
+
+### 最花時間的事
+
+診斷 Ollama 的 16 tok/s。CPU/GPU split 是隱形的，除非你知道要查 `ollama ps`。模型載入了、回應了、看起來正常 — 只是慢一半。第一直覺是懷疑同時在跑的下載或背景程序，結果完全不是。
+
+### 可遷移的診斷經驗
+
+- Ollama 模型跑得比預期慢，第一步查 `ollama ps` 的 Processor 欄位。不是 `100% GPU` 就 unload 再 reload。
+- 在統一記憶體架構上（GB10、Apple Silicon），CPU/GPU split 特別痛 — 記憶體是物理共享的，效能差距純粹來自計算路徑不同。
+- Docker container stop 後應該會釋放 GPU memory，但 Ollama 的記憶體估算可能沒有立刻反映。container stop 和模型載入之間加個短暫 sleep 有幫助。
+
+### 放之四海皆準的模式
+
+最快的 runtime 是那個在模型權重和計算單元之間消除最多 overhead 的。格式專用 kernel（Marlin）贏過通用 dequant 路徑（GGUF），跟手寫 SQL 贏 ORM 是一樣的道理 — 抽象層有成本，在 52 tok/s 的尺度上，那個成本是 30%。
+
+---
+
+## 快速參考
+
+```bash
+# vLLM: 52 tok/s
+docker run -d --name gemma4 --gpus all --ipc host --shm-size 64gb \
+  -p 8002:8000 \
+  -v ~/models/gemma4-26b-a4b-nvfp4:/models/gemma4 \
+  -v ~/models/gemma4-26b-a4b-nvfp4/gemma4_patched.py:/usr/local/lib/python3.12/dist-packages/vllm/model_executor/models/gemma4.py \
+  vllm/vllm-openai:gemma4-cu130 \
+  --model /models/gemma4 --served-model-name gemma-4-26b \
+  --quantization modelopt --kv-cache-dtype fp8 --max-model-len 131072 \
+  --gpu-memory-utilization 0.85 --moe-backend marlin \
+  --reasoning-parser gemma4 --enable-auto-tool-choice --tool-call-parser pythonic
+
+# Ollama: 40 tok/s
+ollama run gemma4:26b "your prompt here" --verbose
+```
+
+---
+
+同系列文章：[Part 7：Gemma 4 NVFP4 52 tok/s](/zh-TW/blog/dgx-spark-gemma4-26b-nvfp4-52-toks) · [Part 1：Ollama Benchmark — 8 個模型](/zh-TW/blog/dgx-spark-ollama-benchmark-8-models) · [Part 2：vLLM + Qwen3.5 架設](/zh-TW/blog/dgx-spark-vllm-qwen35-setup)

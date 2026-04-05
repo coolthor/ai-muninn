@@ -1,0 +1,173 @@
+---
+title: "[Benchmark] vLLM vs Ollama on the Same Model: Why 30% Faster on GB10"
+description: "Same Gemma 4 26B-A4B, same GPU, 30% speed gap. vLLM NVFP4 hits 52 tok/s while Ollama Q4_K_M tops at 40. Root cause: Marlin kernels, CUDA graphs, and an Ollama CPU/GPU split trap."
+date: "2026-04-05"
+updatedAt: "2026-04-05"
+tags: ["vLLM", "Ollama", "benchmark", "DGX Spark", "GB10", "Gemma 4", "NVFP4", "inference"]
+series: "DGX Spark"
+part: 8
+faq:
+  - q: "Why is vLLM faster than Ollama on the same model on DGX Spark?"
+    a: "Three factors: (1) vLLM uses Marlin NVFP4 kernels with CUDA graph capture, reducing kernel launch overhead; (2) vLLM's torch.compile fuses operations that Ollama's llama.cpp backend runs sequentially; (3) NVFP4 weight format is natively aligned with GPU tensor core layout, while GGUF Q4_K_M requires runtime dequantization through a different path."
+  - q: "Why does Ollama sometimes run at half speed on DGX Spark?"
+    a: "Ollama silently splits models between CPU and GPU when it detects insufficient GPU memory. After a vLLM container releases GPU memory, Ollama may still see stale memory estimates and load only 34% to GPU. Check with 'ollama ps' — if it shows anything less than '100% GPU', unload the model with keep_alive:0 and reload."
+  - q: "Should I use vLLM or Ollama on DGX Spark for production?"
+    a: "vLLM for production serving (52 tok/s, OpenAI-compatible API, concurrent requests, tool calling). Ollama for quick testing and interactive chat (40 tok/s, simpler setup, no Docker required). They can coexist but not simultaneously — GPU memory bandwidth is shared."
+---
+
+<VideoEmbed src="/videos/vllm-vs-ollama-gb10.mp4" />
+
+<TLDRCard>
+vLLM serves Gemma 4 26B-A4B at **52 tok/s** on GB10 while Ollama tops at **40 tok/s** with the same model — a 30% gap from Marlin kernels, CUDA graphs, and torch.compile fusion. Ollama has a silent CPU/GPU split trap that can halve speed to 16 tok/s.
+</TLDRCard>
+
+## Preface
+
+Same model, same weights, same GPU, same memory bus. One runtime is 30% faster. The interesting question isn't which one — it's why, and whether the gap matters for your use case.
+
+This is a companion to [Part 7: Gemma 4 NVFP4 at 52 tok/s](/en/blog/dgx-spark-gemma4-26b-nvfp4-52-toks). During that deployment, both runtimes were tested on the same hardware. The numbers were different enough to warrant their own article.
+
+---
+
+## The Numbers
+
+Both runtimes ran Gemma 4 26B-A4B on a clean GPU — no other processes, Ollama models fully unloaded before each test.
+
+| | vLLM NVFP4 | Ollama Q4_K_M |
+|---|---|---|
+| **Decode speed** | 52 tok/s | 40 tok/s |
+| **Stability** | ±0.1 tok/s | ±2 tok/s |
+| **Model size** | 16.5 GB | 17 GB |
+| **Quantization** | NVFP4 (W4A16 via Marlin) | Q4_K_M (GGUF) |
+| **Concurrent requests** | Yes (OpenAI API) | No |
+| **Tool calling** | Yes | No |
+| **Vision** | Yes | Yes |
+| **Setup complexity** | Docker + patch file | `ollama pull` |
+
+Aggregate throughput under load tells a starker story. Three concurrent vLLM requests produce **114.6 tok/s** combined. Ollama doesn't support concurrent inference — it queues.
+
+---
+
+## Why the 30% Gap
+
+### Kernel differences
+
+vLLM on SM121 uses two backends for NVFP4:
+- **FLASHINFER_CUTLASS** for dense linear layers — optimized FP4 GEMM with fused activation quantization
+- **Marlin** for MoE layers — decompresses FP4 to BF16 but with highly optimized memory access patterns
+
+Ollama uses llama.cpp's GGUF runtime with Q4_K_M dequantization. The dequant path is general-purpose — it handles every GGUF format through the same pipeline. Marlin's kernels are format-specific and can exploit the weight layout directly.
+
+### CUDA graphs and torch.compile
+
+vLLM captures the entire forward pass into CUDA graphs after warmup. Kernel launch overhead drops to near zero for the common decode path. The startup log shows:
+
+```
+Profiling CUDA graph memory: PIECEWISE=51, FULL=35
+torch.compile took 36.01 s in total
+```
+
+Ollama doesn't use CUDA graphs. Every token generation launches kernels individually. On GB10, where the GPU is fast but kernel launch overhead is proportionally larger (ARM host CPU), this matters.
+
+### Weight format alignment
+
+NVFP4 weights are stored in `[N, K/2] uint8` with `[N, K/16] fp8_e4m3` scales — this is exactly the layout Marlin expects. No format conversion at load time or runtime.
+
+Q4_K_M stores weights in a block format optimized for CPU portability. The GPU dequantization path works but involves an extra reshape step per block.
+
+---
+
+## The Silent Trap: Ollama CPU/GPU Split
+
+This one wasted more time than the benchmark itself.
+
+First Ollama run after stopping a vLLM container: **16 tok/s**. Expected: ~40 tok/s. The model was the same. The GPU was free. What happened?
+
+```bash
+$ ollama ps
+NAME          SIZE     PROCESSOR          UNTIL
+gemma4:26b    20 GB    66%/34% CPU/GPU    2 hours from now
+```
+
+66% CPU, 34% GPU. Ollama decided the GPU didn't have enough room and silently offloaded two-thirds of the model to system memory. On GB10's unified memory architecture, CPU inference is dramatically slower — the bandwidth is shared but the compute path is ARM CPU cores instead of GPU tensor cores.
+
+The fix:
+
+```bash
+# Unload the model completely
+curl -s http://localhost:11434/api/generate \
+  -d '{"model":"gemma4:26b","keep_alive":0}'
+
+# Wait 3 seconds for GPU memory to release
+sleep 3
+
+# Reload — should now show 100% GPU
+ollama run gemma4:26b "test"
+ollama ps  # verify: 100% GPU
+```
+
+After reload: **40 tok/s**. The GPU memory estimator in Ollama checks available memory at load time. If a previous process (even a stopped Docker container) left stale memory metadata, Ollama underestimates and splits.
+
+There is no warning. `ollama ps` is the only way to check, and most people don't look there when debugging speed issues.
+
+---
+
+## When to Use Which
+
+**vLLM** when:
+- Serving an API (OpenAI-compatible endpoint)
+- Multiple clients or concurrent requests
+- Tool calling or structured output needed
+- Maximum throughput matters
+- Running 24/7 (Docker `--restart unless-stopped`)
+
+**Ollama** when:
+- Quick model testing (`ollama run model "prompt"`)
+- Interactive terminal chat
+- Trying multiple models in sequence
+- Setup time matters more than throughput
+- No Docker environment available
+
+They can coexist on the same machine but not simultaneously use the GPU at full bandwidth. The pattern that works: vLLM as the persistent server, Ollama for ad-hoc testing after stopping vLLM.
+
+---
+
+## What Was Gained
+
+### What cost the most time
+
+Diagnosing the 16 tok/s Ollama run. The CPU/GPU split is invisible unless you know to check `ollama ps`. The model loads, responds, and appears to work — just at half speed. Initial instinct was to blame concurrent downloads or background processes, which turned out to be wrong.
+
+### Transferable diagnostics
+
+- When an Ollama model runs slower than expected, check `ollama ps` for the Processor column before anything else. If it's not `100% GPU`, unload and reload.
+- On unified memory architectures (GB10, Apple Silicon), CPU/GPU splits are especially painful because the memory is physically shared — the bandwidth penalty comes purely from the compute path difference.
+- Docker containers that are stopped (`Exited`) should release GPU memory, but Ollama's memory estimator may not immediately reflect this. A brief sleep between container stop and model load helps.
+
+### The pattern that applies everywhere
+
+The fastest runtime is the one that eliminates the most overhead between the model weights and the compute units. Format-specific kernels (Marlin) beat general-purpose dequant paths (GGUF) for the same reason hand-tuned SQL beats an ORM — the abstraction layer costs something, and at 52 tok/s, that something is 30%.
+
+---
+
+## Quick Reference
+
+```bash
+# vLLM: 52 tok/s
+docker run -d --name gemma4 --gpus all --ipc host --shm-size 64gb \
+  -p 8002:8000 \
+  -v ~/models/gemma4-26b-a4b-nvfp4:/models/gemma4 \
+  -v ~/models/gemma4-26b-a4b-nvfp4/gemma4_patched.py:/usr/local/lib/python3.12/dist-packages/vllm/model_executor/models/gemma4.py \
+  vllm/vllm-openai:gemma4-cu130 \
+  --model /models/gemma4 --served-model-name gemma-4-26b \
+  --quantization modelopt --kv-cache-dtype fp8 --max-model-len 131072 \
+  --gpu-memory-utilization 0.85 --moe-backend marlin \
+  --reasoning-parser gemma4 --enable-auto-tool-choice --tool-call-parser pythonic
+
+# Ollama: 40 tok/s
+ollama run gemma4:26b "your prompt here" --verbose
+```
+
+---
+
+Also in this series: [Part 7: Gemma 4 NVFP4 at 52 tok/s](/en/blog/dgx-spark-gemma4-26b-nvfp4-52-toks) · [Part 1: Ollama Benchmark — 8 Models](/en/blog/dgx-spark-ollama-benchmark-8-models) · [Part 2: vLLM + Qwen3.5 Setup](/en/blog/dgx-spark-vllm-qwen35-setup)
