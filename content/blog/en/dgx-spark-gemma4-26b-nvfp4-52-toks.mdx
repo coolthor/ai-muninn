@@ -1,0 +1,191 @@
+---
+title: "[vLLM] Gemma 4 26B-A4B NVFP4 on DGX Spark: 52 tok/s with 16 GB of Weights"
+description: "Deploying Gemma 4 26B-A4B MoE NVFP4 on GB10 via vLLM 0.19 — 52 tok/s decode, 16.5 GB model, 82 GB free KV cache. Includes the Phase 0 decision that killed the 31B variant."
+date: "2026-04-05"
+updatedAt: "2026-04-05"
+tags: ["Gemma 4", "NVFP4", "vLLM", "DGX Spark", "GB10", "SM121", "MoE", "benchmark"]
+series: "DGX Spark"
+part: 7
+faq:
+  - q: "How fast is Gemma 4 26B-A4B NVFP4 on DGX Spark?"
+    a: "52 tok/s decode, stable across 5 sequential runs (±0.1 tok/s). Long outputs (1600+ tokens) show no speed degradation. Three concurrent requests achieve 114.6 tok/s aggregate throughput."
+  - q: "Should I run Gemma 4 31B or 26B-A4B on DGX Spark?"
+    a: "26B-A4B, without question. The 31B dense variant runs at 6.9 tok/s on GB10 — bandwidth-bound at 273 GB/s. The 26B-A4B MoE (4B active parameters) runs at 52 tok/s with NVFP4 quantization. Same model family, 7.5x faster."
+  - q: "Does Gemma 4 NVFP4 work on SM121 (GB10) with vLLM 0.19?"
+    a: "Yes, but only with --moe-backend marlin. SM121 lacks native FP4 compute, so MoE layers must use the Marlin W4A16 backend. Dense layers use FLASHINFER_CUTLASS. The official vllm/vllm-openai:gemma4-cu130 image handles this correctly."
+  - q: "What is the gemma4_patched.py file and do I need it?"
+    a: "Yes. The community NVFP4 checkpoint (bg-digitalservices/Gemma-4-26B-A4B-it-NVFP4) requires a patched gemma4.py to correctly map NVFP4 scale keys (.weight_scale, .weight_scale_2, .input_scale) in FusedMoE. Without it, weight loading fails. The patch ships with the model repo."
+---
+
+<VideoEmbed src="/videos/gemma4-nvfp4-benchmark.mp4" />
+
+<TLDRCard>
+Gemma 4 26B-A4B NVFP4 runs at **52 tok/s** on DGX Spark (GB10) via vLLM 0.19, using only 16.5 GB of model memory and leaving 82 GB for KV cache. The 31B dense variant is 7.5x slower — don't bother.
+</TLDRCard>
+
+## Preface
+
+The wrong model at the right quantization is still the wrong model. A 31B dense model on a 273 GB/s memory bus will always lose to a 26B MoE with 4B active parameters, regardless of how cleverly you pack the weights.
+
+This picks up where [Part 6: 30W Power Safety Mode](/en/blog/dgx-spark-30w-power-safety-mode) left off. The GX10 was stable on Qwen3.5-35B FP8 at 47 tok/s. Google released Gemma 4 on April 2, and vLLM 0.19 shipped the same day with SM121 NVFP4 fixes that had been broken since March. Time to test.
+
+---
+
+## Phase 0: Why Not the 31B Dense?
+
+The natural first instinct was to try [nvidia/Gemma-4-31B-IT-NVFP4](https://huggingface.co/nvidia/Gemma-4-31B-IT-NVFP4) — the official NVIDIA quantized checkpoint. Community benchmarks on the [NVIDIA Developer Forums](https://forums.developer.nvidia.com/t/gemma-4-day-1-inference-on-nvidia-dgx-spark-preliminary-benchmarks/365503) killed that idea fast:
+
+| Model | Format | tok/s on GB10 |
+|---|---|---|
+| Gemma 4 31B | BF16 | 3.7 |
+| Gemma 4 31B | AWQ int4 | 10.6 |
+| Gemma 4 31B | NVFP4 | 6.9 |
+| **Gemma 4 26B-A4B** | **NVFP4** | **~48** (reported) |
+
+The 31B is dense — all 31 billion parameters are active per token. On GB10's 273 GB/s memory bandwidth, that translates to roughly 7 tok/s regardless of quantization level. The quantization shrinks the model, but the bandwidth cost of reading all weights per token stays proportional.
+
+The 26B-A4B is MoE: 26 billion total parameters, 3.8 billion active. That is the difference between a 7x memory read and a 1x memory read per token.
+
+---
+
+## The Model: bg-digitalservices NVFP4
+
+The official NVIDIA NVFP4 checkpoint only exists for the 31B dense variant. For the 26B-A4B MoE, [bg-digitalservices](https://huggingface.co/bg-digitalservices/Gemma-4-26B-A4B-it-NVFP4) built a community quantization using a custom modelopt plugin — standard NVIDIA tooling doesn't support Gemma 4's fused 3D expert tensor format.
+
+The numbers:
+
+| Metric | BF16 | NVFP4 |
+|---|---|---|
+| Size on disk | 49 GB | 16.5 GB |
+| Tokens/sec | 23.3 | 48.2 |
+| TTFT | 97 ms | 53 ms |
+| Quality retained | — | 97.6% |
+
+The model ships with a `gemma4_patched.py` that fixes vLLM's `expert_params_mapping` — without it, NVFP4 scale keys (`.weight_scale`, `.weight_scale_2`, `.input_scale`) fail to map to FusedMoE parameter names. This is tracked in [vLLM issue #38912](https://github.com/vllm-project/vllm/issues/38912).
+
+---
+
+## Deployment: One Docker Command
+
+Download the model:
+
+```bash
+huggingface-cli download bg-digitalservices/Gemma-4-26B-A4B-it-NVFP4 \
+  --local-dir ~/models/gemma4-26b-a4b-nvfp4
+```
+
+Start the container:
+
+```bash
+docker run -d \
+  --name gemma4-nvfp4 \
+  --gpus all --ipc host --shm-size 64gb \
+  -p 8002:8000 \
+  -v ~/models/gemma4-26b-a4b-nvfp4:/models/gemma4 \
+  -v ~/models/gemma4-26b-a4b-nvfp4/gemma4_patched.py:/usr/local/lib/python3.12/dist-packages/vllm/model_executor/models/gemma4.py \
+  vllm/vllm-openai:gemma4-cu130 \
+  --model /models/gemma4 \
+  --served-model-name gemma-4-26b \
+  --host 0.0.0.0 --port 8000 \
+  --quantization modelopt \
+  --kv-cache-dtype fp8 \
+  --max-model-len 131072 \
+  --gpu-memory-utilization 0.85 \
+  --moe-backend marlin \
+  --reasoning-parser gemma4 \
+  --enable-auto-tool-choice --tool-call-parser pythonic
+```
+
+The critical flags:
+
+- **`--moe-backend marlin`** — SM121 has no native FP4 compute. Without this, CUTLASS MoE runs and produces garbage (NaN scale factors, `!!!!!` output). Marlin decompresses FP4 weights to BF16 at runtime — slower than native W4A4 but correct.
+- **`--quantization modelopt`** — the NVFP4 checkpoint was quantized with NVIDIA modelopt.
+- **`gemma4_patched.py` mount** — maps into vLLM's model directory to fix the scale key mapping bug.
+- **`vllm/vllm-openai:gemma4-cu130`** — this is the correct image. The `gemma4` tag (without `-cu130`) is actually v0.18.2-dev and crashes with `RuntimeError: [FP4 gemm Runner] Failed to run cutlass FP4 gemm on sm120/sm121`.
+
+Startup takes about 90 seconds — 84 seconds for weight loading, then torch.compile warmup. The startup log should show:
+
+```
+Using NvFp4LinearBackend.FLASHINFER_CUTLASS for NVFP4 GEMM
+Using 'MARLIN' NvFp4 MoE backend
+Model loading took 15.76 GiB memory
+Available KV cache memory: 81.8 GiB
+GPU KV cache size: 714,768 tokens
+```
+
+If the log says `CUTLASS_FP4` instead of `MARLIN` for MoE, the `--moe-backend marlin` flag was not picked up. Stop and fix.
+
+---
+
+## Benchmark Results
+
+Five sequential runs at 800 tokens each:
+
+| Run | Tokens | Time | tok/s |
+|---|---|---|---|
+| 1 | 800 | 15.48s | 51.6 |
+| 2 | 800 | 15.52s | 51.5 |
+| 3 | 800 | 15.51s | 51.5 |
+| 4 | 800 | 15.48s | 51.6 |
+| 5 | 800 | 15.48s | 51.6 |
+
+Variance: ±0.1 tok/s. Rock solid.
+
+Long output test (1633 tokens): **51.0 tok/s** — no degradation at length.
+
+Concurrent load (3 parallel requests, 500 tokens each): **114.6 tok/s aggregate**, each request at ~38 tok/s.
+
+### vLLM vs Ollama on the Same Model
+
+Ollama has a `gemma4:26b` GGUF (Q4_K_M, 17 GB). Same architecture, different runtime:
+
+| | vLLM NVFP4 | Ollama Q4_K_M |
+|---|---|---|
+| tok/s | **52** | 40 |
+| Model size | 16.5 GB | 17 GB |
+| KV cache available | 82 GB | N/A |
+| Concurrent requests | Yes (OpenAI API) | No |
+| Tool calling | Yes | No |
+
+vLLM wins by 30%. Both support vision.
+
+One Ollama gotcha worth documenting: if a previous vLLM container used the GPU (even if stopped), Ollama may load the model with only partial GPU allocation — `66% CPU / 34% GPU` in `ollama ps`. The fix is to fully unload before loading:
+
+```bash
+curl -s http://localhost:11434/api/generate \
+  -d '{"model":"gemma4:26b","keep_alive":0}'
+```
+
+---
+
+## What Was Gained
+
+### What cost the most time
+
+The Phase 0 research. Not the deployment. The vLLM 0.19 SM121 fixes ([#37725](https://github.com/vllm-project/vllm/pull/37725) for NVFP4 NaN, [#38126](https://github.com/vllm-project/vllm/pull/38126) for DGX Spark) meant the deployment itself was straightforward. The time went into establishing that the 31B dense variant was not worth attempting, and that the community NVFP4 checkpoint existed and worked.
+
+### Transferable diagnostics
+
+- On bandwidth-constrained hardware (GB10's 273 GB/s), always pick MoE over dense. The total parameter count is irrelevant — active parameters determine speed.
+- `vllm/vllm-openai:gemma4` and `vllm/vllm-openai:gemma4-cu130` are different images with different vLLM versions. Tag naming does not imply one is a superset of the other. Always check `docker images` to verify.
+- Ollama's CPU/GPU split is silent. A model reporting 40 tok/s in one session and 16 tok/s in the next is probably a split issue, not a model issue.
+
+### The pattern that applies everywhere
+
+Do the arithmetic before the experiment. 31B parameters × 2 bytes (BF16) ÷ 273 GB/s = 227 ms per token = 4.4 tok/s theoretical max. No amount of quantization tricks changes the memory bandwidth equation for a dense model on a bandwidth-limited chip.
+
+---
+
+## Deployment Checklist
+
+1. Download `bg-digitalservices/Gemma-4-26B-A4B-it-NVFP4` (~16.5 GB)
+2. Pull `vllm/vllm-openai:gemma4-cu130` (not `gemma4`)
+3. Unload all Ollama models before starting vLLM (`keep_alive:0`)
+4. Mount `gemma4_patched.py` into the container
+5. Use `--moe-backend marlin` and `--quantization modelopt`
+6. Verify startup log shows `MARLIN` for MoE, `FLASHINFER_CUTLASS` for dense
+7. Test: `curl http://<your-gx10-ip>:8002/v1/chat/completions`
+
+---
+
+Also in this series: [Part 1: Ollama Benchmark — 8 Models](/en/blog/dgx-spark-ollama-benchmark-8-models) · [Part 2: vLLM + Qwen3.5 Setup](/en/blog/dgx-spark-vllm-qwen35-setup) · [Part 5: FP8 KV Cache Repetition Bug](/en/blog/dgx-spark-fp8-kvcache-repetition) · [Part 6: 30W Power Safety Mode](/en/blog/dgx-spark-30w-power-safety-mode)

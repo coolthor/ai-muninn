@@ -1,0 +1,191 @@
+---
+title: "[vLLM] Gemma 4 26B-A4B NVFP4 跑在 DGX Spark：52 tok/s，模型只佔 16 GB"
+description: "在 GB10 上用 vLLM 0.19 部署 Gemma 4 26B-A4B MoE NVFP4 — 52 tok/s decode、16.5 GB 模型、82 GB KV cache 可用。包含 Phase 0 決策過程和完整踩坑記錄。"
+date: "2026-04-05"
+updatedAt: "2026-04-05"
+tags: ["Gemma 4", "NVFP4", "vLLM", "DGX Spark", "GB10", "SM121", "MoE", "benchmark"]
+series: "DGX Spark"
+part: 7
+faq:
+  - q: "Gemma 4 26B-A4B NVFP4 在 DGX Spark 上跑多快？"
+    a: "52 tok/s decode，5 輪連續測試穩定度 ±0.1 tok/s。長輸出（1600+ tokens）不衰減。3 個並發 request 合計 114.6 tok/s。"
+  - q: "DGX Spark 該跑 Gemma 4 31B 還是 26B-A4B？"
+    a: "26B-A4B，沒有懸念。31B dense 在 GB10 上只有 6.9 tok/s — 273 GB/s 頻寬餵不飽。26B-A4B MoE（4B active）用 NVFP4 跑到 52 tok/s，快 7.5 倍。"
+  - q: "Gemma 4 NVFP4 在 SM121 (GB10) 上能用 vLLM 0.19 嗎？"
+    a: "可以，但必須加 --moe-backend marlin。SM121 沒有原生 FP4 compute，MoE 層必須走 Marlin W4A16。Dense 層用 FLASHINFER_CUTLASS。官方 vllm/vllm-openai:gemma4-cu130 image 能正確處理。"
+  - q: "gemma4_patched.py 是什麼，需要嗎？"
+    a: "需要。社群 NVFP4 checkpoint（bg-digitalservices/Gemma-4-26B-A4B-it-NVFP4）需要修正過的 gemma4.py 才能正確對應 NVFP4 scale keys（.weight_scale、.weight_scale_2、.input_scale）。Patch 隨模型 repo 一起下載。"
+---
+
+<VideoEmbed src="/videos/gemma4-nvfp4-benchmark.mp4" />
+
+<TLDRCard>
+Gemma 4 26B-A4B NVFP4 在 DGX Spark (GB10) 上用 vLLM 0.19 跑出 **52 tok/s**，模型只佔 16.5 GB，KV cache 剩 82 GB。31B dense 版只有 6.9 tok/s，別浪費時間。
+</TLDRCard>
+
+## 前言
+
+選錯模型，量化得再好也是白搭。31B dense 塞進 273 GB/s 的記憶體頻寬，算術上就註定慢；26B MoE 只 activate 4B 參數，天生適合頻寬受限的硬體。
+
+這篇接續 [Part 6：30W 省電模式](/zh-TW/blog/dgx-spark-30w-power-safety-mode)。GX10 當時穩定跑 Qwen3.5-35B FP8 約 47 tok/s。4 月 2 日 Google 發布 Gemma 4，同天 vLLM 0.19 上了多個 SM121 NVFP4 修復。時機到了。
+
+---
+
+## Phase 0：為什麼不選 31B Dense？
+
+第一直覺是試 [nvidia/Gemma-4-31B-IT-NVFP4](https://huggingface.co/nvidia/Gemma-4-31B-IT-NVFP4) — NVIDIA 官方量化版。[NVIDIA 論壇](https://forums.developer.nvidia.com/t/gemma-4-day-1-inference-on-nvidia-dgx-spark-preliminary-benchmarks/365503)的社群 benchmark 直接打消了念頭：
+
+| 模型 | 格式 | GB10 tok/s |
+|---|---|---|
+| Gemma 4 31B | BF16 | 3.7 |
+| Gemma 4 31B | AWQ int4 | 10.6 |
+| Gemma 4 31B | NVFP4 | 6.9 |
+| **Gemma 4 26B-A4B** | **NVFP4** | **~48**（社群回報） |
+
+31B 是 dense — 每個 token 都要讀完 310 億參數。在 GB10 的 273 GB/s 頻寬下，不管怎麼量化都大約 7 tok/s。量化縮小了模型體積，但每次 forward pass 讀取全部權重的頻寬成本不會改變。
+
+26B-A4B 是 MoE：總參 260 億，active 38 億。一次讀 1/7 vs 讀全部 — 差距就在這裡。
+
+---
+
+## 模型：bg-digitalservices NVFP4
+
+NVIDIA 官方 NVFP4 只有 31B dense 版。26B-A4B MoE 的 NVFP4 是 [bg-digitalservices](https://huggingface.co/bg-digitalservices/Gemma-4-26B-A4B-it-NVFP4) 用自製 modelopt plugin 做的 — 標準 NVIDIA 工具不支援 Gemma 4 的 fused 3D expert tensor 格式。
+
+數據：
+
+| 指標 | BF16 | NVFP4 |
+|---|---|---|
+| 模型大小 | 49 GB | 16.5 GB |
+| tok/s | 23.3 | 48.2 |
+| TTFT | 97 ms | 53 ms |
+| 品質保留 | — | 97.6% |
+
+模型 repo 附帶 `gemma4_patched.py`，修正 vLLM 的 `expert_params_mapping` — 沒有它，NVFP4 scale keys（`.weight_scale`、`.weight_scale_2`、`.input_scale`）無法對應 FusedMoE 參數名。追蹤於 [vLLM issue #38912](https://github.com/vllm-project/vllm/issues/38912)。
+
+---
+
+## 部署：一行 Docker 搞定
+
+下載模型：
+
+```bash
+huggingface-cli download bg-digitalservices/Gemma-4-26B-A4B-it-NVFP4 \
+  --local-dir ~/models/gemma4-26b-a4b-nvfp4
+```
+
+啟動 container：
+
+```bash
+docker run -d \
+  --name gemma4-nvfp4 \
+  --gpus all --ipc host --shm-size 64gb \
+  -p 8002:8000 \
+  -v ~/models/gemma4-26b-a4b-nvfp4:/models/gemma4 \
+  -v ~/models/gemma4-26b-a4b-nvfp4/gemma4_patched.py:/usr/local/lib/python3.12/dist-packages/vllm/model_executor/models/gemma4.py \
+  vllm/vllm-openai:gemma4-cu130 \
+  --model /models/gemma4 \
+  --served-model-name gemma-4-26b \
+  --host 0.0.0.0 --port 8000 \
+  --quantization modelopt \
+  --kv-cache-dtype fp8 \
+  --max-model-len 131072 \
+  --gpu-memory-utilization 0.85 \
+  --moe-backend marlin \
+  --reasoning-parser gemma4 \
+  --enable-auto-tool-choice --tool-call-parser pythonic
+```
+
+關鍵 flags：
+
+- **`--moe-backend marlin`** — SM121 沒有原生 FP4 compute。不加這個，CUTLASS MoE 會跑出垃圾（NaN scale factors、`!!!!!` 輸出）。Marlin 在 runtime 把 FP4 權重解壓回 BF16 — 比原生 W4A4 慢，但結果正確。
+- **`--quantization modelopt`** — NVFP4 checkpoint 用 NVIDIA modelopt 量化。
+- **`gemma4_patched.py` mount** — 修正 scale key mapping bug。
+- **`vllm/vllm-openai:gemma4-cu130`** — 這才是正確的 image。`gemma4` tag（沒有 `-cu130`）實際上是 v0.18.2-dev，會直接 crash：`RuntimeError: [FP4 gemm Runner] Failed to run cutlass FP4 gemm on sm120/sm121`。
+
+啟動約 90 秒 — 84 秒載入權重，剩下是 torch.compile warmup。啟動 log 應該顯示：
+
+```
+Using NvFp4LinearBackend.FLASHINFER_CUTLASS for NVFP4 GEMM
+Using 'MARLIN' NvFp4 MoE backend
+Model loading took 15.76 GiB memory
+Available KV cache memory: 81.8 GiB
+GPU KV cache size: 714,768 tokens
+```
+
+如果 MoE 那行寫的是 `CUTLASS_FP4` 而不是 `MARLIN`，代表 `--moe-backend marlin` 沒吃到。停下來修。
+
+---
+
+## 壓測結果
+
+5 輪連續測試，每輪 800 tokens：
+
+| 輪次 | Tokens | 時間 | tok/s |
+|---|---|---|---|
+| 1 | 800 | 15.48s | 51.6 |
+| 2 | 800 | 15.52s | 51.5 |
+| 3 | 800 | 15.51s | 51.5 |
+| 4 | 800 | 15.48s | 51.6 |
+| 5 | 800 | 15.48s | 51.6 |
+
+波動：±0.1 tok/s。穩到不行。
+
+長輸出測試（1633 tokens）：**51.0 tok/s** — 長度不影響速度。
+
+並發測試（3 個 parallel request，各 500 tokens）：**114.6 tok/s 合計**，每個 request 約 38 tok/s。
+
+### vLLM vs Ollama 同模型對比
+
+Ollama 有 `gemma4:26b` GGUF（Q4_K_M，17 GB）。同架構，不同 runtime：
+
+| | vLLM NVFP4 | Ollama Q4_K_M |
+|---|---|---|
+| tok/s | **52** | 40 |
+| 模型大小 | 16.5 GB | 17 GB |
+| KV cache 可用 | 82 GB | N/A |
+| 並發 | 有（OpenAI API） | 無 |
+| Tool calling | 有 | 無 |
+
+vLLM 快 30%。兩者都支援 vision。
+
+一個 Ollama 的坑值得記：如果之前有 vLLM container 用過 GPU（即使已 stop），Ollama 可能只分配到部分 GPU — `ollama ps` 會顯示 `66% CPU / 34% GPU`。修法是載入前先完全 unload：
+
+```bash
+curl -s http://localhost:11434/api/generate \
+  -d '{"model":"gemma4:26b","keep_alive":0}'
+```
+
+---
+
+## 這次學到什麼
+
+### 最花時間的事
+
+Phase 0 研究，不是部署本身。vLLM 0.19 的 SM121 修復（[#37725](https://github.com/vllm-project/vllm/pull/37725) 修 NVFP4 NaN、[#38126](https://github.com/vllm-project/vllm/pull/38126) 修 DGX Spark）讓部署變得很順。時間花在確認 31B dense 不值得試，以及找到社群 NVFP4 checkpoint 並驗證它能用。
+
+### 可遷移的診斷經驗
+
+- 在頻寬受限的硬體上（GB10 的 273 GB/s），永遠選 MoE 而非 dense。總參數量不重要 — active 參數才決定速度。
+- `vllm/vllm-openai:gemma4` 和 `vllm/vllm-openai:gemma4-cu130` 是不同 image、不同 vLLM 版本。Tag 命名不代表前者是後者的子集。永遠用 `docker images` 確認。
+- Ollama 的 CPU/GPU split 是靜默的。同一個模型上次跑 40 tok/s 這次跑 16 tok/s，多半是 split 問題，不是模型問題。
+
+### 放之四海皆準的模式
+
+部署前先算數學。31B 參數 × 2 bytes (BF16) ÷ 273 GB/s = 每個 token 227 ms = 理論最大 4.4 tok/s。不管量化技巧多高明，dense 模型在頻寬受限的晶片上就是這個速度。
+
+---
+
+## 部署 Checklist
+
+1. 下載 `bg-digitalservices/Gemma-4-26B-A4B-it-NVFP4`（~16.5 GB）
+2. Pull `vllm/vllm-openai:gemma4-cu130`（不是 `gemma4`）
+3. 啟動前 unload 所有 Ollama models（`keep_alive:0`）
+4. Mount `gemma4_patched.py` 進 container
+5. 使用 `--moe-backend marlin` 和 `--quantization modelopt`
+6. 確認啟動 log 顯示 MoE 是 `MARLIN`、dense 是 `FLASHINFER_CUTLASS`
+7. 測試：`curl http://<your-gx10-ip>:8002/v1/chat/completions`
+
+---
+
+同系列文章：[Part 1：Ollama Benchmark — 8 個模型](/zh-TW/blog/dgx-spark-ollama-benchmark-8-models) · [Part 2：vLLM + Qwen3.5 架設](/zh-TW/blog/dgx-spark-vllm-qwen35-setup) · [Part 5：FP8 KV Cache 重複 Bug](/zh-TW/blog/dgx-spark-fp8-kvcache-repetition) · [Part 6：30W 省電模式](/zh-TW/blog/dgx-spark-30w-power-safety-mode)
