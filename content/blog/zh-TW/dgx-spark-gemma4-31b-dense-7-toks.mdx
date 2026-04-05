@@ -1,0 +1,151 @@
+---
+title: "[Benchmark] Gemma 4 31B Dense 跑在 DGX Spark：7 tok/s 和頻寬之牆"
+description: "Gemma 4 31B-IT NVFP4 在 GB10 上只有 7.0 tok/s — 273 GB/s 頻寬是天花板。算術預測 4.4 tok/s，NVFP4 壓縮多了 60% 但逃不出牆。請選 MoE。"
+date: "2026-04-05"
+updatedAt: "2026-04-05"
+tags: ["Gemma 4", "NVFP4", "vLLM", "DGX Spark", "GB10", "SM121", "dense", "benchmark", "bandwidth"]
+series: "DGX Spark"
+part: 9
+faq:
+  - q: "Gemma 4 31B dense 在 DGX Spark 上跑多快？"
+    a: "7.0 tok/s，NVFP4 量化 + vLLM 0.19。3 輪測試穩定 ±0.0 tok/s。這是頻寬受限 — GB10 的 273 GB/s 就是天花板。"
+  - q: "為什麼 Gemma 4 31B 這麼慢但 26B 很快？"
+    a: "31B 是 dense — 每個 token 讀完全部 310 億參數。26B-A4B 是 MoE，每次只 activate 38 億參數。在 273 GB/s 的匯流排上，就是 7 tok/s 和 52 tok/s 的差距。"
+  - q: "量化能改善 dense 模型在 DGX Spark 上的速度嗎？"
+    a: "部分。NVFP4 把模型從 62 GB（BF16）壓到 31 GB，速度從理論 4.4 tok/s 提升到 7.0 tok/s — 改善 60%。但根本限制是頻寬，沒有任何量化能讓 dense 模型在頻寬受限的硬體上跟 MoE 競爭。"
+---
+
+<VideoEmbed src="/videos/gemma4-31b-bandwidth-wall.mp4" />
+
+<TLDRCard>
+Gemma 4 31B dense NVFP4 在 DGX Spark 上跑 **7.0 tok/s** — 跟社群 benchmark 完全吻合。同硬體上 26B-A4B MoE 跑 52 tok/s。Dense 模型在 273 GB/s 頻寬牆面前，量化救不了。
+</TLDRCard>
+
+## 前言
+
+有時候實驗最大的價值是驗證算術已經告訴你的事。計算預測 31B dense 在 273 GB/s 記憶體匯流排上約 4.4 tok/s。實測 7.0 tok/s — 靠 NVFP4 壓縮比預期好，但仍然比 MoE 慢 7.4 倍。
+
+這是 [Gemma 4 on DGX Spark](/zh-TW/blog/dgx-spark-gemma4-26b-nvfp4-52-toks) 部署的一部分。確認 26B-A4B MoE 跑到 52 tok/s 之後，測 31B dense 來量化實際差距。
+
+---
+
+## 先算數學
+
+開跑之前，餐巾紙算術：
+
+```
+31B 參數 × 2 bytes (BF16) = 62 GB
+62 GB ÷ 273 GB/s = 每個 token 227 ms
+1000 ÷ 227 = 理論最大 4.4 tok/s
+```
+
+NVFP4 改變了等式。模型從 62 GB 縮到 31 GB，每個 token 讀取的位元組等比縮小：
+
+```
+31 GB (NVFP4) ÷ 273 GB/s ≈ 每個 token 114 ms
+1000 ÷ 114 = NVFP4 理論 8.8 tok/s
+```
+
+實測落在 7.0 tok/s — 介於 BF16 下限和 NVFP4 上限之間。attention、dequantization、kernel launch 的 overhead 解釋了差距。
+
+---
+
+## 測試
+
+模型：[nvidia/Gemma-4-31B-IT-NVFP4](https://huggingface.co/nvidia/Gemma-4-31B-IT-NVFP4) — NVIDIA 官方 NVFP4 checkpoint，31 GB。
+
+```bash
+docker run -d --name gemma4-31b \
+  --gpus all --ipc host --shm-size 64gb \
+  -p 8002:8000 \
+  -v ~/models/gemma4-31b-nvfp4:/models/gemma4-31b \
+  vllm/vllm-openai:gemma4-cu130 \
+  --model /models/gemma4-31b \
+  --served-model-name gemma-4-31b \
+  --quantization modelopt \
+  --kv-cache-dtype fp8 \
+  --max-model-len 32768 \
+  --gpu-memory-utilization 0.85 \
+  --reasoning-parser gemma4 \
+  --enable-auto-tool-choice --tool-call-parser pythonic
+```
+
+不需要 `--moe-backend marlin` — 這是 dense model，沒有 MoE 層。Backend：`FLASHINFER_CUTLASS`。
+
+啟動 log：
+
+```
+Using NvFp4LinearBackend.FLASHINFER_CUTLASS for NVFP4 GEMM
+Available KV cache memory: 66.95 GiB
+GPU KV cache size: 146,240 tokens
+Maximum concurrency for 32,768 tokens per request: 27.57x
+```
+
+模型佔 31 GB，剩 67 GB 給 KV cache。記憶體不是問題。頻寬才是。
+
+---
+
+## 結果
+
+3 輪，每輪 500 tokens：
+
+| 輪次 | Tokens | 時間 | tok/s |
+|---|---|---|---|
+| 1 | 500 | 70.91s | 7.0 |
+| 2 | 500 | 70.71s | 7.0 |
+| 3 | 500 | 70.72s | 7.0 |
+
+穩到不能再穩。零波動。頻寬天花板是絕對的。
+
+### 全貌
+
+| 模型 | 架構 | Active 參數 | NVFP4 大小 | tok/s | 相對 |
+|---|---|---|---|---|---|
+| Gemma 4 31B | Dense | 31B | 31 GB | **7.0** | 1x |
+| Gemma 4 26B-A4B | MoE | 3.8B | 16.5 GB | **52** | 7.4x |
+
+同家族、同 GPU、同 vLLM 版本。差別在架構 — dense 每次讀全部權重，MoE 讀 1/8。
+
+---
+
+## 為什麼 Dense 在 GB10 上贏不了
+
+GB10 的兩個特性讓這個結果不可避免：
+
+**128 GB 統一記憶體** — 大到能裝任何 120B 以下的模型。這是誘惑。模型裝得下，所以感覺應該能跑。
+
+**273 GB/s 記憶體頻寬** — 大約是 H100（3.35 TB/s）的 1/4。這是牆。LLM decode 對單一 request 幾乎完全受記憶體頻寬限制。GPU 的計算單元閒著等權重送到。
+
+在 H100 上，31B dense BF16 大約跑 ~54 tok/s（62 GB ÷ 3350 GB/s × overhead）。在 GB10 上同一個模型只有 7 tok/s。GPU 沒有比較慢 — 餵它的管子比較窄。
+
+MoE 繞過這個問題：每個 token 讀更少的權重。Gemma 4 26B-A4B activate 26B 中的 3.8B — 頻寬需求降低 8 倍。這直接對應到觀察到的 7.4:1 速度比。
+
+---
+
+## 這次學到什麼
+
+### 最花時間的事
+
+沒花什麼時間。GPU 測試共 4 分鐘。價值在於有了第一手數字可以引用，而不是信論壇。社群回報 6.9 tok/s；實測 7.0 tok/s。
+
+### 可遷移的診斷經驗
+
+- 餐巾紙算術（`參數 × bytes_per_param ÷ 頻寬 = time_per_token`）對頻寬受限硬體上的 dense 模型精確到 60% 以內。夠做 go/no-go 決策，不需要先下載 31 GB 模型。
+- 跑出 7.0 tok/s 且跨 3 輪零波動 — 這是頻寬飽和工作負載的特徵。如果波動接近零，瓶頸是物理，不是軟體。
+- Dense 模型在 GB10 上只有一種情境成立：你需要品質差異且能接受延遲 — 例如 batch processing，throughput per token 不是重點。
+
+### 放之四海皆準的模式
+
+當硬體頻寬是限制時，正確的回應是減少每次推論讀取的位元組 — 不是把同樣的位元組壓得更小。MoE 從架構層面做到這件事。Speculative decoding 透過分攤 draft token 成本做到。量化有幫助，但在同一個架構類別內，它是常數因子，不是逃生門。
+
+---
+
+## 結論
+
+不要在 DGX Spark 上跑 Gemma 4 31B dense 做互動式應用。7 tok/s 沒辦法做即時服務。26B-A4B MoE 存在、在同一個硬體上快 7.4 倍、支援同樣的功能（vision、tool calling、reasoning）。
+
+31B dense 的唯一利基：如果 31B dense 和 26B-A4B MoE 之間的品質差異對你的特定評估有意義，而且你等得起。
+
+---
+
+同系列文章：[Part 7：Gemma 4 26B-A4B NVFP4 52 tok/s](/zh-TW/blog/dgx-spark-gemma4-26b-nvfp4-52-toks) · [Part 8：vLLM vs Ollama — 為什麼差 30%](/zh-TW/blog/dgx-spark-vllm-vs-ollama-same-model)

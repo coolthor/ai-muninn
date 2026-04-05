@@ -1,0 +1,151 @@
+---
+title: "[Benchmark] Gemma 4 31B Dense on DGX Spark: 7 tok/s and the Bandwidth Wall"
+description: "Gemma 4 31B-IT NVFP4 on GB10 maxes out at 7.0 tok/s — bandwidth-bound at 273 GB/s. The math predicted 4.4 tok/s theoretical; NVFP4 compression buys 60% but can't escape the wall. Choose MoE."
+date: "2026-04-05"
+updatedAt: "2026-04-05"
+tags: ["Gemma 4", "NVFP4", "vLLM", "DGX Spark", "GB10", "SM121", "dense", "benchmark", "bandwidth"]
+series: "DGX Spark"
+part: 9
+faq:
+  - q: "How fast is Gemma 4 31B dense on DGX Spark?"
+    a: "7.0 tok/s with NVFP4 quantization via vLLM 0.19. Stable across 3 runs (±0.0 tok/s). This is bandwidth-bound — GB10's 273 GB/s memory bandwidth is the ceiling."
+  - q: "Why is Gemma 4 31B so slow on GB10 when the 26B is fast?"
+    a: "The 31B is dense — all 31 billion parameters are read per token. The 26B-A4B is MoE with only 3.8B active parameters per token. On a 273 GB/s bus, that's the difference between 7 tok/s and 52 tok/s."
+  - q: "Can quantization fix the speed of dense models on DGX Spark?"
+    a: "Partially. NVFP4 compresses the model from ~62 GB (BF16) to 31 GB, which brings speed from the theoretical 4.4 tok/s to 7.0 tok/s — a 60% improvement. But the fundamental constraint is bandwidth, and no quantization makes a dense model competitive with MoE on bandwidth-limited hardware."
+---
+
+<VideoEmbed src="/videos/gemma4-31b-bandwidth-wall.mp4" />
+
+<TLDRCard>
+Gemma 4 31B dense NVFP4 runs at **7.0 tok/s** on DGX Spark — exactly matching community benchmarks. The 26B-A4B MoE does 52 tok/s on the same hardware. Dense models hit a bandwidth wall at 273 GB/s that no quantization can fix.
+</TLDRCard>
+
+## Preface
+
+Sometimes the best use of an experiment is to confirm what the math already said. The arithmetic predicted ~4.4 tok/s for a 31B dense model on a 273 GB/s memory bus. The actual result was 7.0 tok/s — better than predicted thanks to NVFP4 compression, but still 7.4x slower than the MoE variant.
+
+This is part of the [Gemma 4 on DGX Spark](/en/blog/dgx-spark-gemma4-26b-nvfp4-52-toks) deployment. After confirming 52 tok/s on the 26B-A4B MoE, the 31B dense was tested to quantify the actual gap.
+
+---
+
+## The Arithmetic
+
+Before running anything, the napkin math:
+
+```
+31B parameters × 2 bytes (BF16) = 62 GB
+62 GB ÷ 273 GB/s = 227 ms per token
+1000 ÷ 227 = 4.4 tok/s theoretical maximum
+```
+
+NVFP4 changes the equation. The model shrinks from 62 GB to 31 GB on disk, and the actual bytes read per token are proportionally smaller:
+
+```
+31 GB (NVFP4) ÷ 273 GB/s ≈ 114 ms per token
+1000 ÷ 114 = 8.8 tok/s theoretical with NVFP4
+```
+
+The real number lands at 7.0 tok/s — between the BF16 floor and the NVFP4 ceiling. Overhead from attention, dequantization, and kernel launch accounts for the gap.
+
+---
+
+## The Test
+
+The model: [nvidia/Gemma-4-31B-IT-NVFP4](https://huggingface.co/nvidia/Gemma-4-31B-IT-NVFP4) — NVIDIA's official NVFP4 checkpoint, 31 GB on disk.
+
+```bash
+docker run -d --name gemma4-31b \
+  --gpus all --ipc host --shm-size 64gb \
+  -p 8002:8000 \
+  -v ~/models/gemma4-31b-nvfp4:/models/gemma4-31b \
+  vllm/vllm-openai:gemma4-cu130 \
+  --model /models/gemma4-31b \
+  --served-model-name gemma-4-31b \
+  --quantization modelopt \
+  --kv-cache-dtype fp8 \
+  --max-model-len 32768 \
+  --gpu-memory-utilization 0.85 \
+  --reasoning-parser gemma4 \
+  --enable-auto-tool-choice --tool-call-parser pythonic
+```
+
+No `--moe-backend marlin` needed — this is a dense model, no MoE layers. Backend: `FLASHINFER_CUTLASS` for NVFP4 GEMM.
+
+Startup log:
+
+```
+Using NvFp4LinearBackend.FLASHINFER_CUTLASS for NVFP4 GEMM
+Available KV cache memory: 66.95 GiB
+GPU KV cache size: 146,240 tokens
+Maximum concurrency for 32,768 tokens per request: 27.57x
+```
+
+The model uses 31 GB, leaving 67 GB for KV cache. Memory is not the problem. Bandwidth is.
+
+---
+
+## Results
+
+Three runs, 500 tokens each:
+
+| Run | Tokens | Time | tok/s |
+|---|---|---|---|
+| 1 | 500 | 70.91s | 7.0 |
+| 2 | 500 | 70.71s | 7.0 |
+| 3 | 500 | 70.72s | 7.0 |
+
+Dead stable. No variance. The bandwidth ceiling is absolute.
+
+### The Full Picture
+
+| Model | Architecture | Active Params | NVFP4 Size | tok/s | Relative |
+|---|---|---|---|---|---|
+| Gemma 4 31B | Dense | 31B | 31 GB | **7.0** | 1x |
+| Gemma 4 26B-A4B | MoE | 3.8B | 16.5 GB | **52** | 7.4x |
+
+Same model family. Same GPU. Same vLLM version. The difference is architecture — dense reads all weights per token, MoE reads 1/8th.
+
+---
+
+## Why Dense Models Can't Win on GB10
+
+GB10 has two properties that make this outcome inevitable:
+
+**128 GB unified memory** — large enough to hold any model under 120B parameters. This is the lure. The model fits, so it feels like it should work.
+
+**273 GB/s memory bandwidth** — roughly 4x less than an H100 (3.35 TB/s). This is the wall. LLM decode is almost entirely memory-bandwidth-bound for single requests. The GPU's compute units sit idle waiting for weights to arrive.
+
+On H100, 31B dense at BF16 would run at ~54 tok/s (62 GB ÷ 3350 GB/s × overhead). On GB10, the same model runs at 7 tok/s. The GPU isn't slower — the pipe feeding it is narrower.
+
+MoE sidesteps the problem by reading fewer weights per token. Gemma 4 26B-A4B activates 3.8B of 26B parameters — an 8:1 reduction in bandwidth demand. That maps directly to the 7.4:1 speed ratio observed.
+
+---
+
+## What Was Gained
+
+### What cost the most time
+
+Nothing. The test took 4 minutes of GPU time. The value was in having a first-party number to cite instead of trusting forum posts. Community benchmarks said 6.9 tok/s; the measurement confirmed 7.0 tok/s.
+
+### Transferable diagnostics
+
+- The napkin math (`params × bytes_per_param ÷ bandwidth = time_per_token`) is accurate to within 60% for dense models on bandwidth-limited hardware. Good enough for go/no-go decisions before downloading a 31 GB model.
+- A result of 7.0 tok/s with zero variance across runs is the signature of a bandwidth-saturated workload. If variance is near zero, the bottleneck is physics, not software.
+- Dense models on GB10 are only viable if you need the quality difference and can tolerate the latency — for example, batch processing where throughput per token matters less than total throughput.
+
+### The pattern that applies everywhere
+
+When the hardware's bandwidth is the constraint, the right response is to reduce the bytes read per inference step — not to compress the same bytes harder. MoE does this architecturally. Speculative decoding does it by amortizing costs over draft tokens. Quantization helps, but within the same architecture class, it's a constant factor, not an escape hatch.
+
+---
+
+## Verdict
+
+Don't run Gemma 4 31B dense on DGX Spark for interactive use. 7 tok/s is unusable for real-time serving. The 26B-A4B MoE exists, runs 7.4x faster on the same hardware, and supports the same capabilities (vision, tool calling, reasoning).
+
+The 31B dense has one niche: if the quality difference between 31B dense and 26B-A4B MoE matters for your specific evaluation, and you can afford to wait.
+
+---
+
+Also in this series: [Part 7: Gemma 4 26B-A4B NVFP4 at 52 tok/s](/en/blog/dgx-spark-gemma4-26b-nvfp4-52-toks) · [Part 8: vLLM vs Ollama — Why 30% Faster](/en/blog/dgx-spark-vllm-vs-ollama-same-model)

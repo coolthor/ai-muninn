@@ -1,6 +1,7 @@
 import { notFound } from 'next/navigation'
 import Link from 'next/link'
 import { MDXRemote } from 'next-mdx-remote/rsc'
+import remarkGfm from 'remark-gfm'
 import { getAllSlugs, getPost, hasTranslation, type FaqItem } from '@/lib/blog'
 import { routing } from '@/i18n/routing'
 import type { Metadata } from 'next'
@@ -224,7 +225,7 @@ export default async function BlogPost({
 
       {/* content */}
       <div className="prose">
-        <MDXRemote source={post.content} components={{ TLDRCard, VideoEmbed }} />
+        <MDXRemote source={post.content} components={{ TLDRCard, VideoEmbed }} options={{ mdxOptions: { remarkPlugins: [remarkGfm] } }} />
       </div>
 
       {/* FAQ section */}
