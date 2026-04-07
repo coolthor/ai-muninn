@@ -23,6 +23,18 @@ faq:
 Gemma 4 E4B NVFP4A16 在 DGX Spark 上跑 **49.9 tok/s** — 比 BF16 快 2.6 倍，GPU 佔用只有 9.8 GB。HuggingFace 上第一個 E4B NVFP4 checkpoint，已上傳 [coolthor/Gemma-4-E4B-it-NVFP4A16](https://huggingface.co/coolthor/Gemma-4-E4B-it-NVFP4A16)。
 </TLDRCard>
 
+## 白話導讀
+
+如果你不是做 LLM 基礎設施的，這篇文章在講什麼：
+
+AI 模型壓縮後可以跑更快 — 類似壓縮檔案，只是被壓縮的是神經網路。關鍵是壓縮後模型還要能正常思考。
+
+我們把 Google 的 Gemma 4 E4B 模型（一個能讀文字、圖片、音訊的小型多模態 AI）從 15 GB 壓到 9.8 GB。結果：從每秒生成 19 個字加速到 50 個 — 快到可以即時對話。全世界還沒有人發布過這個壓縮版本，所以我們上傳了讓任何人都能用。
+
+有趣的是壓縮本身只花了 2 分鐘。真正花一小時的是跟壞掉的軟體依賴打架，讓壓縮工具能跑在一個它本來不認識的模型架構上。
+
+---
+
 ## 前言
 
 最好的量化是你差點放棄的那個。三次失敗、兩個依賴衝突、一個前一天才 merge 的 PR — 這就是從 19 tok/s 到 50 tok/s 的路。

@@ -23,6 +23,18 @@ faq:
 Gemma 4 E4B NVFP4A16 runs at **49.9 tok/s** on DGX Spark — 2.6x faster than BF16, using only 9.8 GB of GPU memory. First NVFP4 checkpoint for E4B, now on [HuggingFace](https://huggingface.co/coolthor/Gemma-4-E4B-it-NVFP4A16).
 </TLDRCard>
 
+## Plain Language Guide
+
+If you're not deep in LLM infrastructure, here's what this article is about:
+
+AI models run faster when they're compressed — like zipping a file, except the "file" is a neural network. The trick is compressing without breaking the model's ability to think.
+
+We took Google's Gemma 4 E4B model (a small, multimodal AI that can read text, images, and audio) and compressed it from 15 GB to 9.8 GB. The result: it went from generating 19 words per second to 50 — fast enough to hold a real-time conversation. Nobody had published this specific compression before, so we uploaded it for anyone to use.
+
+The interesting part wasn't the compression itself (that took 2 minutes). It was the hour spent fighting broken software dependencies to make the compression tool work with a model architecture it wasn't designed for.
+
+---
+
 ## Preface
 
 The best quantization is the one you almost gave up on. Three failed attempts, two dependency conflicts, and one PR that merged the day before — that was the path from 19 tok/s to 50.
