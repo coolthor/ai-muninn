@@ -1,0 +1,203 @@
+---
+title: "[Benchmark] Gemma 4 E2B vs E4B: 81 tok/s vs 52 on Three Machines — Bandwidth Is Everything"
+description: "Gemma 4 E2B is 44-82% faster than E4B across M1 Max, GB10, and M4. We benchmarked both on Ollama with 3 runs per scenario, unique prompts, and proper warm-up. Memory bandwidth predicts generation speed better than anything else."
+date: "2026-04-07"
+updatedAt: "2026-04-07"
+tags: ["Gemma 4", "E2B", "E4B", "Ollama", "benchmark", "DGX Spark", "GB10", "M1 Max", "M4", "Apple Silicon", "memory bandwidth"]
+series: "DGX Spark"
+part: 11
+faq:
+  - q: "How fast is Gemma 4 E2B on Apple Silicon?"
+    a: "On M1 Max (400 GB/s bandwidth), E2B hits 81 tok/s. On M4 (120 GB/s), it drops to 42 tok/s. Generation speed scales linearly with memory bandwidth."
+  - q: "Is Gemma 4 E2B faster than E4B?"
+    a: "Yes. E2B is 44-82% faster than E4B across all tested hardware. The gap is largest on memory-constrained machines (M4 16GB: +80%) and smallest on high-bandwidth hardware (GB10: +44%)."
+  - q: "Why does Ollama prompt cache affect benchmark results?"
+    a: "Ollama caches prompt evaluations. Repeating the same prompt inflates prefill from ~1065 tok/s to 5345 tok/s. Use unique prompts per run to avoid this artifact."
+  - q: "What does OLLAMA_KEEP_ALIVE=0 do to benchmarks?"
+    a: "It unloads the model after every request. Sequential benchmark runs trigger cold loads, adding 2+ seconds to TTFT and producing wildly inconsistent numbers. Override with keep_alive: 10m per request."
+---
+
+<VideoEmbed src="/videos/gemma4-e2b-vs-e4b-3-machines.mp4" />
+
+<TLDRCard>
+Gemma 4 E2B runs at **81 tok/s** on M1 Max, **53 tok/s** on GB10, and **42 tok/s** on M4 — consistently 44-82% faster than E4B across all three machines. The speed difference comes down to one thing: memory bandwidth.
+</TLDRCard>
+
+## Plain-Language Version: Gemma 4 E2B vs E4B
+
+Gemma 4 is Google's latest open-source AI model family, released in 2026. It comes in several sizes — E2B (2 billion compute parameters, 7.2 GB on disk) and E4B (4 billion compute parameters, 9.6 GB). Both use a special architecture called PLE (Per-Layer Embedding) that makes them behave differently from traditional models.
+
+If you're running AI models locally on a laptop or mini PC, the question isn't just "which model is smarter" — it's "which one actually responds fast enough to be useful." A model that takes 2 seconds per sentence isn't fun to chat with.
+
+I tested both models on three machines I actually use every day: a MacBook Pro, an NVIDIA DGX Spark (GX10), and a Mac mini. Same prompts, same methodology, proper warm-up.
+
+The result: E2B is dramatically faster everywhere, and the speed gap gets worse on cheaper hardware.
+
+---
+
+## Preface
+
+Benchmarks are easy to get wrong. The first numbers I collected told a completely different story — E4B appeared faster at prefill on certain machines, and GX10 showed wild variance between runs. It took three rounds of re-testing to realize Ollama's prompt cache and a `KEEP_ALIVE=0` setting were corrupting the data.
+
+This is [Part 11](/en/blog/dgx-spark-gemma4-e4b-nvfp4-50-toks) of the DGX Spark series. Part 10 covered quantizing E4B to NVFP4 on vLLM. This time I stayed on Ollama — same runtime across three different machines — to isolate the hardware variable.
+
+---
+
+## The Setup: Three Machines, One Runtime
+
+| Machine | Chip | RAM | Memory BW | Ollama |
+|---|---|---|---|---|
+| **MBP** | Apple M1 Max | 32 GB | 400 GB/s | 0.20.3 |
+| **GX10** | NVIDIA GB10 | 128 GB | 273 GB/s | 0.20.0 |
+| **openclaw** | Apple M4 | 16 GB | 120 GB/s | 0.20.0 |
+
+Both models are Ollama's default quantizations:
+
+| Model | Tag | Size |
+|---|---|---|
+| Gemma 4 E2B | `gemma4:e2b` | 7.2 GB |
+| Gemma 4 E4B | `gemma4:e4b` | 9.6 GB |
+
+The protocol: unload all models, load the target, run a warmup inference, then 3 runs with unique prompts. Each machine was tested sequentially — finish E2B completely before starting E4B. No concurrent models competing for bandwidth.
+
+---
+
+## Why Unique Prompts Per Run
+
+The first round of testing used the same prompt three times. The results looked great — suspiciously great. Prefill hit 5345 tok/s on the second run of E2B.
+
+That's Ollama's prompt cache. It stores the KV cache from previous evaluations and reuses it when the same prompt appears again. The "prefill" becomes a cache lookup instead of actual computation.
+
+The fix: three different prompts per scenario, all asking about different financial concepts. Same length, same complexity, zero cache reuse.
+
+**Short prompts** (~26 tokens): single user message, no system prompt, max 256 generated tokens.
+
+```
+"Explain what a bull put spread is in 3 sentences."
+"What is an iron condor? Explain in 3 sentences."
+"Define delta hedging in 3 sentences."
+```
+
+**Long prompts** (~104 tokens): system prompt + detailed question, max 512 generated tokens. Three variations covering options strategy, quantitative research, and derivatives pricing.
+
+---
+
+## The Results
+
+### Generation Speed (the number that matters)
+
+| Machine | BW | E2B | E4B | E2B vs E4B |
+|---|---|---|---|---|
+| **MBP** (M1 Max 32GB) | 400 GB/s | **81 tok/s** | 52 tok/s | **+54%** |
+| **GX10** (GB10 128GB) | 273 GB/s | **53 tok/s** | 37 tok/s | **+44%** |
+| **openclaw** (M4 16GB) | 120 GB/s | **42 tok/s** | 23 tok/s | **+80%** |
+
+E2B wins everywhere. The advantage ranges from +44% on the highest-bandwidth machine to +80% on the most constrained one.
+
+### Full Breakdown: MBP (M1 Max)
+
+| Metric | E2B | E4B | Delta |
+|---|---|---|---|
+| Gen (short, 256 tok) | 81.4 tok/s | 52.8 tok/s | +54% |
+| Gen (long, 512 tok) | 77.8 tok/s | 50.9 tok/s | +53% |
+| Prefill (short) | 507 tok/s | 309 tok/s | +64% |
+| Prefill (long) | 1065 tok/s | 608 tok/s | +75% |
+| TTFT (short) | 0.051s | 0.084s | faster |
+| TTFT (long) | 0.098s | 0.172s | faster |
+
+Stability was excellent. E2B generation varied less than 2 tok/s across runs.
+
+### Full Breakdown: GX10 (GB10)
+
+| Metric | E2B | E4B | Delta |
+|---|---|---|---|
+| Gen (short, 256 tok) | 53.4 tok/s | 37.1 tok/s | +44% |
+| Gen (long, 512 tok) | 53.3 tok/s | 36.4 tok/s | +46% |
+
+GX10 prefill/TTFT showed high variance due to CUDA kernel warmup. Generation speed was rock-solid.
+
+Ollama config: `FLASH_ATTENTION=1`, `KV_CACHE_TYPE=q8_0`, `NUM_PARALLEL=1`, `CONTEXT_LENGTH=65536`.
+
+One critical detail: GX10's Ollama runs with `OLLAMA_KEEP_ALIVE=0`. The model unloads after every request. Without passing `"keep_alive": "10m"` in each request body, sequential runs trigger cold loads and produce garbage numbers. The first round of GX10 testing showed one run at 38 tok/s (cold reload) next to another at 54 tok/s (warm). After adding `keep_alive`, all runs converged to ~53 tok/s.
+
+### Full Breakdown: openclaw (M4)
+
+| Metric | E2B | E4B | Delta |
+|---|---|---|---|
+| Gen (short, 256 tok) | 42.1 tok/s | 23.5 tok/s | +79% |
+| Gen (long, 512 tok) | 41.4 tok/s | 22.8 tok/s | +82% |
+| Prefill (short) | 390 tok/s | 230 tok/s | +70% |
+| Prefill (long) | 600 tok/s | 304 tok/s | +97% |
+| TTFT (short) | 0.067s | 0.113s | faster |
+| TTFT (long) | 0.175s | 0.345s | faster |
+
+The M4's 16 GB RAM is the bottleneck. E4B at 9.6 GB consumes 60% of total memory, leaving barely enough for KV cache and system overhead. E2B at 7.2 GB breathes easier — and it shows in every metric.
+
+---
+
+## Why Bandwidth Predicts Everything
+
+Plot generation speed against memory bandwidth and you get a near-linear relationship:
+
+```
+Machine       BW (GB/s)   E2B (tok/s)   Ratio
+M1 Max        400         81            0.203 tok/s per GB/s
+GB10          273         53            0.194
+M4            120         42            0.350*
+```
+
+*M4 is an outlier — its efficiency ratio is higher because the model-to-RAM ratio is more favorable (7.2 GB model / 16 GB RAM = 45%). On M1 Max, the same ratio is 23%. Smaller models extract more from limited bandwidth.
+
+For E4B, the relationship breaks down on M4 because memory pressure dominates:
+
+```
+Machine       BW (GB/s)   E4B (tok/s)   Ratio
+M1 Max        400         52            0.130
+GB10          273         37            0.136
+M4            120         23            0.192*
+```
+
+*M4 E4B: 9.6 GB / 16 GB = 60% memory utilization. The system is swapping or starving KV cache.
+
+The takeaway: on Apple Silicon, bandwidth is the primary bottleneck for generation speed. But when the model starts consuming more than ~50% of total RAM, memory pressure creates a second bottleneck that bandwidth alone can't explain.
+
+---
+
+## What Was Gained
+
+### What cost the most time
+
+Getting the GX10 numbers right. The `OLLAMA_KEEP_ALIVE=0` default silently corrupted measurements — the model would unload between runs and the cold load overhead bled into TTFT and sometimes generation speed. It looked like random variance until I checked the Ollama service config.
+
+### Transferable diagnostics
+
+- **Ollama prompt cache is invisible.** There's no flag or log message telling you "this prefill was served from cache." The only way to detect it: run the same prompt twice and see if prefill jumps 5x. Always use unique prompts when benchmarking.
+- **Check `OLLAMA_KEEP_ALIVE` before any benchmark.** Default is `5m`, but if someone (past you) set it to `0` for production memory savings, every benchmark run starts cold.
+- **Test models sequentially, not concurrently.** Even on a 128 GB machine, running two models competes for bandwidth. Unload A completely before loading B.
+
+### The pattern that applies everywhere
+
+The fastest model on your hardware isn't the smartest one — it's the one that fits comfortably in your memory bandwidth budget. E2B at 81 tok/s feels interactive. E4B at 23 tok/s on a Mac mini doesn't.
+
+---
+
+## Quick Reference
+
+If you have a Mac mini M4 (16 GB): use **E2B**. E4B is painfully slow at 23 tok/s.
+
+If you have a MacBook Pro M1 Max or similar (32+ GB, 400 GB/s): **E2B** for speed (81 tok/s), E4B if you need the quality bump and can tolerate 52 tok/s.
+
+If you have a DGX Spark / GX10: **E2B** at 53 tok/s. E4B at 37 tok/s is fine too — this machine has bandwidth to spare.
+
+```bash
+# Pull and run E2B
+ollama pull gemma4:e2b
+ollama run gemma4:e2b
+
+# Quick speed check
+curl -s http://localhost:11434/api/chat \
+  -d '{"model":"gemma4:e2b","messages":[{"role":"user","content":"Hello"}],"stream":false}' \
+  | python3 -c "import json,sys;d=json.load(sys.stdin);print(f'{d[\"eval_count\"]/(d[\"eval_duration\"]/1e9):.1f} tok/s')"
+```
+
+Also in this series: [Part 10: Gemma 4 E4B NVFP4 — 50 tok/s](/en/blog/dgx-spark-gemma4-e4b-nvfp4-50-toks) | [Part 8: vLLM vs Ollama](/en/blog/dgx-spark-vllm-vs-ollama-same-model)

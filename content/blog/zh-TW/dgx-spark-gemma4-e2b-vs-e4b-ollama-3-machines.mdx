@@ -1,0 +1,203 @@
+---
+title: "[Benchmark] Gemma 4 E2B vs E4B：三台機器實測，記憶體頻寬決定一切"
+description: "Gemma 4 E2B 在 M1 Max 跑到 81 tok/s，比 E4B 快 44-82%。三台機器、相同方法論、每輪獨立 prompt，排除 Ollama 快取干擾後的真實數據。"
+date: "2026-04-07"
+updatedAt: "2026-04-07"
+tags: ["Gemma 4", "E2B", "E4B", "Ollama", "benchmark", "DGX Spark", "GB10", "M1 Max", "M4", "Apple Silicon", "記憶體頻寬"]
+series: "DGX Spark"
+part: 11
+faq:
+  - q: "Gemma 4 E2B 在 Apple Silicon 上能跑多快？"
+    a: "M1 Max（400 GB/s 頻寬）上 81 tok/s。M4（120 GB/s）上 42 tok/s。生成速度和記憶體頻寬幾乎成線性關係。"
+  - q: "Gemma 4 E2B 比 E4B 快多少？"
+    a: "快 44-82%，視硬體而定。記憶體越小差距越大：M4 16GB 上差 80%，GB10 128GB 上差 44%。"
+  - q: "Ollama prompt cache 怎麼影響 benchmark？"
+    a: "Ollama 會快取 prompt 的 KV cache。重複同一個 prompt，prefill 會從 ~1065 tok/s 灌水到 5345 tok/s。每輪用不同 prompt 才能避免。"
+  - q: "OLLAMA_KEEP_ALIVE=0 對 benchmark 有什麼影響？"
+    a: "模型在每次請求後立刻 unload。連續跑 benchmark 每輪都要冷啟動，TTFT 多 2 秒以上，數字完全不可靠。解法：在 request body 帶 keep_alive: 10m。"
+---
+
+<VideoEmbed src="/videos/gemma4-e2b-vs-e4b-3-machines.mp4" />
+
+<TLDRCard>
+Gemma 4 E2B 在 M1 Max 上跑到 **81 tok/s**、GB10 上 **53 tok/s**、M4 上 **42 tok/s** — 比 E4B 快 44-82%。速度差異歸結為一件事：記憶體頻寬。
+</TLDRCard>
+
+## 白話版：Gemma 4 E2B vs E4B
+
+Gemma 4 是 Google 在 2026 年推出的開源 AI 模型家族。E2B（2B 計算參數，7.2 GB）和 E4B（4B 計算參數，9.6 GB）都使用 PLE（Per-Layer Embedding）架構，跟傳統的 dense 或 MoE 模型不太一樣。
+
+如果你在自己的筆電或 Mac mini 上跑 AI 模型，關鍵不只是「哪個模型比較聰明」，而是「哪個回應夠快、用起來才舒服」。一個每句話要等兩秒的模型，聊起來不會開心。
+
+我用手邊三台每天在用的機器測了這兩個模型：MacBook Pro、NVIDIA DGX Spark（GX10）、Mac mini。同樣的 prompt、同樣的方法論、完整的 warm-up。
+
+結論：E2B 在所有機器上都大幅勝出，而且硬體越低階差距越大。
+
+---
+
+## 前言
+
+Benchmark 很容易測錯。第一輪數據講了一個完全不同的故事 — E4B 在某些機器上 prefill 看起來比 E2B 快，GX10 的數字在不同 run 之間亂跳。重測了三輪才發現：Ollama 的 prompt cache 和一個 `KEEP_ALIVE=0` 設定把數據搞壞了。
+
+這是 DGX Spark 系列[第 11 篇](/zh-TW/blog/dgx-spark-gemma4-e4b-nvfp4-50-toks)。上一篇在 vLLM 上把 E4B 量化到 NVFP4。這次回到 Ollama — 三台機器用同一個 runtime，把硬體變數隔離出來。
+
+---
+
+## 測試環境：三台機器、一個 Runtime
+
+| 機器 | 晶片 | RAM | 記憶體頻寬 | Ollama |
+|---|---|---|---|---|
+| **MBP** | Apple M1 Max | 32 GB | 400 GB/s | 0.20.3 |
+| **GX10** | NVIDIA GB10 | 128 GB | 273 GB/s | 0.20.0 |
+| **openclaw** | Apple M4 | 16 GB | 120 GB/s | 0.20.0 |
+
+兩個模型都是 Ollama 預設量化版本：
+
+| 模型 | Tag | 大小 |
+|---|---|---|
+| Gemma 4 E2B | `gemma4:e2b` | 7.2 GB |
+| Gemma 4 E4B | `gemma4:e4b` | 9.6 GB |
+
+測試流程：先 unload 所有模型，載入目標模型，跑一次 warmup，然後用 3 個不同的 prompt 各跑一次。每台機器依序測完 E2B 再測 E4B，不讓模型同時佔記憶體。
+
+---
+
+## 為什麼每輪要用不同的 Prompt
+
+第一輪測試偷懶用了同一個 prompt 跑三次。結果看起來很漂亮 — 可疑地漂亮。E2B 第二輪的 prefill 飆到 5345 tok/s。
+
+這是 Ollama 的 prompt cache。它會把之前的 KV cache 存起來，遇到相同的 prompt 直接拿出來用。所謂的「prefill」變成了一次 cache lookup，不是真正的計算。
+
+解法：每輪用不同的 prompt。三個都在問金融概念，長度和複雜度相近，但內容完全不同。
+
+**Short prompt**（~26 tokens）：單句 user message，沒有 system prompt，最多生成 256 tokens。
+
+```
+"Explain what a bull put spread is in 3 sentences."
+"What is an iron condor? Explain in 3 sentences."
+"Define delta hedging in 3 sentences."
+```
+
+**Long prompt**（~104 tokens）：system prompt + 詳細問題，最多生成 512 tokens。三個版本分別問 options strategy、量化研究、衍生品定價。
+
+---
+
+## 測試結果
+
+### 生成速度（最重要的數字）
+
+| 機器 | 頻寬 | E2B | E4B | E2B vs E4B |
+|---|---|---|---|---|
+| **MBP**（M1 Max 32GB） | 400 GB/s | **81 tok/s** | 52 tok/s | **+54%** |
+| **GX10**（GB10 128GB） | 273 GB/s | **53 tok/s** | 37 tok/s | **+44%** |
+| **openclaw**（M4 16GB） | 120 GB/s | **42 tok/s** | 23 tok/s | **+80%** |
+
+E2B 全面勝出。優勢從最高頻寬機器的 +44% 到最低頻寬機器的 +80%。
+
+### 完整數據：MBP（M1 Max）
+
+| Metric | E2B | E4B | 差距 |
+|---|---|---|---|
+| Gen（short, 256 tok） | 81.4 tok/s | 52.8 tok/s | +54% |
+| Gen（long, 512 tok） | 77.8 tok/s | 50.9 tok/s | +53% |
+| Prefill（short） | 507 tok/s | 309 tok/s | +64% |
+| Prefill（long） | 1065 tok/s | 608 tok/s | +75% |
+| TTFT（short） | 0.051s | 0.084s | 更快 |
+| TTFT（long） | 0.098s | 0.172s | 更快 |
+
+穩定性極佳。E2B 三輪 generation 的變異小於 2 tok/s。
+
+### 完整數據：GX10（GB10）
+
+| Metric | E2B | E4B | 差距 |
+|---|---|---|---|
+| Gen（short, 256 tok） | 53.4 tok/s | 37.1 tok/s | +44% |
+| Gen（long, 512 tok） | 53.3 tok/s | 36.4 tok/s | +46% |
+
+GX10 的 prefill/TTFT 變異很大，CUDA kernel warmup 的影響。但 generation speed 非常穩定。
+
+Ollama 設定：`FLASH_ATTENTION=1`、`KV_CACHE_TYPE=q8_0`、`NUM_PARALLEL=1`、`CONTEXT_LENGTH=65536`。
+
+一個關鍵細節：GX10 的 Ollama 設定了 `OLLAMA_KEEP_ALIVE=0`，模型在每次請求後立刻 unload。不在每個 request body 裡帶 `"keep_alive": "10m"`，連續跑 benchmark 每輪都是冷啟動。第一輪 GX10 數據出現了 38 tok/s（冷載入）和 54 tok/s（warm）混在一起的情況。加上 `keep_alive` 後，所有 run 收斂到 ~53 tok/s。
+
+### 完整數據：openclaw（M4）
+
+| Metric | E2B | E4B | 差距 |
+|---|---|---|---|
+| Gen（short, 256 tok） | 42.1 tok/s | 23.5 tok/s | +79% |
+| Gen（long, 512 tok） | 41.4 tok/s | 22.8 tok/s | +82% |
+| Prefill（short） | 390 tok/s | 230 tok/s | +70% |
+| Prefill（long） | 600 tok/s | 304 tok/s | +97% |
+| TTFT（short） | 0.067s | 0.113s | 更快 |
+| TTFT（long） | 0.175s | 0.345s | 更快 |
+
+M4 的 16 GB RAM 是瓶頸。E4B 9.6 GB 吃掉 60% 的總記憶體，剩下的空間給 KV cache 和系統開銷幾乎不夠用。E2B 7.2 GB 就寬裕多了 — 每個指標都看得出來。
+
+---
+
+## 為什麼頻寬能預測一切
+
+把生成速度對記憶體頻寬畫圖，幾乎是線性關係：
+
+```
+機器          頻寬 (GB/s)   E2B (tok/s)   比率
+M1 Max        400           81            0.203 tok/s per GB/s
+GB10          273           53            0.194
+M4            120           42            0.350*
+```
+
+*M4 是個例外 — 效率比率比較高，因為模型佔 RAM 的比例比較有利（7.2 GB / 16 GB = 45%）。M1 Max 上同樣的比率是 23%。小模型能從有限頻寬裡擠出更多。
+
+E4B 在 M4 上就不行了，記憶體壓力成為主要瓶頸：
+
+```
+機器          頻寬 (GB/s)   E4B (tok/s)   比率
+M1 Max        400           52            0.130
+GB10          273           37            0.136
+M4            120           23            0.192*
+```
+
+*M4 E4B：9.6 GB / 16 GB = 60% 記憶體使用率。系統可能在 swap 或者 KV cache 不夠用。
+
+結論：在 Apple Silicon 上，頻寬是生成速度的主要瓶頸。但當模型開始吃掉超過 ~50% 的總 RAM，記憶體壓力會製造第二個瓶頸，光靠頻寬解釋不了。
+
+---
+
+## 學到了什麼
+
+### 花最多時間的地方
+
+搞定 GX10 的數據。`OLLAMA_KEEP_ALIVE=0` 默默地把測量搞壞了 — 模型在 run 之間 unload，冷載入的開銷混進了 TTFT，有時甚至影響 generation speed。看起來像隨機變異，直到去翻 Ollama 的 systemd service config 才發現。
+
+### 可轉移的診斷技巧
+
+- **Ollama prompt cache 是隱形的。** 沒有 flag 或 log 告訴你「這次 prefill 是從 cache 拿的」。唯一的偵測方式：同一個 prompt 跑兩次，看 prefill 有沒有跳 5 倍。Benchmark 永遠用不同的 prompt。
+- **跑 benchmark 前先查 `OLLAMA_KEEP_ALIVE`。** 預設是 `5m`，但如果你（或過去的你）為了省記憶體設成 `0`，每次 benchmark 都是冷啟動。
+- **模型要依序測，不要同時跑。** 就算是 128 GB 的機器，兩個模型同時在記憶體裡也會搶頻寬。測完 A 完全 unload 再載 B。
+
+### 放諸四海皆準的規律
+
+你硬體上最快的模型不是最聰明的那個 — 是能舒服地塞進你記憶體頻寬預算的那個。E2B 81 tok/s 用起來是對話。E4B 23 tok/s 在 Mac mini 上用起來是等待。
+
+---
+
+## 快速參考
+
+Mac mini M4（16 GB）：用 **E2B**。E4B 23 tok/s 太慢了。
+
+MacBook Pro M1 Max 或同級（32+ GB、400 GB/s）：要速度用 **E2B**（81 tok/s），需要品質可以選 E4B（52 tok/s 還行）。
+
+DGX Spark / GX10：**E2B** 53 tok/s。E4B 37 tok/s 也可以 — 這台機器頻寬夠用。
+
+```bash
+# 拉模型跑起來
+ollama pull gemma4:e2b
+ollama run gemma4:e2b
+
+# 快速測速
+curl -s http://localhost:11434/api/chat \
+  -d '{"model":"gemma4:e2b","messages":[{"role":"user","content":"Hello"}],"stream":false}' \
+  | python3 -c "import json,sys;d=json.load(sys.stdin);print(f'{d[\"eval_count\"]/(d[\"eval_duration\"]/1e9):.1f} tok/s')"
+```
+
+同系列文章：[Part 10：Gemma 4 E4B NVFP4 — 50 tok/s](/zh-TW/blog/dgx-spark-gemma4-e4b-nvfp4-50-toks) | [Part 8：vLLM vs Ollama](/zh-TW/blog/dgx-spark-vllm-vs-ollama-same-model)
