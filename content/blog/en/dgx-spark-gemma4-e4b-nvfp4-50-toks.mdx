@@ -25,7 +25,7 @@ Gemma 4 E4B NVFP4A16 runs at **49.9 tok/s** on DGX Spark — 2.6x faster than BF
 
 ## Plain-Language Version: Gemma 4 E4B Quantization
 
-Gemma 4 is a family of open-source AI models released by Google in April 2026. It comes in four sizes: E2B (smallest), E4B, 26B MoE, and 31B dense. E4B is the mid-range edge model — small enough for phones and desktops, capable enough to be useful. It can read text, images, and audio, and it supports 128K tokens of context (roughly a 300-page book).
+Gemma 4 is a family of open-source AI models released by Google in April 2026. It comes in four sizes: E2B (for phones), E4B (for desktops), 26B MoE, and 31B dense. E4B is the desktop-class edge model — too big for a phone, but fits comfortably on a laptop or workstation. It can read text, images, and audio, and it supports 128K tokens of context (roughly a 300-page book).
 
 Quantization is a compression technique for AI models. Think of it like converting a high-resolution photo to a smaller file: you lose some detail, but the image is still recognizable and loads much faster. NVFP4 is NVIDIA's 4-bit quantization format — it shrinks each number in the model from 16 bits down to 4, cutting memory usage and letting the GPU process tokens faster.
 
