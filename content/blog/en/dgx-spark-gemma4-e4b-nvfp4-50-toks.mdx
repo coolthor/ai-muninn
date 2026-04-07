@@ -1,0 +1,311 @@
+---
+title: "[Benchmark] From 19 to 50 tok/s: We Quantized Gemma 4 E4B to NVFP4 Before Anyone Else"
+description: "Gemma 4 E4B NVFP4A16 hits 49.9 tok/s on DGX Spark — 2.6x faster than BF16. First NVFP4 checkpoint on HuggingFace. PLE architecture, FP8 vs NVFP4, and the llm-compressor version hell that almost stopped us."
+date: "2026-04-07"
+updatedAt: "2026-04-07"
+tags: ["Gemma 4", "E4B", "NVFP4", "FP8", "vLLM", "DGX Spark", "GB10", "quantization", "llm-compressor", "PLE", "HuggingFace"]
+series: "DGX Spark"
+part: 10
+faq:
+  - q: "How fast is Gemma 4 E4B NVFP4 on DGX Spark?"
+    a: "49.9 tok/s with NVFP4A16 quantization via vLLM. That is 2.6x faster than the BF16 baseline of 19.2 tok/s. FP8 online quantization sits in between at 36.0 tok/s."
+  - q: "What is PLE architecture in Gemma 4 E4B?"
+    a: "Per-Layer Embedding (PLE) gives each of the 42 decoder layers its own 262K vocabulary embedding table. These tables are large (5.4 GB in BF16) but only used for fast lookups, not matrix multiplication. The effective compute per token is only 4B parameters, despite 8B total."
+  - q: "Can I quantize Gemma 4 E4B with llm-compressor?"
+    a: "Yes, but as of April 2026 you must install llm-compressor from git main (not PyPI). The PyPI release pins transformers<=4.57.6, but Gemma 4 requires transformers>=5.5. PR #2561 added the official E4B NVFP4A16 recipe."
+  - q: "Is there a pre-quantized Gemma 4 E4B NVFP4 checkpoint?"
+    a: "Yes. coolthor/Gemma-4-E4B-it-NVFP4A16 on HuggingFace is the first NVFP4 checkpoint for E4B. Use it with vLLM: --quantization compressed-tensors."
+---
+
+<VideoEmbed src="/videos/gemma4-e4b-nvfp4-quantization.mp4" />
+
+<TLDRCard>
+Gemma 4 E4B NVFP4A16 runs at **49.9 tok/s** on DGX Spark — 2.6x faster than BF16, using only 9.8 GB of GPU memory. First NVFP4 checkpoint for E4B, now on [HuggingFace](https://huggingface.co/coolthor/Gemma-4-E4B-it-NVFP4A16).
+</TLDRCard>
+
+## Preface
+
+The best quantization is the one you almost gave up on. Three failed attempts, two dependency conflicts, and one PR that merged the day before — that was the path from 19 tok/s to 50.
+
+This picks up where [Part 9: 31B Dense — 7 tok/s](/en/blog/dgx-spark-gemma4-31b-dense-7-toks) left off. After proving that dense models hit a bandwidth wall on GB10, the question shifted: what about the small models? Gemma 4 E4B has an unusual architecture — Per-Layer Embedding (PLE) — that doesn't fit the dense vs MoE binary. Worth testing.
+
+---
+
+## What E4B Actually Is: PLE, Not Dense, Not MoE
+
+Most discussions call E4B an "8B model" and stop there. That misses what makes it interesting.
+
+E4B uses **Per-Layer Embedding (PLE)**: each of the 42 decoder layers gets its own embedding table mapping the full 262K vocabulary to a 256-dimensional vector. These tables are large — 262,144 × 256 × 2 bytes × 42 layers = **5.4 GB in BF16** — but they're only used for table lookups, not matrix multiplication.
+
+The actual compute path per token reads roughly 4B parameters through Linear layers. The rest is lookup.
+
+```
+Total model: 15 GB (BF16)
+├── PLE embeddings:  5.4 GB  (lookup only)
+├── Decoder weights: 4.0 GB  (real compute)
+├── Word embedding:  1.3 GB  (262K × 2560)
+├── Vision encoder:  0.5 GB
+├── Audio encoder:   0.3 GB
+└── Other:           3.5 GB
+```
+
+This matters for quantization: compressing the PLE tables saves disk space but doesn't speed up inference much, because they were never the compute bottleneck. The Linear layers are.
+
+---
+
+## BF16 Baseline: 19.2 tok/s
+
+First, the unquantized baseline. E4B BF16 on vLLM:
+
+```bash
+docker run -d --name gemma4-e4b \
+  --gpus all --ipc host --shm-size 32gb \
+  -p 8003:8000 \
+  -v ~/models/gemma4-e4b-bf16:/models/gemma4-e4b \
+  vllm/vllm-openai:gemma4-cu130 \
+  --model /models/gemma4-e4b \
+  --served-model-name gemma-4-e4b \
+  --kv-cache-dtype fp8 \
+  --max-model-len 16384 \
+  --gpu-memory-utilization 0.75
+```
+
+Three runs, 500 tokens each:
+
+| Run | tok/s |
+|-----|-------|
+| 1 | 19.2 |
+| 2 | 19.2 |
+| 3 | 19.1 |
+
+Dead stable, dead slow. The napkin math predicted this: even counting only the ~10 GB actually read per token (PLE lookups + decoder weights), 10 GB ÷ 273 GB/s ≈ 37 ms/token ≈ 27 tok/s theoretical. The gap between 27 and 19 is PLE lookup patterns being less efficient than sequential weight reads.
+
+---
+
+## FP8 Online: 36 tok/s for Free
+
+Before building anything, test the zero-effort path. vLLM supports online FP8 quantization — add one flag and the BF16 checkpoint gets quantized at load time:
+
+```bash
+docker run -d --name gemma4-e4b-fp8 \
+  --gpus all --ipc host --shm-size 32gb \
+  -p 8003:8000 \
+  -v ~/models/gemma4-e4b-bf16:/models/gemma4-e4b \
+  vllm/vllm-openai:gemma4-cu130 \
+  --model /models/gemma4-e4b \
+  --served-model-name gemma-4-e4b \
+  --quantization fp8 \
+  --kv-cache-dtype fp8 \
+  --max-model-len 16384 \
+  --gpu-memory-utilization 0.75
+```
+
+The only change: `--quantization fp8`. No pre-quantized checkpoint, no calibration data, no extra downloads.
+
+| Run | tok/s |
+|-----|-------|
+| 1 | 36.0 |
+| 2 | 35.9 |
+| 3 | 35.9 |
+
+Model loading: 11.4 GB (down from 15 GB). Nearly double the speed for zero effort. This is the 80/20 solution.
+
+But could we go further?
+
+---
+
+## The NVFP4 Attempt: Version Hell
+
+NVFP4A16 (4-bit weights, 16-bit activations) should compress the Linear layers by another 2x on top of FP8. The tool for the job: [llm-compressor](https://github.com/vllm-project/llm-compressor), vLLM's official quantization library.
+
+### Attempt 1: PyPI Install
+
+```bash
+pip install llmcompressor
+```
+
+```
+from transformers.modeling_utils import TORCH_INIT_FUNCTIONS
+ImportError: cannot import name 'TORCH_INIT_FUNCTIONS'
+```
+
+Gemma 4 requires `transformers>=5.5` (for the `gemma4` model type). llm-compressor 0.10.0.1 on PyPI pins `transformers<=4.57.6`. These two are incompatible. Force-upgrading transformers breaks llm-compressor's internal imports.
+
+### Attempt 2: `--no-deps` Workaround
+
+```bash
+pip install llmcompressor
+pip install --no-deps 'transformers>=5.5'
+```
+
+```
+from transformers.modeling_utils import TORCH_INIT_FUNCTIONS
+ImportError: cannot import name 'TORCH_INIT_FUNCTIONS'
+```
+
+Same error. The `TORCH_INIT_FUNCTIONS` symbol was removed in transformers 5.x. The PyPI release of llm-compressor references it directly.
+
+### Attempt 3: Git Main
+
+[PR #2561](https://github.com/vllm-project/llm-compressor/pull/2561) — merged on April 6, one day before this test — added an official Gemma 4 E4B NVFP4A16 example and fixed the transformers 5.x compatibility.
+
+```bash
+pip install 'git+https://github.com/vllm-project/llm-compressor.git@main'
+pip install --force-reinstall --no-deps 'transformers>=5.5' 'huggingface_hub>=0.30'
+pip install torchvision --index-url https://download.pytorch.org/whl/cu130
+```
+
+The install order matters. Let llm-compressor pull all its dependencies first, then surgically replace transformers and huggingface_hub. Also: Gemma 4's multimodal processor requires torchvision — not obvious until it throws `Gemma4VideoProcessor requires the Torchvision library`.
+
+This worked.
+
+---
+
+## NVFP4A16 Quantization: 2 Minutes
+
+With the toolchain finally functional, the quantization itself was anticlimactic:
+
+```python
+from transformers import AutoModelForImageTextToText, AutoProcessor
+from llmcompressor import oneshot
+from llmcompressor.modifiers.quantization import QuantizationModifier
+
+model = AutoModelForImageTextToText.from_pretrained(
+    "/home/coolthor/models/gemma4-e4b-bf16", dtype="auto"
+)
+processor = AutoProcessor.from_pretrained(
+    "/home/coolthor/models/gemma4-e4b-bf16"
+)
+
+recipe = QuantizationModifier(
+    targets="Linear",
+    scheme="NVFP4A16",
+    ignore=[
+        "lm_head",
+        "re:.*vision_tower.*",
+        "re:.*audio_tower.*",
+        "re:.*embed_vision.*",
+        "re:.*embed_audio.*",
+    ],
+)
+
+oneshot(model=model, recipe=recipe)
+model.save_pretrained("gemma4-e4b-nvfp4", save_compressed=True)
+processor.save_pretrained("gemma4-e4b-nvfp4")
+```
+
+379 Linear layers quantized. Sanity check generation: `"Hello! It's nice to meet you. What is your name?"` — coherent, normal.
+
+NVFP4A16 is weight-only and data-free. No calibration dataset needed. The `ignore` list skips vision/audio encoders and embeddings — these are either too small to matter or (in the case of PLE) are lookup tables that shouldn't be quantized.
+
+---
+
+## Results: 49.9 tok/s
+
+```bash
+docker run -d --name gemma4-e4b-nvfp4 \
+  --gpus all --ipc host --shm-size 32gb \
+  -p 8003:8000 \
+  -v ~/models/gemma4-e4b-nvfp4:/models/gemma4-e4b \
+  vllm/vllm-openai:gemma4-cu130 \
+  --model /models/gemma4-e4b \
+  --served-model-name gemma-4-e4b \
+  --quantization compressed-tensors \
+  --kv-cache-dtype fp8 \
+  --max-model-len 16384 \
+  --gpu-memory-utilization 0.75
+```
+
+Model loading: **9.8 GB** (down from 15 GB BF16, 11.4 GB FP8).
+
+| Run | Tokens | Time | tok/s |
+|-----|--------|------|-------|
+| 1 | 500 | 10.01s | 49.9 |
+| 2 | 500 | 10.01s | 49.9 |
+| 3 | 500 | 10.03s | 49.8 |
+
+### The Full Picture
+
+| Format | GPU Memory | tok/s | Relative |
+|--------|-----------|-------|----------|
+| BF16 | 15.0 GB | 19.2 | 1.0x |
+| FP8 online | 11.4 GB | 36.0 | 1.9x |
+| **NVFP4A16** | **9.8 GB** | **49.9** | **2.6x** |
+
+### Quality Validation
+
+| Test | Result |
+|------|--------|
+| Long output (1000 tokens) | 49.8 tok/s, no degradation |
+| Concurrent (3 parallel) | 52.7 tok/s per request, 158 tok/s aggregate |
+| Chinese (Traditional) | Fluent BPS strategy explanation |
+| Math/Reasoning | Put spread max profit/loss correct |
+| Code Generation | Black-Scholes implementation complete |
+| Structured Output (JSON) | Valid format |
+| Repetition (count 1-50) | No duplicates, no degradation |
+
+---
+
+## Why This Matters: The Executor Architecture
+
+The motivation behind testing E4B wasn't just benchmarking. It was testing a hypothesis about agent architecture:
+
+```
+E4B NVFP4 (50 tok/s, local, free)
+  → handles 95% of routine agent tasks
+  → reads files, runs commands, parses output
+
+26B-A4B NVFP4 (52 tok/s, local, free)
+  → fallback for complex reasoning
+  → only called when E4B escalates
+```
+
+Both models fit on a single DGX Spark simultaneously. E4B at 9.8 GB + 26B at 16.5 GB = 26.3 GB, leaving ~100 GB for KV cache. The bandwidth competition when both run concurrently drops speeds to ~31 tok/s for 26B and ~18 tok/s for E4B — but in a sequential executor pattern where only one runs at a time, each gets full bandwidth.
+
+If 95% of agent operations are routine (file reads, command execution, output parsing), running them on a 50 tok/s local model instead of a cloud API call saves both latency and cost. The 5% that need deep reasoning escalate to the 26B — also local, also free.
+
+The missing piece: whether E4B's tool calling accuracy is high enough to be a reliable executor. That's the next experiment.
+
+---
+
+## What Was Gained
+
+### What cost the most time
+
+The llm-compressor version hell. Three attempts, three different failure modes (`TORCH_INIT_FUNCTIONS` import, `huggingface_hub` incompatibility, missing `torchvision`). The actual quantization took 2 minutes. The dependency resolution took an hour. The fix — install from git main, force-replace transformers — only works because PR #2561 merged one day earlier.
+
+### Transferable diagnostics
+
+- **FP8 online is the 80/20 solution.** Adding `--quantization fp8` to vLLM doubles the speed of any BF16 model with zero extra work. Always try this first.
+- **PLE architecture quantizes differently.** The 5.4 GB of embedding tables don't benefit from weight quantization the same way Linear layers do. Model size drops less than expected (15→11.5 GB for FP8, not the 7.5 GB you'd predict for a traditional 8B model).
+- **When PyPI lags behind git main**, install the package with full dependencies first, then surgically replace the conflicting packages with `--force-reinstall --no-deps`. Don't use `--no-deps` for the main package — you'll miss transitive dependencies.
+
+### The pattern that applies everywhere
+
+The highest-leverage optimization is often the one you can apply without changing your checkpoint. `--quantization fp8` is to model serving what `--release` is to compiled languages — a flag you should always set, with rare exceptions.
+
+---
+
+## Get the Model
+
+The checkpoint is on HuggingFace: [coolthor/Gemma-4-E4B-it-NVFP4A16](https://huggingface.co/coolthor/Gemma-4-E4B-it-NVFP4A16)
+
+```bash
+vllm serve coolthor/Gemma-4-E4B-it-NVFP4A16 \
+  --quantization compressed-tensors \
+  --kv-cache-dtype fp8 \
+  --max-model-len 16384
+```
+
+Or if you want FP8 instead (no download needed):
+
+```bash
+vllm serve google/gemma-4-E4B-it \
+  --quantization fp8 \
+  --kv-cache-dtype fp8 \
+  --max-model-len 16384
+```
+
+---
+
+Also in this series: [Part 7: Gemma 4 26B-A4B at 52 tok/s](/en/blog/dgx-spark-gemma4-26b-nvfp4-52-toks) · [Part 8: vLLM vs Ollama](/en/blog/dgx-spark-vllm-vs-ollama-same-model) · [Part 9: 31B Dense — 7 tok/s](/en/blog/dgx-spark-gemma4-31b-dense-7-toks)
