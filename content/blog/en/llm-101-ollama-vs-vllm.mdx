@@ -1,0 +1,200 @@
+---
+title: "[LLM 101] Ollama vs vLLM: Two Ways to Run AI on Your Own Computer"
+description: "Ollama is a microwave — one command and you're chatting with AI. vLLM is a professional oven — 30% faster, handles multiple users, but takes real setup. A zero-jargon guide to choosing between them."
+date: "2026-04-07"
+updatedAt: "2026-04-07"
+tags: ["Ollama", "vLLM", "LLM", "local AI", "beginner", "explainer"]
+series: "LLM 101"
+part: 1
+faq:
+  - q: "What is the difference between Ollama and vLLM?"
+    a: "Ollama is like a microwave — one command to run AI models, great for personal use. vLLM is like a professional oven — more complex to set up, but 30% faster and can serve multiple users simultaneously."
+  - q: "Should beginners use Ollama or vLLM?"
+    a: "Beginners should start with Ollama. It takes three minutes to install and start chatting with AI. Once you need better performance or multi-user support, consider adding vLLM."
+  - q: "Why run AI on your own computer instead of using ChatGPT?"
+    a: "Three reasons: privacy (your conversations never leave your machine), cost (no monthly subscription), and freedom (use any model you want, with no restrictions)."
+  - q: "Can I run Ollama and vLLM on the same computer?"
+    a: "Yes, but don't run both at the same time. They compete for GPU memory and bandwidth, making both slower. Use one at a time."
+---
+
+<VideoEmbed src="/videos/llm-101-ollama-vs-vllm.mp4" />
+
+<TLDRCard>
+Ollama is a **microwave** — one command, three minutes, you're chatting with AI. vLLM is a **professional oven** — harder to set up, but 30% faster and handles multiple users at once. Start with Ollama. Add vLLM when you need more.
+</TLDRCard>
+
+## Plain-Language Version: What Does "Running AI on Your Own Computer" Mean?
+
+Every time you use ChatGPT, Claude, or Gemini, you're talking to a massive AI model running on a supercomputer in the cloud. Your words travel through the internet, get processed somewhere far away, and come back. That means two things: you pay for it (or watch ads), and your conversations pass through someone else's servers.
+
+But some AI models are now small enough to fit on a regular laptop. No internet required, no monthly fee, your conversations never leave your machine. It's like having a coffee machine at home instead of going to Starbucks every morning.
+
+The question is: which tool do you use to run these models? The two most popular options are Ollama and vLLM. They do roughly the same thing (run AI models on your computer), but they're designed for completely different people — like the difference between Word and LaTeX.
+
+This article explains the difference in plain language, with zero assumed technical knowledge.
+
+---
+
+## Preface
+
+Your kitchen probably has both a microwave and an oven. Both heat food, but you wouldn't use a microwave to bake sourdough, and you wouldn't preheat an oven to warm up milk.
+
+Ollama and vLLM work the same way. One prioritizes convenience. The other prioritizes performance. Pick wrong and nothing explodes — you'll just waste time.
+
+---
+
+## First Things First: Why Run AI on Your Own Computer?
+
+Using ChatGPT is like eating at a restaurant — someone cooks for you, serves you, the menu is fixed, and you pay the bill. Convenient, but you can't change the recipe, and the restaurant knows what you ordered.
+
+Running AI on your own computer is like cooking at home — you pick the ingredients, adjust the portions, and nobody knows what you made tonight. The trade-off: you wash your own dishes.
+
+Three reasons more people are choosing to cook at home:
+
+**Privacy.** Every word you say to the AI stays on your computer. No company sees your conversations. No data gets used to train someone else's model.
+
+**Free.** The models themselves are open-source (like Wikipedia — free to download, free to use). As long as your computer can handle it, there's no subscription fee.
+
+**Freedom.** You pick which model to use and how to configure it. Google's model? Sure. Meta's? Fine. A Chinese one? Go ahead. No company controls what you can and can't do.
+
+---
+
+## Ollama — The Microwave
+
+Ollama's philosophy in four words: **just make it work.**
+
+Installing it is like installing a phone app. On Mac, download it, drag to Applications, done. Open the terminal (that black window with white text), type one line:
+
+```bash
+ollama run gemma4:e2b
+```
+
+Wait for the model to download (a few minutes depending on your internet), and you're chatting with AI. The whole process takes under three minutes.
+
+### What's it like?
+
+Like an App Store for AI models. You want Google's Gemma? Type the name, download. Meta's Llama? Same thing. Alibaba's Qwen? Also there. All free.
+
+### What's it good at?
+
+- **Personal chat.** You ask questions, it answers. Like a private ChatGPT
+- **Writing assistant.** Ask it to edit your text, translate, organize notes
+- **Quick experiments.** Want to try the latest model? One command to download. Don't like it? Delete it
+
+### Its limitations
+
+- **One person at a time.** Like a microwave — one meal at a time. If five coworkers want to use it simultaneously, they wait in line
+- **Speed ceiling.** It uses general-purpose technology without deep hardware optimization. Good enough, but not the fastest
+
+---
+
+## vLLM — The Professional Oven
+
+vLLM's philosophy: **fast and scalable.**
+
+Installing it is substantially harder. You need Docker first (a tool that packages software into containers — imagine stuffing an entire kitchen into a shipping container so you can move it anywhere). Then you type a long configuration command specifying which model to use, how to allocate memory, which port to open.
+
+It sounds complicated. It is complicated.
+
+### What's it like?
+
+Like setting up a small restaurant kitchen. You're not just cooking — you're building a system that takes orders, manages multiple tables, and serves dishes in parallel.
+
+### What's it good at?
+
+- **Serving multiple people at once.** Three people asking questions simultaneously? No problem, all processed in parallel. Measured total speed: nearly 3x what Ollama can do
+- **Taking orders from code.** It has a standardized interface (think of a unified ordering window) that your programs can call directly — auto-reply to emails, auto-analyze data, auto-generate reports
+- **Maximum speed.** Same model, vLLM runs about 30% faster than Ollama. It optimizes specifically for your hardware, squeezing out every drop of performance
+
+### Its limitations
+
+- **High barrier to entry.** You need to understand Docker, read logs, debug errors. Not plug-and-play
+- **Tedious configuration.** Model paths, memory allocation, quantization formats — each setting is manual. One wrong parameter and it either won't start or runs at the wrong speed
+- **Stricter GPU requirements.** Both tools need a graphics card, but vLLM is pickier about which ones it supports
+
+---
+
+## Numbers: Same Model, How Much Faster?
+
+Same AI model (Google Gemma 4), same computer, two different tools.
+
+| | Ollama | vLLM | Difference |
+|---|---|---|---|
+| **Response speed** (one person) | 40 words/sec | 52 words/sec | vLLM 30% faster |
+| **Three people at once** | Queued — still 40 | All parallel — 115 total | vLLM 3x faster |
+| **Install time** | 3 minutes | 30+ minutes | Ollama wins |
+| **When something breaks** | Usually reinstall | Read logs, debug | Ollama much friendlier |
+
+What does "40 words per second" feel like? About twice your reading speed. In practice, Ollama is plenty fast — you ask a question and the AI starts answering almost instantly, with a full reply in a few seconds.
+
+vLLM's 30% speed advantage barely matters when it's just you. But if you're automating AI to process hundreds of tasks (analyzing emails, generating reports), that 30% compounds into significant time savings.
+
+---
+
+## So Which One Should I Pick?
+
+Don't overthink it:
+
+**"I just want to try running AI on my own computer"**
+→ Use Ollama. Three minutes to set up, delete anytime. Zero risk.
+
+**"I want AI to automate tasks for me"**
+→ Use vLLM. It can take commands from your code — the foundation for automation. But budget half a day for setup.
+
+**"I want both"**
+→ Start with Ollama, get comfortable. When you know exactly what performance you need, add vLLM. They can coexist on the same machine — just don't run both at once, like you wouldn't run a microwave and oven on the same overloaded circuit.
+
+**"I don't want to touch the terminal at all"**
+→ Keep using ChatGPT. There's nothing wrong with that. Different tools for different people.
+
+---
+
+## Three Minutes to Get Started with Ollama
+
+If you've decided to try it, here's the fastest path:
+
+**Step 1: Install.** Go to [ollama.com](https://ollama.com) and download it. Install like any normal app.
+
+**Step 2: Open Terminal.** Mac users: press `Cmd + Space`, search "Terminal", open it.
+
+**Step 3: Run your first model.** Type this line, press Enter:
+
+```bash
+ollama run gemma4:e2b
+```
+
+Wait for the download (7.2 GB the first time, never again after that), and you'll see a text input. Ask it anything.
+
+That's it. You now have a private AI running on your own computer.
+
+To quit: press `Ctrl + D` or type `/bye`.
+
+---
+
+## What Was Gained
+
+### What cost the most time
+
+Translating technical jargon into human language. "CUDA graphs," "Marlin kernels," "PagedAttention" — these are concrete technologies to engineers, but pure noise to everyone else. The hardest part was finding the right analogies: simple enough to be accurate, precise enough not to mislead.
+
+### A thinking framework you can take with you
+
+The "microwave vs oven" comparison framework applies to many tool choices:
+
+- VS Code vs Vim → microwave vs oven
+- WordPress vs custom website → microwave vs oven
+- Notion vs Obsidian → microwave vs oven
+
+Whenever you face "two tools that do roughly the same thing," ask yourself: do I need convenience, or do I need control?
+
+### The pattern that applies everywhere
+
+Convenience and performance are always a trade-off. No tool is both the simplest and the fastest. But most of the time, "fast enough and easy" beats "fastest but painful."
+
+---
+
+## What's Next
+
+- Want the technical deep-dive? → [vLLM vs Ollama: Why 30% Faster on the Same Model](/en/blog/dgx-spark-vllm-vs-ollama-same-model)
+- Want hardware benchmarks? → [Gemma 4 E2B vs E4B on Three Machines](/en/blog/dgx-spark-gemma4-e2b-vs-e4b-ollama-3-machines)
+- LLM 101 next: How to Pick a Model — with so many options, which one should you actually download? (Coming soon)
