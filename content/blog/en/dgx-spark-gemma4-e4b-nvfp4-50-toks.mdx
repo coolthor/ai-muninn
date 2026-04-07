@@ -23,15 +23,15 @@ faq:
 Gemma 4 E4B NVFP4A16 runs at **49.9 tok/s** on DGX Spark — 2.6x faster than BF16, using only 9.8 GB of GPU memory. First NVFP4 checkpoint for E4B, now on [HuggingFace](https://huggingface.co/coolthor/Gemma-4-E4B-it-NVFP4A16).
 </TLDRCard>
 
-## Plain Language Guide
+## Plain-Language Version: Gemma 4 E4B Quantization
 
-If you're not deep in LLM infrastructure, here's what this article is about:
+Gemma 4 is a family of open-source AI models released by Google in April 2026. The E4B variant is the small one — designed to run on phones and desktops instead of data center GPUs. It can read text, images, and audio, and it supports 128K tokens of context (roughly a 300-page book).
 
-AI models run faster when they're compressed — like zipping a file, except the "file" is a neural network. The trick is compressing without breaking the model's ability to think.
+Quantization is a compression technique for AI models. Think of it like converting a high-resolution photo to a smaller file: you lose some detail, but the image is still recognizable and loads much faster. NVFP4 is NVIDIA's 4-bit quantization format — it shrinks each number in the model from 16 bits down to 4, cutting memory usage and letting the GPU process tokens faster.
 
-We took Google's Gemma 4 E4B model (a small, multimodal AI that can read text, images, and audio) and compressed it from 15 GB to 9.8 GB. The result: it went from generating 19 words per second to 50 — fast enough to hold a real-time conversation. Nobody had published this specific compression before, so we uploaded it for anyone to use.
+Why does this matter? Running AI locally means no cloud API costs, no data leaving your machine, and no rate limits. But local models are only useful if they're fast enough. At 19 tokens per second, E4B was too slow for real-time conversation. At 50 tokens per second, it's a viable local agent.
 
-The interesting part wasn't the compression itself (that took 2 minutes). It was the hour spent fighting broken software dependencies to make the compression tool work with a model architecture it wasn't designed for.
+I quantized Gemma 4 E4B to NVFP4 on an NVIDIA DGX Spark and uploaded the result to HuggingFace — the first public NVFP4 checkpoint for this model. This article covers the full journey: three failed attempts, the dependency conflicts, and the benchmark results.
 
 ---
 

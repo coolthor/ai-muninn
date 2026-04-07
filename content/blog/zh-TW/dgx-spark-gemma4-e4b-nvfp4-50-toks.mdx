@@ -23,15 +23,15 @@ faq:
 Gemma 4 E4B NVFP4A16 在 DGX Spark 上跑 **49.9 tok/s** — 比 BF16 快 2.6 倍，GPU 佔用只有 9.8 GB。HuggingFace 上第一個 E4B NVFP4 checkpoint，已上傳 [coolthor/Gemma-4-E4B-it-NVFP4A16](https://huggingface.co/coolthor/Gemma-4-E4B-it-NVFP4A16)。
 </TLDRCard>
 
-## 白話導讀
+## 白話版：Gemma 4 E4B 量化
 
-如果你不是做 LLM 基礎設施的，這篇文章在講什麼：
+Gemma 4 是 Google 在 2026 年 4 月發布的開源 AI 模型家族。E4B 是裡面最小的版本 — 設計給手機和桌機跑，不需要資料中心的 GPU。它能讀文字、看圖片、聽音訊，支援 128K tokens 的上下文（大約一本 300 頁的書）。
 
-AI 模型壓縮後可以跑更快 — 類似壓縮檔案，只是被壓縮的是神經網路。關鍵是壓縮後模型還要能正常思考。
+量化（Quantization）是一種 AI 模型壓縮技術。想像把高畫質照片轉成較小的檔案：你損失一些細節，但圖片還是看得清楚，而且載入速度快很多。NVFP4 是 NVIDIA 的 4-bit 量化格式 — 把模型裡每個數字從 16 bit 壓到 4 bit，記憶體用量減少，GPU 處理 token 的速度就更快。
 
-我們把 Google 的 Gemma 4 E4B 模型（一個能讀文字、圖片、音訊的小型多模態 AI）從 15 GB 壓到 9.8 GB。結果：從每秒生成 19 個字加速到 50 個 — 快到可以即時對話。全世界還沒有人發布過這個壓縮版本，所以我們上傳了讓任何人都能用。
+為什麼這很重要？在本機跑 AI 代表不用付雲端 API 費用、資料不會離開你的電腦、也沒有速率限制。但本機模型只有跑得夠快才有用。每秒 19 個 token 的 E4B 太慢，沒辦法即時對話。每秒 50 個 token 的 E4B，就能當一個可用的本機 AI agent。
 
-有趣的是壓縮本身只花了 2 分鐘。真正花一小時的是跟壞掉的軟體依賴打架，讓壓縮工具能跑在一個它本來不認識的模型架構上。
+我在 NVIDIA DGX Spark 上把 Gemma 4 E4B 量化成 NVFP4，然後上傳到 HuggingFace — 這是全球第一個 E4B 的 NVFP4 量化版本。這篇文章記錄了完整的過程：三次失敗的嘗試、依賴衝突的地獄、以及最終的 benchmark 數據。
 
 ---
 
