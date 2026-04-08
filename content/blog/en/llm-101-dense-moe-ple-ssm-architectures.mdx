@@ -1,0 +1,236 @@
+---
+title: "[LLM 101] Dense, MoE, PLE, SSM — Four AI Model Architectures Explained Simply"
+description: "Dense is everyone working. MoE is expert rotation. PLE is a dictionary on every floor. SSM is a speed reader. A zero-jargon guide to the four main AI model architectures and how to pick between them."
+date: "2026-04-08"
+updatedAt: "2026-04-08"
+tags: ["Dense", "MoE", "PLE", "SSM", "Mamba", "LLM", "model architecture", "beginner", "explainer"]
+series: "LLM 101"
+part: 2
+faq:
+  - q: "What is the difference between Dense and MoE models?"
+    a: "Dense models use every parameter for every response — like a 100-person company where everyone works on every task. MoE models only activate a subset of experts each time — like a 260-person company that sends 10 relevant specialists per task. MoE models are larger but run faster."
+  - q: "What is PLE architecture in AI models?"
+    a: "Per-Layer Embedding gives each decoder layer its own vocabulary lookup table. Instead of one shared dictionary on the ground floor, each floor of the building has its own. Google's Gemma 4 E2B and E4B use this architecture."
+  - q: "What are the advantages of SSM models?"
+    a: "SSM (State Space Model) maintains a running summary instead of re-reading the entire conversation. As conversations get longer, SSM stays fast while traditional models slow down proportionally."
+  - q: "How can I tell a model's architecture from its name?"
+    a: "Look for number patterns: '30B-A3B' means MoE (30B total, 3B active). E2B/E4B means PLE. Names with Mamba or DeltaNet are SSM. A single number like '8B' or '70B' with no other suffix is usually Dense."
+---
+
+<VideoEmbed src="/videos/llm-101-model-architectures.mp4" />
+
+<TLDRCard>
+Four main AI model architectures: **Dense** (everyone works, stable but slow), **MoE** (expert rotation, big but fast), **PLE** (dictionary on every floor, efficient lookups), **SSM** (speed reader, no slowdown on long conversations). Knowing the architecture tells you more than the parameter count.
+</TLDRCard>
+
+## Plain-Language Version: Why Do AI Models Have Different "Body Types"?
+
+You've probably noticed AI model names getting weirder. Gemma 4 E2B, Qwen3-Coder 235B-A22B, Mamba — what do all these letters and numbers mean?
+
+They describe the model's "body type" — its architecture. Just like athletes have different builds (sprinters vs marathon runners), AI models have different designs, each suited for different tasks.
+
+This article explains the four most common AI model architectures in plain language. After reading it, the next time you see a model's spec sheet, it won't just be a wall of confusing numbers.
+
+---
+
+## Preface
+
+When buying a phone, you don't just look at "how many GB of RAM" and decide. You also want to know: what's the processor architecture? Power-efficient or performance-oriented? Can it run games?
+
+Picking an AI model works the same way. "120B parameters" sounds impressive, but if it's a Dense model, your laptop probably can't run it. Meanwhile, a "30B parameter" MoE model might be both light and fast.
+
+Architecture determines personality.
+
+---
+
+## Dense — Everyone Works
+
+Dense is the most intuitive architecture. Every single parameter in the model is used for every single response.
+
+### What's it like?
+
+Like a 100-person company where every question — no matter how simple — gets all 100 people working on it. Even if you just ask "what's the weather today," all 100 people get involved.
+
+### Strengths
+
+- **Consistent quality.** All parameters participate in every computation. Nothing gets skipped
+- **Simple architecture.** The oldest and most mature design. Every tool supports it
+- **Predictable.** Bigger model = proportionally slower. No surprises
+
+### Weaknesses
+
+- **Slow.** 100 people working means 100 people's worth of computation. No shortcuts
+- **Memory hungry.** Every parameter needs to be loaded into memory. A 31B model takes 31B worth of space
+
+### Notable models
+
+- **Llama 3 8B / 70B** — Meta's classic
+- **Gemma 4 31B** — Google's Dense model. On my DGX Spark it only managed [7 tok/s](/en/blog/dgx-spark-gemma4-31b-dense-7-toks) — too large for the hardware
+
+### How to spot it
+
+Names with just one number: `Llama-3-8B`, `Gemma-4-31B`. No `-A` suffix.
+
+---
+
+## MoE — Expert Rotation
+
+MoE (Mixture of Experts) is the most popular "cheat code" in current AI — the model is huge, but only a fraction activates each time.
+
+### What's it like?
+
+Like a company with 260 employees, but only 10 relevant specialists get dispatched per task. Finance question? Send the finance team. Legal question? Send the lawyers. The other 250 people stay on standby.
+
+The company has the knowledge of 260 people, but the workload of 10.
+
+### Strengths
+
+- **Big and fast.** Knowledge of a giant model, computation cost of a small one
+- **Lower compute burden.** Though the full model is large, each inference only activates a small fraction
+- **Great for generalist models.** Different experts can specialize in different domains
+
+### Weaknesses
+
+- **Still a large download.** All 260 people need to be loaded into memory on standby, even if only 10 are working. Storage and download requirements don't shrink
+- **Routing overhead.** Deciding "who should handle this" takes computation too
+- **Uneven expert quality.** Some domains may not have a well-trained expert, causing inconsistent quality
+
+### Notable models
+
+- **Qwen3-Coder 235B-A22B** — 235B total, only 22B active. Excellent at coding
+- **DeepSeek-V3 685B-A37B** — Massive model, 685B parameters but only uses 37B
+- **Gemma 4 26B-A4B** — Google's compact MoE. 26B total, 4B active, hit [52 tok/s](/en/blog/dgx-spark-gemma4-26b-nvfp4-52-toks) on DGX Spark
+
+### How to spot it
+
+Two numbers connected by `-A`: `235B-A22B` = 235B total, 22B active. **The number after A** tells you how fast it actually runs.
+
+---
+
+## PLE — Dictionary on Every Floor
+
+PLE (Per-Layer Embedding) is a newer architecture, currently used mainly by Google's Gemma 4 family.
+
+### What's it like?
+
+Imagine a 42-story office building. In traditional architectures, no matter which floor you're working on, you need to go down to the lobby to look up a word in the big dictionary. The lobby has one massive dictionary (262,144 words) shared by all floors.
+
+PLE's approach: **every floor gets its own dictionary.** 42 floors, 42 dictionaries. Working on the 17th floor? Use the 17th floor dictionary. No elevator trip needed.
+
+### Strengths
+
+- **Fast lookups.** No need to go downstairs — each layer resolves locally
+- **Low actual computation.** Those 42 dictionaries are just lookup tables, not math. Gemma 4 E4B is nominally 8B parameters, but the real compute path is only about 4B
+
+### Weaknesses
+
+- **Model file is bigger than it "should" be.** 42 dictionaries take space. E4B's dictionaries alone are 5.4 GB — nearly a third of the total model size
+- **Newer architecture.** Not all tools support it perfectly yet
+- **Only Gemma 4 uses it.** Small ecosystem compared to Dense and MoE
+
+### Notable models
+
+- **Gemma 4 E2B** — 2B compute parameters, 7.2 GB. Hit [81 tok/s](/en/blog/dgx-spark-gemma4-e2b-vs-e4b-ollama-3-machines) on M1 Max
+- **Gemma 4 E4B** — 4B compute parameters, 9.6 GB
+
+### How to spot it
+
+`E` prefix in the name: `E2B` = 2B compute parameters, `E4B` = 4B. The `E` means embedding-heavy — don't compare directly with Dense models' parameter counts.
+
+---
+
+## SSM / Hybrid — The Speed Reader
+
+SSM (State Space Model) is the newest and most different architecture. Traditional models use Transformers (attention mechanism). SSM uses a fundamentally different approach.
+
+### What's it like?
+
+A traditional Transformer is like someone who flips back through previous pages every time you ask about something. "What was chapter 3 about?" — they literally re-read chapter 3. The longer the conversation, the more pages to flip, the slower it gets.
+
+SSM is like a speed reader who compresses everything into running notes as they go. You ask about chapter 3? They check their notes. No flipping back. No matter how long the conversation gets, checking notes takes the same amount of time.
+
+### Strengths
+
+- **No slowdown on long conversations.** This is SSM's biggest selling point. Traditional models get slower as conversations grow; SSM barely changes
+- **Stable memory usage.** Regardless of conversation length, the SSM "notebook" stays a fixed size
+
+### Weaknesses
+
+- **No advantage on short conversations.** When the conversation is brief, "flipping back" and "checking notes" are roughly the same speed
+- **Might miss details.** Compressing an entire book into notes inevitably loses some specifics. For tasks requiring exact recall, SSM may underperform Transformers
+- **Very new technology.** Tool support and ecosystem are still developing
+
+### The reality: Hybrid architectures
+
+Pure SSM can miss details in some scenarios, so the more common approach today is "hybrid" — part SSM for speed reading, part Transformer for close reading. Like someone who usually checks their notes, but goes back to the original text for key passages.
+
+### Notable models
+
+- **Qwen3.5-35B-A3B** — SSM + MoE hybrid. On DGX Spark: 56 tok/s on short prompts, still 56 tok/s at 8K tokens — virtually no degradation
+- **Qwen3-Coder-Next 79.7B** — SSM + MoE hybrid, 512 experts with only 10 active
+- **Mamba series** — The original pure SSM models, pioneers in academia
+
+### How to spot it
+
+Names containing Mamba, DeltaNet, or SSM. Hybrid architectures may not be explicitly labeled — check the model card's architecture description. Quick test: if the spec sheet says "similar speed on short and long context," there's probably SSM inside.
+
+---
+
+## All Four in One Table
+
+| | Dense | MoE | PLE | SSM / Hybrid |
+|---|---|---|---|---|
+| **Analogy** | Everyone works | Expert rotation | Dictionary per floor | Speed reader |
+| **Speed** | Slow (more params = slower) | Fast (only uses a subset) | Medium (fast lookups, big file) | Fast (especially on long chats) |
+| **Model size** | Big = slow | Big but runs light | Bigger than it looks | Medium |
+| **Long conversations** | Gets slower | Gets slower | Gets slower | Almost no slowdown |
+| **Maturity** | ★★★★★ | ★★★★☆ | ★★☆☆☆ | ★★★☆☆ |
+| **Example** | Llama 3 | DeepSeek-V3 | Gemma 4 E2B | Qwen3.5 |
+
+---
+
+## In Practice: Reading Model Names
+
+Next time you see a model on Ollama or HuggingFace, try this decision tree:
+
+**Does the name have `-A` + a number?** (e.g., `235B-A22B`)
+→ **MoE.** Look at the number after A to gauge real speed.
+
+**Does the name have an `E` prefix + `B`?** (e.g., `E2B`, `E4B`)
+→ **PLE.** Currently only the Gemma 4 family.
+
+**Does the name include Mamba, DeltaNet, or SSM?**
+→ **SSM / Hybrid.** Great for long conversation scenarios.
+
+**None of the above? Just one number + B?** (e.g., `8B`, `70B`)
+→ **Dense.** The most traditional, most stable, but also most resource-hungry.
+
+---
+
+## What Was Gained
+
+### What cost the most time
+
+Deciding whether to explain Transformer attention mechanisms. Ultimately decided against it — for the purpose of "choosing a model," knowing that "traditional models get slower with longer conversations" is enough without explaining why.
+
+### A thinking framework you can take with you
+
+When reading spec sheets, don't just look at "how many B parameters." Look at three things:
+
+1. **Architecture** — Dense / MoE / PLE / SSM?
+2. **Active parameters** (the number after A in MoE) — this is the actual compute burden
+3. **Your use case** — Short chats? Long conversations? Multiple simultaneous users?
+
+### The pattern that applies everywhere
+
+There's no best architecture, only the best architecture for your scenario. Nobody says "sprinters are better than marathon runners" — it depends on what race you're running.
+
+---
+
+## What's Next
+
+- Previous: [Ollama vs vLLM — Two Ways to Run AI on Your Own Computer](/en/blog/llm-101-ollama-vs-vllm)
+- See how slow Dense gets → [Gemma 4 31B Dense at 7 tok/s on DGX Spark](/en/blog/dgx-spark-gemma4-31b-dense-7-toks)
+- See how fast MoE runs → [Gemma 4 26B-A4B NVFP4 at 52 tok/s](/en/blog/dgx-spark-gemma4-26b-nvfp4-52-toks)
+- See PLE E2B vs E4B → [Benchmarked on Three Machines](/en/blog/dgx-spark-gemma4-e2b-vs-e4b-ollama-3-machines)
+- LLM 101 next: How to Pick a Model — with so many options, which one should you actually download? (Coming soon)
