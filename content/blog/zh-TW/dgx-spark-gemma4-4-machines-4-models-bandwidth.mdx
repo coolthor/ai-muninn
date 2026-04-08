@@ -1,0 +1,225 @@
+---
+title: "[Benchmark] 4 台機器、4 個模型、1 個答案：記憶體決定一切"
+description: "Gemma 4 E2B 到 31B 在 RTX 5090、M1 Max、DGX Spark、M4 上用 Ollama 完整測試。E2B 在 5090 上 310 tok/s。31B 在 MBP 上 1.5 tok/s — swap 殺死一切。記憶體容量 > 頻寬速度。"
+date: "2026-04-08"
+updatedAt: "2026-04-08"
+tags: ["Gemma 4", "RTX 5090", "DGX Spark", "GB10", "M1 Max", "M4", "Ollama", "benchmark", "memory bandwidth", "swap", "E2B", "E4B", "26B", "31B"]
+series: "DGX Spark"
+part: 12
+faq:
+  - q: "Gemma 4 在 RTX 5090 上跑多快？"
+    a: "E2B: 310 tok/s, E4B: 202 tok/s, 26B MoE: 186 tok/s, 31B Dense: 62 tok/s。全部用 Ollama 預設量化，32GB GDDR7, 1792 GB/s 頻寬。"
+  - q: "MacBook Pro M1 Max 能跑 Gemma 4 31B 嗎？"
+    a: "技術上可以，實際上不行。19 GB 的模型加上 KV cache 超過 32 GB RAM，被迫 14% CPU / 86% GPU split + swap。結果：1.5 tok/s，筆電嚴重發燙。26B MoE (17 GB) 倒是跑得很好，47 tok/s。"
+  - q: "為什麼 DGX Spark 跑 Gemma 4 26B 比 MacBook Pro 慢？"
+    a: "DGX Spark (GB10) 的記憶體頻寬是 273 GB/s，M1 Max 是 400 GB/s。雖然 GB10 有 128 GB 記憶體（多 4 倍），但頻寬低讓它跑 26B 只有 37 tok/s vs MBP 的 47 tok/s。頻寬決定 decode 速度，不是容量。"
+  - q: "本機跑 Gemma 4 最好的硬體是什麼？"
+    a: "RTX 5090 配 32 GB GDDR7 (1792 GB/s) 是測試中最快的 — E2B 310 tok/s，31B dense 也有 62 tok/s。Apple Silicon 的話，M1 Max 32 GB 適合跑到 26B。"
+---
+
+<VideoEmbed src="/videos/gemma4-4-machines-4-models.mp4" />
+
+<TLDRCard>
+Gemma 4 在 RTX 5090、M1 Max、DGX Spark、M4 四台機器上測試。**E2B 在 5090 上 310 tok/s。** MBP 跑 31B 只有 1.5 tok/s 因為 swap 殺死一切。規則：模型裝不下記憶體，頻寬再高也沒用。
+</TLDRCard>
+
+## 白話版：為什麼你的硬體比 AI 模型更重要
+
+在自己的電腦上跑 AI 模型，速度幾乎完全取決於一件事：硬體能多快把資料餵給處理器。這叫記憶體頻寬 — 單位是 GB/s（每秒幾 GB）。
+
+但有個陷阱。如果模型太大塞不進記憶體，就會溢出到 SSD（這叫 swap）。SSD 比 RAM 慢大約 100 倍。一旦發生 swap，記憶體頻寬再高都沒用 — 模型直接龜速。
+
+我用 Google 的 Gemma 4 — 從最小的 E2B 到最大的 31B — 在四台不同的機器上測試。從 $600 的 Mac mini 到裝了 RTX 5090 的桌機。同樣的軟體（Ollama）、同樣的 prompt、同樣的方法。
+
+結果：MacBook Pro 頻寬是 DGX Spark 的 1.5 倍，但跑 31B 反而慢了 5 倍 — 因為記憶體不夠開始 swap。
+
+---
+
+## 前言
+
+最快的硬體不一定是最快的硬體。MacBook Pro M1 Max 有 400 GB/s 的記憶體頻寬 — 比 DGX Spark 的 273 GB/s 多 47%。對放得下的模型，MBP 贏。對放不下的，MBP 慘敗。
+
+這是 [Part 11：E2B vs E4B 三台機器](/zh-TW/blog/dgx-spark-gemma4-e2b-vs-e4b-ollama-3-machines) 的延續。那篇測了 2 個模型 × 3 台機器。這次加了第四台（RTX 5090）和兩個大模型（26B MoE、31B Dense），回答一個更大的問題：模型多大才算「太大」？
+
+---
+
+## 硬體：4 台機器、4 種記憶體配置
+
+| 機器 | 處理器 | 記憶體 | 頻寬 | Ollama | 備註 |
+|---|---|---|---|---|---|
+| **ai-pc** | AMD Ryzen 9 9950X + RTX 5090 | 32 GB GDDR7 | 1792 GB/s | 0.20.3 | Win11 WSL2, Ubuntu 24.04, PCIe Gen5 x16 |
+| **MBP** | Apple M1 Max | 32 GB unified | 400 GB/s | 0.20.3 | macOS，跟 5090 同容量但頻寬差 4.5 倍 |
+| **GX10** | NVIDIA GB10 | 128 GB unified | 273 GB/s | 0.20.0 | DGX Spark，記憶體多 4 倍但頻寬最低 |
+| **openclaw** | Apple M4 | 16 GB unified | 120 GB/s | 0.20.0 | Mac mini，最小記憶體和頻寬 |
+
+RTX 5090 是新成員 — 32 GB GDDR7 跑 1792 GB/s。頻寬是 GB10 的 6.5 倍、MBP 的 4.5 倍。但容量跟 MBP 一樣（32 GB），只有 GB10 的四分之一。
+
+## 模型：從小到大
+
+| 模型 | 架構 | Ollama Tag | 大小 | 每 Token Active 參數 |
+|---|---|---|---|---|
+| **E2B** | PLE | `gemma4:e2b` | 7.2 GB | ~2B |
+| **E4B** | PLE | `gemma4:e4b` | 9.6 GB | ~4B |
+| **26B MoE** | Mixture of Experts | `gemma4:26b` | 17 GB | 3.8B |
+| **31B Dense** | Dense | `gemma4:31b` | 19 GB | 31B |
+
+全部用 Ollama 預設量化（大部分層是 Q4_K_M）。7.2 GB 到 19 GB 的跨度是刻意的 — 跨過了小機器的記憶體邊界。
+
+---
+
+## 方法
+
+跟 [Part 11](/zh-TW/blog/dgx-spark-gemma4-e2b-vs-e4b-ollama-3-machines) 一樣：
+
+1. Unload 所有模型，等 GPU 記憶體完全釋放
+2. 載入目標模型，確認 100% GPU（不是 CPU/GPU split）
+3. 跑 warmup inference
+4. 3 輪 unique short prompts（~26 tokens，最多生成 256 tokens）
+5. 3 輪 unique long prompts（~104 tokens，最多生成 512 tokens）
+6. Unload，換下一個模型
+
+每個模型單獨測試 — 不會有兩個模型同時搶頻寬。
+
+---
+
+## 結果
+
+### 生成速度 (tok/s) — 完整矩陣
+
+| 模型 | RTX 5090 (1792 GB/s) | MBP M1 Max (400 GB/s) | GX10 GB10 (273 GB/s) | Mac mini M4 (120 GB/s) |
+|---|---|---|---|---|
+| **E2B** | **310** / 295 | 81 / 78 | 53 / 50 | 42 / 38 |
+| **E4B** | **202** / 205 | 52 / 51 | 37 / 34 | 23 / 21 |
+| **26B MoE** | **186** / 183 | 47 / 45 | 39 / 37 | ❌ (17 GB > 16 GB) |
+| **31B Dense** | **62** / 62 | 2.4 ⚠️ | 9.0 / 8.7 | ❌ (19 GB > 16 GB) |
+
+格式：short prompt / long prompt tok/s。MBP、GX10、Mac mini 的 E2B/E4B 數據來自 [Part 11](/zh-TW/blog/dgx-spark-gemma4-e2b-vs-e4b-ollama-3-machines)。
+
+### MBP 發生了什麼事？
+
+MBP M1 Max 跑 26B MoE 有 47 tok/s — 完全正常。然後 31B Dense 來了，一切崩潰到 2.4 tok/s。
+
+31B 模型磁碟上 19 GB。Ollama 載入後加上 KV cache，總記憶體消耗超過 32 GB。macOS 開始 swap 到 SSD。`ollama ps` 顯示了致命的信號：
+
+```
+gemma4:31b    14%/86% CPU/GPU    32768 context
+```
+
+14% 的模型被 offload 到 CPU（已經部分 swap 到 SSD 的系統記憶體）。GPU 在挨餓。筆電的風扇全速運轉。機身燙到不能摸。
+
+同時，GX10 靠 128 GB unified memory 跑同一個模型有 9 tok/s — 慢（273 GB/s 頻寬），但穩。沒有 swap，沒有 CPU offload，100% GPU。
+
+**MBP 頻寬比 GX10 多 47%。跑 31B 慢了 4 倍。** 記憶體容量打敗了記憶體速度。
+
+---
+
+## RTX 5090 的故事
+
+5090 在每個測試都碾壓。E2B 310 tok/s 是這個系列裡最快的 Gemma 4 推論速度 — 大約是 M1 Max 的 6 倍。
+
+5090 跟另一台 32 GB 機器（MBP）的差別：
+
+| 特性 | RTX 5090 | MBP M1 Max |
+|---|---|---|
+| 記憶體 | 32 GB GDDR7 | 32 GB LPDDR5 |
+| 頻寬 | 1792 GB/s | 400 GB/s |
+| 記憶體類型 | 獨立 GPU VRAM | 統一記憶體（跟 OS 共用） |
+
+都是 32 GB，但 5090 的 GDDR7 快 4.5 倍。而且因為是獨立 VRAM，OS 不會來搶 — 全部 32 GB 都給模型用。
+
+5090 跑 31B Dense 也有 62 tok/s。19 GB 模型 + KV cache 在 32 GB VRAM 裡綽綽有餘。沒有 swap，沒有 split。
+
+### 5090 硬體細節
+
+```
+CPU:    AMD Ryzen 9 9950X (16 核 / 32 執行緒)
+GPU:    NVIDIA GeForce RTX 5090 (32 GB GDDR7, SM 12.0)
+RAM:    32 GB DDR5 (WSL2 分配 30 GB)
+SSD:    1 TB NVMe (PCIe Gen5)
+OS:     Windows 11 → WSL2 Ubuntu 24.04.3 LTS
+Driver: 595.71, CUDA 13.2
+Ollama: 0.20.3
+```
+
+---
+
+## GX10：記憶體巨人、頻寬窄管
+
+GX10 (DGX Spark) 有 128 GB — 跑這個測試裡任何模型都不需要 swap。但 273 GB/s 的頻寬讓它在每個「別人也裝得下」的模型上都是倒數第二。
+
+| 模型 | GX10 vs MBP | GX10 vs 5090 |
+|---|---|---|
+| E2B | 0.65x | 0.17x |
+| E4B | 0.71x | 0.18x |
+| 26B | 0.83x | 0.21x |
+| 31B | **3.7x** | 0.15x |
+
+GX10 只在模型超過 32 GB 的場景贏 MBP。這個窗口很窄 — 26B MoE (17 GB) 在 32 GB 裡裝得下，MBP 跑得更快。只有 31B Dense (19 GB + KV cache > 32 GB) 才會翻盤。
+
+---
+
+## Mac mini M4：16 GB 的牆
+
+Mac mini 連 26B (17 GB) 和 31B (19 GB) 都載入不了。E2B 和 E4B 的速度大約是 MBP 的 30% — 跟頻寬比例一致（120 vs 400 GB/s）。
+
+Mac mini 代表了硬下限：16 GB 限制你只能跑磁碟上約 12 GB 以下的模型（扣掉 OS 和 KV cache 的開銷）。
+
+---
+
+## 規律：記憶體階層
+
+數據揭示了一個限制階層：
+
+1. **模型裝得進記憶體嗎？** 裝不下 → swap → 災難性減速（MBP 31B: 2.4 tok/s）
+2. **如果裝得下，是 100% GPU 嗎？** CPU/GPU split → 明顯減速
+3. **如果 100% GPU，頻寬多快？** Decode 速度大致跟頻寬成正比
+
+這就是為什麼 GX10 (273 GB/s, 128 GB) 在 31B 上贏 MBP (400 GB/s, 32 GB) — 第一步壓過第三步。MBP 連頻寬比較的資格都沒有，因為它被卡在 swap 裡。
+
+```
+           模型裝得進記憶體嗎？
+                 /          \
+               裝得下         裝不下
+              /                \
+     100% GPU?            → Swap 地獄
+      /       \               (1-4 tok/s)
+    是         否
+    /           \
+ 速度 =       CPU/GPU split
+ f(頻寬)      (更慢、不穩定)
+```
+
+---
+
+## 這次學到什麼
+
+### 最花時間的事
+
+在 GX10 上拿到乾淨的 benchmark 數據。Ollama 在 GB10 上的模型載入行為很激進 — service restart 後自動載入 26B 和 31B 兩個模型，吃掉 43 GB 並導致頻寬競爭。第一批 E2B/E4B 結果只有 5-7 tok/s（應該是 37-53）。最後要完全停掉 service、確認 GPU 上零個 ollama process，然後嚴格隔離測試每個模型。
+
+### 可遷移的診斷經驗
+
+- **永遠檢查 `ollama ps` 的 PROCESSOR 欄。** `100% GPU` 是乾淨的。`14%/86% CPU/GPU` 代表 swap 或記憶體壓力。這兩種狀態的速度差距可以到 20 倍。
+- **在 unified memory 機器上（Apple Silicon、GB10），unload 很慢。** `keep_alive: 0` 可能要 30 秒以上才能完全釋放記憶體。如果需要確保乾淨，直接 kill runner process。
+- **RTX 5090 的 GDDR7 是獨立的** — 不像 unified memory，OS 不會來搶。有效可用記憶體更可預測。
+
+### 放之四海皆準的模式
+
+最快的水管也沒用，如果桶子裝不下水。永遠先看容量再看速度。
+
+---
+
+## 快速參考
+
+選擇在你的硬體上跑哪個 Gemma 4 模型：
+
+| 你的記憶體 | 最佳模型 | 預期速度 |
+|---|---|---|
+| 16 GB | E2B (7.2 GB) | 23-42 tok/s |
+| 32 GB (Apple) | 26B MoE (17 GB) | 45-47 tok/s |
+| 32 GB (5090) | 31B Dense (19 GB) | 62 tok/s |
+| 64+ GB | 31B Dense (19 GB) | 取決於頻寬 |
+
+---
+
+同系列文章：[Part 10：E4B NVFP4 — 50 tok/s](/zh-TW/blog/dgx-spark-gemma4-e4b-nvfp4-50-toks) · [Part 11：E2B vs E4B 三台機器](/zh-TW/blog/dgx-spark-gemma4-e2b-vs-e4b-ollama-3-machines)

@@ -1,0 +1,227 @@
+---
+title: "[Benchmark] 4 Machines, 4 Models, 1 Answer: Memory Decides Everything"
+description: "Gemma 4 E2B through 31B benchmarked on RTX 5090, M1 Max, DGX Spark, and M4 with Ollama. E2B hits 310 tok/s on 5090. 31B hits 1.5 tok/s on MBP — swap kills faster hardware. Memory capacity > bandwidth."
+date: "2026-04-08"
+updatedAt: "2026-04-08"
+tags: ["Gemma 4", "RTX 5090", "DGX Spark", "GB10", "M1 Max", "M4", "Ollama", "benchmark", "memory bandwidth", "swap", "E2B", "E4B", "26B", "31B"]
+series: "DGX Spark"
+part: 12
+faq:
+  - q: "How fast is Gemma 4 on RTX 5090?"
+    a: "E2B: 310 tok/s, E4B: 202 tok/s, 26B MoE: 186 tok/s, 31B Dense: 62 tok/s. All with Ollama default quantization on 32GB GDDR7 at 1792 GB/s bandwidth."
+  - q: "Can a MacBook Pro M1 Max run Gemma 4 31B?"
+    a: "Technically yes, practically no. The 19 GB model plus KV cache exceeds 32 GB RAM, forcing a 14% CPU / 86% GPU split and swap. Result: 1.5 tok/s with the laptop overheating. The 26B MoE (17 GB) runs fine at 47 tok/s."
+  - q: "Why is DGX Spark slower than MacBook Pro for Gemma 4 26B?"
+    a: "DGX Spark (GB10) has 273 GB/s memory bandwidth vs M1 Max's 400 GB/s. Despite having 128 GB of memory (4x more), its lower bandwidth means 37 tok/s vs 47 tok/s for the 26B MoE. Bandwidth determines decode speed, not capacity."
+  - q: "What is the best hardware for running Gemma 4 locally?"
+    a: "RTX 5090 with 32 GB GDDR7 at 1792 GB/s is the fastest tested — 310 tok/s for E2B, 62 tok/s even for the 31B dense model. For Apple Silicon, M1 Max 32 GB is the sweet spot for models up to 26B."
+---
+
+<VideoEmbed src="/videos/gemma4-4-machines-4-models.mp4" />
+
+<TLDRCard>
+Gemma 4 tested across RTX 5090, M1 Max, DGX Spark, and M4 with Ollama. **E2B hits 310 tok/s on 5090.** MBP runs 31B at 1.5 tok/s because swap kills everything. The rule: if the model doesn't fit in memory, bandwidth doesn't matter.
+</TLDRCard>
+
+## Plain-Language Version: Why Your Hardware Matters More Than the Model
+
+When you run an AI model on your own computer instead of in the cloud, the speed depends almost entirely on one thing: how fast your hardware can feed data to the processor. This is called memory bandwidth — measured in GB/s (gigabytes per second).
+
+But there's a catch. If the model is too large to fit in your computer's memory, it spills onto the SSD (a process called swapping). SSDs are roughly 100x slower than RAM. When that happens, it doesn't matter how fast your memory bandwidth is — the model crawls.
+
+I tested Google's Gemma 4 — all four sizes, from the tiny E2B to the full 31B — on four different machines ranging from a $600 Mac mini to a custom gaming PC with an RTX 5090. Same software (Ollama), same prompts, same methodology.
+
+The result: a MacBook Pro with 1.5x the bandwidth of a $3,000 DGX Spark ran the 31B model 5x slower — because it ran out of memory and started swapping.
+
+---
+
+## Preface
+
+The fastest hardware isn't always the fastest hardware. A MacBook Pro M1 Max has 400 GB/s of memory bandwidth — 47% more than a DGX Spark's 273 GB/s. For models that fit in memory, the MBP wins. For models that don't, it loses catastrophically.
+
+This picks up where [Part 11: E2B vs E4B on 3 Machines](/en/blog/dgx-spark-gemma4-e2b-vs-e4b-ollama-3-machines) left off. That benchmark tested two models on three machines. This one adds a fourth machine (RTX 5090) and two larger models (26B MoE, 31B Dense) to answer a bigger question: at what point does a model become too large for a given machine?
+
+---
+
+## The Hardware: 4 Machines, 4 Memory Profiles
+
+| Machine | Processor | Memory | Bandwidth | Ollama | Notes |
+|---|---|---|---|---|---|
+| **ai-pc** | AMD Ryzen 9 9950X + RTX 5090 | 32 GB GDDR7 | 1792 GB/s | 0.20.3 | Win11 WSL2, Ubuntu 24.04, PCIe Gen5 x16 |
+| **MBP** | Apple M1 Max | 32 GB unified | 400 GB/s | 0.20.3 | macOS, same RAM as 5090 but 4.5x less bandwidth |
+| **GX10** | NVIDIA GB10 | 128 GB unified | 273 GB/s | 0.20.0 | DGX Spark, 4x more memory but lowest bandwidth of the GPUs |
+| **openclaw** | Apple M4 | 16 GB unified | 120 GB/s | 0.20.0 | Mac mini, smallest memory and bandwidth |
+
+The RTX 5090 is the newcomer — 32 GB of GDDR7 at 1792 GB/s. That's 6.5x the bandwidth of GB10 and 4.5x the MBP. But the memory capacity is the same as the MBP (32 GB) and a quarter of GB10 (128 GB).
+
+## The Models: Small to Large
+
+| Model | Architecture | Ollama Tag | Size on Disk | Active Params/Token |
+|---|---|---|---|---|
+| **E2B** | PLE | `gemma4:e2b` | 7.2 GB | ~2B |
+| **E4B** | PLE | `gemma4:e4b` | 9.6 GB | ~4B |
+| **26B MoE** | Mixture of Experts | `gemma4:26b` | 17 GB | 3.8B |
+| **31B Dense** | Dense | `gemma4:31b` | 19 GB | 31B |
+
+All use Ollama's default quantization (Q4_K_M for most layers). The spread from 7.2 GB to 19 GB is deliberate — it crosses the memory boundary of the smaller machines.
+
+---
+
+## Methodology
+
+Same protocol as [Part 11](/en/blog/dgx-spark-gemma4-e2b-vs-e4b-ollama-3-machines):
+
+1. Unload all models, wait for GPU memory to clear
+2. Load target model, verify 100% GPU (no CPU/GPU split)
+3. Run warmup inference
+4. 3 runs with unique short prompts (~26 tokens, max 256 generated)
+5. 3 runs with unique long prompts (~104 tokens, max 512 generated)
+6. Unload, repeat for next model
+
+Each model was tested in isolation — no concurrent models competing for bandwidth.
+
+---
+
+## The Results
+
+### Generation Speed (tok/s) — The Complete Matrix
+
+| Model | RTX 5090 (1792 GB/s) | MBP M1 Max (400 GB/s) | GX10 GB10 (273 GB/s) | Mac mini M4 (120 GB/s) |
+|---|---|---|---|---|
+| **E2B** | **310** / 295 | 81 / 78 | 53 / 50 | 42 / 38 |
+| **E4B** | **202** / 205 | 52 / 51 | 37 / 34 | 23 / 21 |
+| **26B MoE** | **186** / 183 | 47 / 45 | 39 / 37 | ❌ (17 GB > 16 GB) |
+| **31B Dense** | **62** / 62 | 2.4 ⚠️ | 9.0 / 8.7 | ❌ (19 GB > 16 GB) |
+
+Format: short prompt / long prompt tok/s. E2B/E4B data for MBP, GX10, and Mac mini from [Part 11](/en/blog/dgx-spark-gemma4-e2b-vs-e4b-ollama-3-machines).
+
+### What Just Happened to the MBP?
+
+The MBP M1 Max ran 26B MoE at 47 tok/s — perfectly respectable. Then 31B Dense arrived and everything collapsed to 2.4 tok/s.
+
+The 31B model is 19 GB on disk. After Ollama loads it with KV cache allocation, the total memory footprint exceeds 32 GB. macOS starts swapping to SSD. `ollama ps` showed the telltale sign:
+
+```
+gemma4:31b    14%/86% CPU/GPU    32768 context
+```
+
+14% of the model was offloaded to CPU (system RAM that had already been partially swapped to disk). The GPU was starved. The laptop's fans hit maximum. The chassis was too hot to touch.
+
+Meanwhile, GX10 with its 128 GB of unified memory ran the same model at 9 tok/s — slow (273 GB/s bandwidth), but stable. No swap, no CPU offload, 100% GPU.
+
+**The MBP has 47% more bandwidth than GX10. It ran 31B 4x slower.** Memory capacity trumped memory speed.
+
+---
+
+## The RTX 5090 Story
+
+The 5090 dominated every test. 310 tok/s on E2B is the fastest Gemma 4 inference measured in this series — roughly 6x faster than M1 Max on the same model.
+
+What makes 5090 different from the other 32 GB machine (MBP):
+
+| Property | RTX 5090 | MBP M1 Max |
+|---|---|---|
+| Memory | 32 GB GDDR7 | 32 GB LPDDR5 |
+| Bandwidth | 1792 GB/s | 400 GB/s |
+| Memory type | Dedicated GPU VRAM | Unified (shared with OS) |
+
+Both have 32 GB, but the 5090's GDDR7 is 4.5x faster. And because it's dedicated VRAM, the OS doesn't compete for it — all 32 GB is available for the model.
+
+The 5090 also ran 31B Dense at 62 tok/s. 19 GB model + KV cache fits within 32 GB VRAM with room to spare. No swap, no split.
+
+### 5090 Hardware Details
+
+For reproducibility:
+
+```
+CPU:    AMD Ryzen 9 9950X (16-core / 32-thread)
+GPU:    NVIDIA GeForce RTX 5090 (32 GB GDDR7, SM 12.0)
+RAM:    32 GB DDR5 (WSL2 allocates 30 GB)
+SSD:    1 TB NVMe (PCIe Gen5)
+OS:     Windows 11 → WSL2 Ubuntu 24.04.3 LTS
+Driver: 595.71, CUDA 13.2
+Ollama: 0.20.3
+```
+
+---
+
+## GX10: The Memory Giant with Narrow Pipes
+
+GX10 (DGX Spark) has 128 GB — enough to run any model in this test without breaking a sweat. But its 273 GB/s bandwidth made it the second-slowest machine for every model that fit in the others' memory.
+
+| Model | GX10 vs MBP | GX10 vs 5090 |
+|---|---|---|
+| E2B | 0.65x | 0.17x |
+| E4B | 0.71x | 0.18x |
+| 26B | 0.83x | 0.21x |
+| 31B | **3.7x** | 0.15x |
+
+GX10 only wins against MBP when the model is too large for 32 GB. That's a narrow window — the 26B MoE (17 GB) fits in 32 GB and runs faster on MBP. Only the 31B Dense (19 GB + KV cache > 32 GB) crosses the line.
+
+---
+
+## Mac mini M4: The 16 GB Wall
+
+The Mac mini couldn't load 26B (17 GB) or 31B (19 GB) at all. For E2B and E4B, it ran at roughly 30% of MBP speed — consistent with its 30% bandwidth ratio (120 vs 400 GB/s).
+
+The Mac mini represents the hard floor: 16 GB limits you to models under ~12 GB on disk after accounting for OS overhead and KV cache.
+
+---
+
+## The Pattern: Memory Hierarchy
+
+The data reveals a hierarchy of constraints:
+
+1. **Does the model fit in memory?** If no → swap → catastrophic slowdown (MBP 31B: 2.4 tok/s)
+2. **If yes, is it 100% GPU?** If split CPU/GPU → significant slowdown
+3. **If 100% GPU, how fast is the bandwidth?** Decode speed scales roughly linearly with bandwidth
+
+This is why GX10 (273 GB/s, 128 GB) beats MBP (400 GB/s, 32 GB) on 31B — step 1 trumps step 3. The MBP never even reaches the bandwidth comparison because it's stuck in swap.
+
+```
+           Does model fit in memory?
+                 /          \
+               YES            NO
+              /                \
+     100% GPU?            → Swap hell
+      /       \               (1-4 tok/s)
+    YES        NO
+    /           \
+ Speed =      CPU/GPU split
+ f(bandwidth)  (slower, unstable)
+```
+
+---
+
+## What Was Gained
+
+### What cost the most time
+
+Getting clean benchmark data on GX10. Ollama's model loading behavior on GB10 is aggressive — after a service restart, it auto-loaded both 26B and 31B simultaneously, eating 43 GB and causing bandwidth competition. The first batch of E2B/E4B results came back at 5-7 tok/s (should have been 37-53). Had to restart the service, verify zero ollama processes on GPU, then test each model in strict isolation.
+
+### Transferable diagnostics
+
+- **Always check `ollama ps` for the PROCESSOR column.** `100% GPU` means clean. `14%/86% CPU/GPU` means swap or memory pressure. The speed difference between these states can be 20x.
+- **On unified memory machines (Apple Silicon, GB10), unloading is slow.** `keep_alive: 0` requests can take 30+ seconds to fully release memory. Kill the runner process if you need guaranteed cleanup.
+- **RTX 5090's GDDR7 is dedicated** — unlike unified memory, the OS can't eat into it. This makes the effective available memory more predictable.
+
+### The pattern that applies everywhere
+
+The fastest pipe means nothing if the bucket can't hold the water. Always check capacity before speed.
+
+---
+
+## Quick Reference
+
+If you're deciding which Gemma 4 model to run on your hardware:
+
+| Your Memory | Best Model | Expected Speed |
+|---|---|---|
+| 16 GB | E2B (7.2 GB) | 23-42 tok/s |
+| 32 GB (Apple) | 26B MoE (17 GB) | 45-47 tok/s |
+| 32 GB (5090) | 31B Dense (19 GB) | 62 tok/s |
+| 64+ GB | 31B Dense (19 GB) | limited by bandwidth |
+
+---
+
+Also in this series: [Part 10: E4B NVFP4 — 50 tok/s](/en/blog/dgx-spark-gemma4-e4b-nvfp4-50-toks) · [Part 11: E2B vs E4B on 3 Machines](/en/blog/dgx-spark-gemma4-e2b-vs-e4b-ollama-3-machines)
