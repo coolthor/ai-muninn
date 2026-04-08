@@ -68,7 +68,9 @@ const personSchema = {
 export default async function Home({ params }: { params: Promise<{ locale: string }> }) {
   const { locale } = await params
   const l = locale as Locale
-  const posts = getAllPosts(locale).slice(0, 5)
+  const allPosts = getAllPosts(locale)
+  const posts = allPosts.slice(0, 5)
+  const totalCount = allPosts.length
   const t = ui[l] ?? ui.en
 
   return (
@@ -111,19 +113,28 @@ export default async function Home({ params }: { params: Promise<{ locale: strin
                 <span className="text-xs shrink-0 tabular-nums" style={{ color: 'var(--text-dim)' }}>
                   {post.date}
                 </span>
-                <Link
-                  href={`/${l}/blog/${post.slug}`}
-                  className="text-sm hover:text-[var(--cyan-dim)] transition-colors"
-                  style={{ color: 'var(--cyan)' }}
-                >
-                  {post.title}
-                </Link>
+                <div className="min-w-0">
+                  <Link
+                    href={`/${l}/blog/${post.slug}`}
+                    className="text-sm hover:text-[var(--cyan-dim)] transition-colors"
+                    style={{ color: 'var(--cyan)' }}
+                  >
+                    {post.title}
+                  </Link>
+                  {post.description && (
+                    <p className="text-xs mt-0.5 line-clamp-1" style={{ color: 'var(--text-muted)' }}>
+                      {post.description}
+                    </p>
+                  )}
+                </div>
               </li>
             ))}
           </ul>
           <div className="mt-6">
             <Link href={`/${l}/blog`} className="text-xs" style={{ color: 'var(--text-dim)' }}>
-              {t.viewAll}
+              {l === 'zh-TW'
+                ? `顯示 5 / ${totalCount} 篇 · ${t.viewAll}`
+                : `showing 5 of ${totalCount} · ${t.viewAll}`}
             </Link>
           </div>
         </section>

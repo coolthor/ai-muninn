@@ -3,6 +3,7 @@ import { routing } from '@/i18n/routing'
 import type { Metadata } from 'next'
 import type { BlogPost } from '@/lib/blog'
 import BlogIndexView from '@/components/BlogIndexView'
+import Search from '@/components/Search'
 
 type Locale = (typeof routing.locales)[number]
 
@@ -75,6 +76,8 @@ export default async function BlogIndex({ params }: { params: Promise<{ locale: 
   const { groups, standalone } = groupBySeries(posts)
 
   return (
+    <>
+    <Search locale={locale} />
     <BlogIndexView
       posts={posts}
       groups={groups}
@@ -83,5 +86,6 @@ export default async function BlogIndex({ params }: { params: Promise<{ locale: 
       locale={locale}
       isZh={isZh}
     />
+    </>
   )
 }
