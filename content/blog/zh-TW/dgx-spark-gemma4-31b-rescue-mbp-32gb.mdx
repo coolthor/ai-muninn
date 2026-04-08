@@ -1,0 +1,300 @@
+---
+title: "[Benchmark] 拯救 Gemma 4 31B：在 32GB MacBook Pro 上從 1.5 加速到 12.8 tok/s"
+description: "Gemma 4 31B 在 MBP M1 Max 上用 Ollama 只有 1.5 tok/s（swap）。解法：降 context window（9 tok/s）或用 oMLX（12.8 tok/s）。真正的兇手是 KV cache 分配，不是模型大小。"
+date: "2026-04-08"
+updatedAt: "2026-04-08"
+tags: ["Gemma 4", "31B", "M1 Max", "Ollama", "oMLX", "swap", "KV cache", "TurboQuant", "Apple Silicon", "memory management"]
+series: "DGX Spark"
+part: 13
+faq:
+  - q: "為什麼 Gemma 4 31B 在 MacBook Pro 上這麼慢？"
+    a: "Ollama 預設的 context window（32768 tokens）會分配大量 KV cache。19 GB 模型加上 KV cache 超過 32 GB RAM，macOS 開始 swap 到 SSD。速度從可能的 9-13 tok/s 掉到 1.5 tok/s。"
+  - q: "怎麼在 32GB Mac 上加速 Gemma 4 31B？"
+    a: "兩個選擇：(1) 在 Ollama 設 num_ctx=2048 減少 KV cache — 拿到 9 tok/s 且 100% GPU。(2) 改用 oMLX，它會自動管理 KV cache 的 SSD 層 — 拿到 12.8 tok/s 且不限 context。"
+  - q: "oMLX 是什麼？怎麼幫助？"
+    a: "oMLX 是為 Apple Silicon 打造的 MLX 推論伺服器，有 SSD-backed KV cache 兩層架構。模型權重放 RAM，KV cache 溢出時寫入 SSD 而不是觸發 macOS swap。從 source 安裝：pip install -e . 從 GitHub repo。"
+  - q: "TurboQuant 能加速 Gemma 4 31B 嗎？"
+    a: "短 context 下不行。TurboQuant 壓縮 KV cache（BF16→4-bit），但 500 tokens 的 KV cache 只有幾百 MB — 太小沒差。TurboQuant 在長 context（8K+ tokens）才有效，那時 KV cache 會長到幾 GB。"
+---
+
+<VideoEmbed src="/videos/gemma4-31b-rescue-mbp.mp4" />
+
+<TLDRCard>
+Gemma 4 31B 在 32GB MacBook Pro 上：Ollama 預設 **1.5 tok/s**（swap），降 context 到 2048 得 **9 tok/s**，oMLX 得 **12.8 tok/s** — 恢復 8.5 倍。真正的兇手不是模型大小，是 KV cache 分配。
+</TLDRCard>
+
+## 白話版：為什麼一個大 AI 模型可以毀掉你的筆電
+
+在筆電上跑 AI 模型時，模型需要兩樣東西放在記憶體裡：模型本身（它的「大腦」）和一個叫 KV cache 的暫存空間（它的「對話記憶」）。對話視窗越大，暫存空間就越大。
+
+Gemma 4 31B — Google 最大的 dense 模型 — 佔 19 GB。MacBook Pro 有 32 GB RAM，應該還剩 13 GB。聽起來夠用。但 Ollama（最受歡迎的本機 AI 工具）預設對話視窗是 32,768 tokens。這個大小的暫存空間可以吃掉 10+ GB。加起來：29+ GB。再加上 macOS 本身的開銷，系統就開始把記憶體寫到 SSD — 這叫 swap，比 RAM 慢大約 100 倍。
+
+結果：一台應該每秒生成 10+ 個 token 的筆電只跑 1.5，風扇全速轉，機身燙到不能摸。
+
+我找到兩個解法。一個免費、10 秒搞定。另一個需要裝新工具但完全沒有妥協。
+
+---
+
+## 前言
+
+最貴的 bug 是那種看起來像硬體限制的。整整兩天，所有人都以為 31B 就是裝不進 32GB 的 Mac。其實裝得進 — 只是預設設定不讓它進。
+
+這是 [Part 12：4 台機器 × 4 個模型](/zh-TW/blog/dgx-spark-gemma4-4-machines-4-models-bandwidth) 的延續。那篇 benchmark 顯示 MBP 跑 31B 只有 1.5 tok/s，而頻寬更低的 DGX Spark 反而有 9 tok/s。問題是：MBP 能救回來嗎？
+
+---
+
+## 犯罪現場：1.5 tok/s
+
+起點。Ollama，預設設定，Gemma 4 31B：
+
+```bash
+ollama run gemma4:31b "Explain options trading" --verbose
+```
+
+```
+eval rate: 1.53 tokens/s
+```
+
+`ollama ps` 揭露了兇器：
+
+```
+NAME          PROCESSOR          CONTEXT
+gemma4:31b    14%/86% CPU/GPU    32768
+```
+
+14% CPU / 86% GPU。模型被 split 了 — 一部分在 CPU 上跑，走的是已經 swap 到 SSD 的記憶體。筆電表面溫度高到不舒服。風扇全速。
+
+模型本身 19 GB（Q4_K_M GGUF）。MBP 有 32 GB。差 13 GB。那為什麼會 swap？
+
+---
+
+## 根本原因：KV Cache 吃掉了所有餘裕
+
+預設 context window 是 32,768 tokens。對一個 31B 模型來說（48 layers、GQA heads、BF16 KV values），這個 context 大約要分配 10-12 GB 的 KV cache，加在 19 GB 的模型上面。
+
+```
+模型權重：        19 GB (Q4_K_M)
+KV cache (32K ctx): ~10 GB (BF16)
+macOS + apps：     ~5 GB
+總計：            ~34 GB > 32 GB → swap
+```
+
+模型裝得下。模型加上預設的 KV cache 裝不下。
+
+---
+
+## 解法 1：降 Context Window（免費，10 秒）
+
+最簡單的修法：叫 Ollama 分配更少的 KV cache。
+
+```bash
+curl http://localhost:11434/api/chat -d '{
+  "model": "gemma4:31b",
+  "messages": [{"role": "user", "content": "Explain options trading"}],
+  "options": {"num_ctx": 2048},
+  "stream": false
+}'
+```
+
+或者在 Modelfile 裡設：
+
+```
+FROM gemma4:31b
+PARAMETER num_ctx 2048
+```
+
+結果：
+
+```
+NAME          PROCESSOR    CONTEXT
+gemma4:31b    100% GPU     2048
+```
+
+**100% GPU。** 沒有 CPU split，沒有 swap。數字：
+
+| 指標 | 預設 (ctx=32768) | num_ctx=2048 |
+|------|-----------------|--------------|
+| tok/s | 1.5 | **9.0** |
+| PROCESSOR | 14%/86% CPU/GPU | 100% GPU |
+| 記憶體 | ~30 GB (swap) | ~23 GB |
+| 筆電溫度 | 燙 | 微溫 |
+
+一個參數快 6 倍。代價：對話限制在 2048 tokens（~1500 字）。問快速問題夠用。長對話或文件分析就是硬天花板。
+
+---
+
+## 解法 2：oMLX — 沒有妥協
+
+[oMLX](https://github.com/jundot/omlx) 是為 Apple Silicon 打造的 MLX 推論伺服器。核心功能：兩層 KV cache — hot（RAM）和 cold（SSD）。RAM 滿了，KV cache blocks 寫入 SSD（safetensors 格式），不觸發 macOS swap。
+
+差別在於：macOS swap 是不受控的 — OS 自己決定把什麼換出去，包括模型權重和系統 process。oMLX 的 SSD tier 是受控的 — 只有 KV cache 會被 offload，而且只在需要時。
+
+### 安裝
+
+oMLX 不在 PyPI 上。從 source 裝：
+
+```bash
+git clone https://github.com/jundot/omlx.git /tmp/omlx
+cd /tmp/omlx
+pip3 install --break-system-packages -e .
+```
+
+### 模型設定
+
+oMLX 用 MLX 格式模型，不是 GGUF。下載到預設 model 目錄：
+
+```bash
+python3 -c "
+from huggingface_hub import snapshot_download
+snapshot_download('mlx-community/gemma-4-31b-it-4bit',
+                  local_dir='$HOME/.omlx/models/gemma-4-31b-it-4bit')
+"
+```
+
+MLX 4-bit 模型 17 GB — 比 Ollama 的 Q4_K_M（19 GB）小 2 GB。在邊界情況下這 2 GB 很重要。
+
+### 執行
+
+```bash
+omlx serve --port 8800 --max-process-memory auto
+```
+
+透過 OpenAI 相容 API 查詢：
+
+```bash
+curl http://localhost:8800/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model":"gemma-4-31b-it-4bit",
+       "messages":[{"role":"user","content":"Explain options trading"}],
+       "max_tokens":500}'
+```
+
+### 結果
+
+| 輪次 | tok/s |
+|------|-------|
+| 1 | 12.8 |
+| 2 | 12.8 |
+| 3 | 12.7 |
+
+**12.8 tok/s。** 比 Ollama 預設快 8.5 倍。沒有 context window 限制。
+
+測完後我檢查了 SSD cache 目錄：
+
+```bash
+du -sh ~/.omlx/cache/
+```
+
+```
+0B    /Users/coolthor/.omlx/cache/
+```
+
+零 bytes。500 tokens 的 KV cache 小到完全放得進 RAM。SSD tier 不需要介入 — oMLX 只是比 Ollama 更好地管理了記憶體，讓總量控制在 32 GB 以內。
+
+---
+
+## TurboQuant：開了但看不見
+
+oMLX 支援 [TurboQuant](https://arxiv.org/abs/2504.19874) — Google 的 KV cache 壓縮技術，把 BF16 cache 壓到 2-4 bits。這功能在目前版本被作者隱藏了（UI 上關掉），但程式碼可用。
+
+啟用方法，建立 `~/.omlx/model_settings.json`：
+
+```json
+{
+  "version": 1,
+  "models": {
+    "gemma-4-31b-it-4bit": {
+      "turboquant_kv_enabled": true,
+      "turboquant_kv_bits": 4
+    }
+  }
+}
+```
+
+啟動 log 確認生效：
+
+```
+TurboQuant attention patch applied
+TurboQuant KV cache enabled for VLM: 4.0 bits
+```
+
+開啟 TurboQuant 的 benchmark：
+
+| 設定 | tok/s |
+|------|-------|
+| oMLX（無 TQ） | 12.8 |
+| oMLX + TQ 4-bit | 12.4 |
+| oMLX + TQ 2-bit | 12.5 |
+
+沒差。500 tokens 的 KV cache 在 BF16 下才幾百 MB。壓縮幾百 MB 省下的記憶體本來就不在壓力區。TurboQuant 的價值在長 context — 8K+ tokens 時 KV cache 長到幾 GB，那時壓縮才有感。短對話下，它是隱形的。
+
+---
+
+## 26B 對照：裝得下的時候 Ollama 更快
+
+為了確認 oMLX 是不是全面更快，測了 32 GB 裝得下的 26B MoE：
+
+| Runtime | 26B MoE tok/s |
+|---------|--------------|
+| Ollama (Q4_K_M, 17 GB) | **47** |
+| oMLX (MLX 4-bit, 15 GB) | 41 |
+
+Ollama 更快。llama.cpp backend（GGUF Q4_K_M）在 Apple Silicon 上跑 MoE 模型似乎比 MLX 4-bit 更優化。
+
+oMLX 的優勢嚴格限於記憶體邊界 — 模型差一點就塞不下的情況。其他情況下 Ollama 更快更簡單。
+
+---
+
+## 為什麼 2 GB 很重要
+
+真正的故事在模型大小：
+
+| Runtime | 格式 | 31B 大小 | 塞得進 32 GB？ |
+|---------|------|---------|--------------|
+| Ollama | GGUF Q4_K_M | 19 GB | 勉強（需要小 ctx） |
+| oMLX | MLX 4-bit | 17 GB | 是（KV cache 還有空間） |
+
+oMLX 的模型小 2 GB。這 2 GB 就是「放得下 KV cache」和「放不下、swap、1.5 tok/s」的分界。這不是 oMLX 的優化 — 是量化格式的差異。MLX 4-bit 在這個模型上比 GGUF Q4_K_M 更緊湊。
+
+---
+
+## 這次學到什麼
+
+### 最花時間的事
+
+假設問題出在硬體。「MBP 跑不了 31B」這個說法在兩天的 benchmark 裡一直沒被質疑，直到有人看了 `ollama ps` 的 PROCESSOR 欄。14%/86% CPU/GPU split 就在那裡 — 一行診斷可以省好幾個小時。
+
+### 可遷移的診斷經驗
+
+- **永遠檢查 `ollama ps` 的 PROCESSOR 欄。** `100% GPU` = 健康。有 CPU% = 記憶體壓力。這是 Ollama 最重要的單一診斷指標。
+- **`num_ctx` 是隱藏的記憶體乘數。** 預設 32768 可以分配 10+ GB 的 KV cache。模型快滿記憶體時，降 context 是最便宜的解法。
+- **oMLX 的 SSD cache 不一定會用到 SSD。** 它是安全網 — KV cache 小的話全部在 RAM 跑。它的價值是防止災難性失敗（macOS swap），不需要手動調參。
+- **模型格式大小有差異。** GGUF Q4_K_M 和 MLX 4-bit 都叫「4-bit」但大小差 10-15%。在記憶體邊界上，這很重要。
+
+### 放之四海皆準的模式
+
+預設設定是為常見情境優化的，不是為你的情境。當效能災難性地差時，先查預設值在分配什麼，再怪硬體。
+
+---
+
+## 決策樹：32GB Mac 上跑 31B
+
+```
+想在 32GB Mac 上跑 Gemma 4 31B？
+│
+├─ 快速解（10 秒）：
+│   Ollama + num_ctx=2048 → 9 tok/s
+│   ⚠️ Context 限制在 ~1500 字
+│
+├─ 更好的解（5 分鐘設定）：
+│   oMLX + MLX 4-bit 模型 → 12.8 tok/s
+│   ✅ 不限 context，SSD cache 安全網
+│
+└─ 如果 31B 不是必要的：
+    Gemma 4 26B MoE + Ollama → 47 tok/s
+    ✅ 輕鬆塞得下，更快，品質不差
+```
+
+---
+
+同系列文章：[Part 12：4 台機器 × 4 個模型](/zh-TW/blog/dgx-spark-gemma4-4-machines-4-models-bandwidth) · [Part 11：E2B vs E4B](/zh-TW/blog/dgx-spark-gemma4-e2b-vs-e4b-ollama-3-machines)

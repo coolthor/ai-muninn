@@ -1,0 +1,300 @@
+---
+title: "[Benchmark] Rescuing Gemma 4 31B on a 32GB MacBook Pro: From 1.5 to 12.8 tok/s"
+description: "Gemma 4 31B runs at 1.5 tok/s on MBP M1 Max with Ollama due to swap. The fix: reduce context window (9 tok/s) or switch to oMLX (12.8 tok/s). The real culprit is KV cache allocation, not model size."
+date: "2026-04-08"
+updatedAt: "2026-04-08"
+tags: ["Gemma 4", "31B", "M1 Max", "Ollama", "oMLX", "swap", "KV cache", "TurboQuant", "Apple Silicon", "memory management"]
+series: "DGX Spark"
+part: 13
+faq:
+  - q: "Why is Gemma 4 31B so slow on MacBook Pro?"
+    a: "Ollama's default context window (32768 tokens) allocates a large KV cache. The 19 GB model plus KV cache exceeds 32 GB RAM, causing macOS to swap to SSD. This drops speed from a potential 9-13 tok/s to 1.5 tok/s."
+  - q: "How to speed up Gemma 4 31B on 32GB Mac?"
+    a: "Two options: (1) Set num_ctx=2048 in Ollama to reduce KV cache — gets 9 tok/s with 100% GPU. (2) Use oMLX which manages KV cache with SSD tiers — gets 12.8 tok/s without context limits."
+  - q: "What is oMLX and how does it help?"
+    a: "oMLX is an MLX-based inference server for Apple Silicon with SSD-backed KV cache tiers. It keeps model weights in RAM and overflows KV cache to SSD when needed, preventing macOS swap. Install from source: pip install -e . from the GitHub repo."
+  - q: "Does TurboQuant help with Gemma 4 31B speed?"
+    a: "Not for short contexts. TurboQuant compresses KV cache (BF16→4-bit), but at 500 tokens the KV cache is only a few hundred MB — too small to matter. TurboQuant helps at long contexts (8K+ tokens) where KV cache would otherwise cause memory pressure."
+---
+
+<VideoEmbed src="/videos/gemma4-31b-rescue-mbp.mp4" />
+
+<TLDRCard>
+Gemma 4 31B on a 32GB MacBook Pro: Ollama defaults to **1.5 tok/s** (swap), but reducing context to 2048 gets **9 tok/s**, and oMLX gets **12.8 tok/s** — an 8.5x recovery. The real culprit isn't model size, it's KV cache allocation.
+</TLDRCard>
+
+## Plain-Language Version: Why a Big AI Model Can Destroy Your Laptop
+
+When you run an AI model on your laptop, the model needs two things in memory: the model itself (its "brain") and a scratch pad called the KV cache (its "short-term memory" for the conversation). The bigger the conversation window, the bigger this scratch pad.
+
+Gemma 4 31B — Google's largest dense model — takes up 19 GB. A MacBook Pro with 32 GB of RAM should have 13 GB left over. That sounds like plenty for a scratch pad. But Ollama, the most popular tool for running local AI models, defaults to a conversation window of 32,768 tokens. At that size, the scratch pad alone can eat 10+ GB. Total: 29+ GB. Add macOS overhead, and the system starts writing memory to the SSD — a process called swapping that's roughly 100x slower than RAM.
+
+The result: a laptop that should generate text at 10+ tokens per second crawls at 1.5, while the fans scream and the chassis burns.
+
+I found two fixes. One is free and takes 10 seconds. The other requires installing a different tool but removes the compromise entirely.
+
+---
+
+## Preface
+
+The most expensive bug is the one that looks like a hardware limitation. For two days, the assumption was that 31B simply doesn't fit on a 32GB Mac. It does — the default settings just won't let it.
+
+This picks up where [Part 12: 4 Machines × 4 Models](/en/blog/dgx-spark-gemma4-4-machines-4-models-bandwidth) left off. That benchmark showed MBP running 31B at 1.5 tok/s while DGX Spark (with less bandwidth) managed 9 tok/s. The question was: can MBP be rescued?
+
+---
+
+## The Crime Scene: 1.5 tok/s
+
+The starting point. Ollama, default settings, Gemma 4 31B:
+
+```bash
+ollama run gemma4:31b "Explain options trading" --verbose
+```
+
+```
+eval rate: 1.53 tokens/s
+```
+
+`ollama ps` revealed the murder weapon:
+
+```
+NAME          PROCESSOR          CONTEXT
+gemma4:31b    14%/86% CPU/GPU    32768
+```
+
+14% CPU / 86% GPU. The model was split — part of it running on CPU through swapped memory. The laptop's surface temperature was uncomfortable to touch. Fans at maximum.
+
+The model itself is 19 GB (Q4_K_M GGUF). MBP has 32 GB. That's 13 GB headroom. So why the swap?
+
+---
+
+## The Root Cause: KV Cache Ate the Headroom
+
+The default context window is 32,768 tokens. For a 31B model with 48 layers, GQA heads, and BF16 KV values, that context window allocates roughly 10-12 GB of KV cache on top of the 19 GB model.
+
+```
+Model weights:     19 GB (Q4_K_M)
+KV cache (32K ctx): ~10 GB (BF16)
+macOS + apps:       ~5 GB
+Total:             ~34 GB > 32 GB → swap
+```
+
+The model fits. The model plus its default KV cache does not.
+
+---
+
+## Fix 1: Reduce Context Window (Free, 10 Seconds)
+
+The simplest fix: tell Ollama to allocate less KV cache.
+
+```bash
+curl http://localhost:11434/api/chat -d '{
+  "model": "gemma4:31b",
+  "messages": [{"role": "user", "content": "Explain options trading"}],
+  "options": {"num_ctx": 2048},
+  "stream": false
+}'
+```
+
+Or in an `ollama run` session, set it in a Modelfile:
+
+```
+FROM gemma4:31b
+PARAMETER num_ctx 2048
+```
+
+Result:
+
+```
+NAME          PROCESSOR    CONTEXT
+gemma4:31b    100% GPU     2048
+```
+
+**100% GPU.** No CPU split, no swap. The numbers:
+
+| Metric | Default (ctx=32768) | num_ctx=2048 |
+|--------|-------------------|--------------|
+| tok/s | 1.5 | **9.0** |
+| PROCESSOR | 14%/86% CPU/GPU | 100% GPU |
+| Memory | ~30 GB (swap) | ~23 GB |
+| Laptop temp | burning | warm |
+
+6x improvement from one parameter. The tradeoff: conversations are limited to 2048 tokens (~1500 words). For quick questions, that's fine. For long conversations or document analysis, it's a hard ceiling.
+
+---
+
+## Fix 2: oMLX — No Compromise
+
+[oMLX](https://github.com/jundot/omlx) is an MLX-based inference server built for Apple Silicon. Its key feature: a two-tier KV cache with hot (RAM) and cold (SSD) layers. When RAM fills up, KV cache blocks are written to SSD in safetensors format instead of triggering macOS swap.
+
+The difference: macOS swap is uncontrolled — the OS decides what gets paged out, including model weights and system processes. oMLX's SSD tier is controlled — only KV cache gets offloaded, and only when needed.
+
+### Installation
+
+oMLX isn't on PyPI. Install from source:
+
+```bash
+git clone https://github.com/jundot/omlx.git /tmp/omlx
+cd /tmp/omlx
+pip3 install --break-system-packages -e .
+```
+
+### Model Setup
+
+oMLX uses MLX-format models, not GGUF. Download to the default model directory:
+
+```bash
+python3 -c "
+from huggingface_hub import snapshot_download
+snapshot_download('mlx-community/gemma-4-31b-it-4bit',
+                  local_dir='$HOME/.omlx/models/gemma-4-31b-it-4bit')
+"
+```
+
+The MLX 4-bit model is 17 GB — 2 GB smaller than Ollama's Q4_K_M (19 GB). That 2 GB gap matters at the boundary.
+
+### Running
+
+```bash
+omlx serve --port 8800 --max-process-memory auto
+```
+
+Then query via the OpenAI-compatible API:
+
+```bash
+curl http://localhost:8800/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model":"gemma-4-31b-it-4bit",
+       "messages":[{"role":"user","content":"Explain options trading"}],
+       "max_tokens":500}'
+```
+
+### Results
+
+| Run | tok/s |
+|-----|-------|
+| 1 | 12.8 |
+| 2 | 12.8 |
+| 3 | 12.7 |
+
+**12.8 tok/s.** 8.5x faster than Ollama's default. No context window limitation.
+
+I checked the SSD cache directory after the test:
+
+```bash
+du -sh ~/.omlx/cache/
+```
+
+```
+0B    /Users/coolthor/.omlx/cache/
+```
+
+Zero bytes. At 500 tokens of context, the KV cache is small enough to stay entirely in RAM. The SSD tier wasn't needed — oMLX simply managed memory better than Ollama, keeping the total under 32 GB.
+
+---
+
+## TurboQuant: Enabled but Invisible
+
+oMLX supports [TurboQuant](https://arxiv.org/abs/2504.19874) — Google's KV cache compression that reduces BF16 cache to 2-4 bits. The feature is hidden in the current version (the maintainer disabled it in the UI) but the code works.
+
+To enable, create `~/.omlx/model_settings.json`:
+
+```json
+{
+  "version": 1,
+  "models": {
+    "gemma-4-31b-it-4bit": {
+      "turboquant_kv_enabled": true,
+      "turboquant_kv_bits": 4
+    }
+  }
+}
+```
+
+The startup log confirms it:
+
+```
+TurboQuant attention patch applied
+TurboQuant KV cache enabled for VLM: 4.0 bits
+```
+
+The benchmark with TurboQuant enabled:
+
+| Config | tok/s |
+|--------|-------|
+| oMLX (no TQ) | 12.8 |
+| oMLX + TQ 4-bit | 12.4 |
+| oMLX + TQ 2-bit | 12.5 |
+
+No difference. At 500 tokens, the KV cache is a few hundred MB in BF16. Compressing a few hundred MB to 4-bit saves memory that wasn't under pressure. TurboQuant's value appears at long contexts — 8K+ tokens where the KV cache grows to several GB. For short interactions, it's invisible.
+
+---
+
+## The 26B Comparison: Ollama Wins When It Fits
+
+To check whether oMLX is universally faster, I tested the 26B MoE model that fits comfortably in 32 GB:
+
+| Runtime | 26B MoE tok/s |
+|---------|--------------|
+| Ollama (Q4_K_M, 17 GB) | **47** |
+| oMLX (MLX 4-bit, 15 GB) | 41 |
+
+Ollama is faster. The llama.cpp backend (GGUF Q4_K_M) appears better optimized for MoE models on Apple Silicon than MLX's 4-bit format.
+
+oMLX's advantage is strictly at the memory boundary — models that almost-but-not-quite fit. For everything else, Ollama with its simpler setup wins.
+
+---
+
+## Why 2 GB Matters
+
+The real story is in the model sizes:
+
+| Runtime | Format | 31B Size | Fits in 32 GB? |
+|---------|--------|----------|----------------|
+| Ollama | GGUF Q4_K_M | 19 GB | Barely (needs small ctx) |
+| oMLX | MLX 4-bit | 17 GB | Yes (with room for KV) |
+
+oMLX's model is 2 GB smaller. That 2 GB is the difference between "fits with KV cache" and "doesn't fit, swap, 1.5 tok/s." This isn't an oMLX optimization — it's a quantization format difference. MLX 4-bit is more compact than GGUF Q4_K_M for this particular model.
+
+---
+
+## What Was Gained
+
+### What cost the most time
+
+Assuming the problem was hardware. The MBP "can't run 31B" narrative persisted through two days of benchmarking before anyone checked `ollama ps` for the PROCESSOR column. The 14%/86% CPU/GPU split was right there — a one-line diagnostic that would have saved hours.
+
+### Transferable diagnostics
+
+- **Always check `ollama ps` PROCESSOR column.** `100% GPU` = healthy. Anything with CPU% = memory pressure. This is the single most important Ollama diagnostic.
+- **`num_ctx` is the hidden memory multiplier.** The default 32768 can allocate 10+ GB of KV cache. For models near the memory limit, reducing context is the cheapest fix.
+- **oMLX's SSD cache doesn't always use the SSD.** It's a safety net — if KV cache stays small, everything runs in RAM. The value is that it prevents the catastrophic failure mode (macOS swap) without requiring manual tuning.
+- **Model format size varies.** GGUF Q4_K_M and MLX 4-bit are both "4-bit" but differ in size by 10-15%. At the memory boundary, this matters.
+
+### The pattern that applies everywhere
+
+The default configuration is optimized for the common case, not your case. When performance is catastrophically bad, check what the defaults are allocating before blaming the hardware.
+
+---
+
+## Decision Tree for 31B on 32GB Mac
+
+```
+Want to run Gemma 4 31B on 32GB Mac?
+│
+├─ Quick fix (10 seconds):
+│   Ollama + num_ctx=2048 → 9 tok/s
+│   ⚠️ Context limited to ~1500 words
+│
+├─ Better fix (5 minutes setup):
+│   oMLX + MLX 4-bit model → 12.8 tok/s
+│   ✅ No context limit, SSD cache safety net
+│
+└─ Best option if 31B isn't mandatory:
+    Gemma 4 26B MoE on Ollama → 47 tok/s
+    ✅ Fits easily, faster, arguably better quality
+```
+
+---
+
+Also in this series: [Part 12: 4 Machines × 4 Models](/en/blog/dgx-spark-gemma4-4-machines-4-models-bandwidth) · [Part 11: E2B vs E4B](/en/blog/dgx-spark-gemma4-e2b-vs-e4b-ollama-3-machines)
