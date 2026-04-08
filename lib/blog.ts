@@ -94,6 +94,36 @@ export function getAllSlugs(locale = 'en'): string[] {
     .map(f => f.replace(/\.(mdx|md)$/, ''))
 }
 
+export interface TagInfo {
+  tag: string
+  slug: string
+  count: number
+}
+
+/** Returns all unique tags with counts, sorted by count descending */
+export function getAllTags(locale = 'en'): TagInfo[] {
+  const posts = getAllPosts(locale)
+  const tagMap = new Map<string, number>()
+
+  for (const post of posts) {
+    for (const tag of post.tags) {
+      const normalized = tag.toLowerCase().replace(/\s+/g, '-')
+      tagMap.set(normalized, (tagMap.get(normalized) ?? 0) + 1)
+    }
+  }
+
+  return Array.from(tagMap.entries())
+    .map(([slug, count]) => ({ tag: slug, slug, count }))
+    .sort((a, b) => b.count - a.count)
+}
+
+/** Returns posts matching a tag slug, sorted by date descending */
+export function getPostsByTag(locale = 'en', tagSlug: string): BlogPost[] {
+  return getAllPosts(locale).filter(post =>
+    post.tags.some(t => t.toLowerCase().replace(/\s+/g, '-') === tagSlug)
+  )
+}
+
 /** Returns true if a translation exists for the given slug + locale */
 export function hasTranslation(slug: string, locale: string): boolean {
   const dir = blogDir(locale)

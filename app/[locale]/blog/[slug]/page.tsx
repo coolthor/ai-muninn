@@ -216,9 +216,18 @@ export default async function BlogPost({
             </span>
           )}
           <span>{post.readingTime} {isZh ? '分鐘閱讀' : 'min read'}</span>
-          {post.tags.slice(0, 4).map(tag => (
-            <span key={tag}>#{tag.toLowerCase().replace(/\s+/g, '-')}</span>
-          ))}
+          {post.tags.slice(0, 4).map(tag => {
+            const tagSlug = tag.toLowerCase().replace(/\s+/g, '-')
+            return (
+              <Link
+                key={tag}
+                href={`/${l}/blog/tag/${encodeURIComponent(tagSlug)}`}
+                className="hover:underline hover:text-[var(--cyan)] transition-colors"
+              >
+                #{tagSlug}
+              </Link>
+            )
+          })}
           {otherExists && (
             <Link
               href={`/${otherLocale}/blog/${slug}`}

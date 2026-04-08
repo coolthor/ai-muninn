@@ -94,11 +94,19 @@ function PostRow({ post, locale, showPart }: { post: BlogPost; locale: string; s
         </div>
         {post.tags.length > 0 && (
           <div className="flex flex-wrap gap-2 mt-1">
-            {post.tags.slice(0, 4).map(tag => (
-              <span key={tag} className="text-xs" style={{ color: 'var(--text-dim)' }}>
-                #{tag.toLowerCase().replace(/\s+/g, '-')}
-              </span>
-            ))}
+            {post.tags.slice(0, 4).map(tag => {
+              const tagSlug = tag.toLowerCase().replace(/\s+/g, '-')
+              return (
+                <Link
+                  key={tag}
+                  href={`/${locale}/blog/tag/${encodeURIComponent(tagSlug)}`}
+                  className="text-xs hover:underline"
+                  style={{ color: 'var(--text-dim)' }}
+                >
+                  #{tagSlug}
+                </Link>
+              )
+            })}
           </div>
         )}
       </div>

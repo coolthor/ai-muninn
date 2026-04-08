@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@vercel/analytics": "^2.0.1",
+    "feed": "^5.2.0",
     "gray-matter": "^4.0.3",
     "next": "16.2.0",
     "next-intl": "^4.8.3",

@@ -14,6 +14,12 @@ export const metadata: Metadata = {
       'en': 'https://ai-muninn.com/en',
       'zh-TW': 'https://ai-muninn.com/zh-TW',
     },
+    types: {
+      'application/rss+xml': [
+        { url: '/en/feed.xml', title: 'ai-muninn (EN)' },
+        { url: '/zh-TW/feed.xml', title: 'ai-muninn (中文)' },
+      ],
+    },
   },
 }
 
@@ -63,6 +69,8 @@ export default async function LocaleLayout({
             <a href="https://www.linkedin.com/in/%E5%AD%90%E5%93%B2-%E6%9E%97-65300a9a/" target="_blank" rel="noopener noreferrer" className="hover:text-[var(--cyan)] transition-colors">linkedin</a>
             <span>·</span>
             <a href="https://bpstracker.com" target="_blank" rel="noopener noreferrer" className="hover:text-[var(--cyan)] transition-colors">bpstracker</a>
+            <span>·</span>
+            <a href={`/${locale}/feed.xml`} className="hover:text-[var(--cyan)] transition-colors">rss</a>
             <span>·</span>
             <span>built in public · {new Date().getFullYear()}</span>
           </footer>
