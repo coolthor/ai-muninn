@@ -2,13 +2,37 @@
 title: "[Benchmark] TurboQuant 實測：KV Cache 3-bit 壓縮，真的零損失？"
 description: "Google TurboQuant 在 GX10 (GB10/SM121) 上的實測數據 — 3-bit KV cache 壓縮的真實壓縮率、Qwen2.5-3B 精度驗證、以及 Qwen3.5-35B 的 hybrid attention 架構為什麼讓事情變得複雜。"
 date: "2026-03-30"
+updatedAt: "2026-03-30"
 tags: ["TurboQuant", "KV Cache", "Quantization", "vLLM", "Benchmark", "Qwen3.5", "GX10", "SM121"]
 series: "DGX Spark"
 part: 3
 locale: "zh-TW"
+faq:
+  - q: "TurboQuant 3-bit KV cache 壓縮真的不會損失精度嗎？"
+    a: "在 GB10 上用 Qwen2.5-3B-Instruct 測試，TurboQuant 3-bit 達到 5.0x 壓縮比，cosine similarity 0.9943，8K context 下 Top-1 match 80.6%。Needle-in-Haystack 在所有 bit 寬度（2/3/4-bit）都是 EXACT。QJL bias 校正消除了 MSE-only 量化的系統性偏差。品質隨 context 長度微幅下降（2K 時 0.9959，8K 時 0.9943）。"
+  - q: "TurboQuant 在 Qwen3.5-35B hybrid attention 模型上能省多少記憶體？"
+    a: "比 dense 模型少很多。Qwen3.5-35B-A3B 只有 10/40 層是 full attention（25%），每層只有 2 個 KV head。200K context 下，KV cache 在 fp16 約 2 GB、fp8 約 1 GB、TurboQuant 3-bit 約 400 MB——只省了 600 MB。純 dense 模型如 Llama-3.1-70B（80 層全是 full attention）才能接近論文宣稱的 6x 節省。"
+  - q: "TurboQuant 在 GB10（DGX Spark）上有速度優勢嗎？"
+    a: "目前沒有。社群 PyTorch 實作沒有 fused CUDA kernel——inner product 要 11ms，full-precision matmul 只要 0.02ms。論文的 8x 加速是在 H100 有優化 kernel 的情況下測的。記憶體節省在 GB10 上是真的；速度優勢要等 vLLM PR #38280 的上游 kernel 支援。"
+  - q: "TurboQuant 什麼時候可以在 vLLM production 環境使用？"
+    a: "截至 2026 年 3 月，vLLM PR #38280 仍在 review 中。合併後可以用 --kv-cache-dtype turboquant3 作為 server flag。llama.cpp 有社群 fork 但尚未合併到 main。官方實作預計 2026 年第二季。"
 ---
 
 <VideoEmbed src="/videos/turboquant-explainer.mp4" caption="TurboQuant 30 秒動畫說明：PolarQuant + QJL 兩階段壓縮" />
+
+<TLDRCard>
+Google TurboQuant 3-bit KV cache 壓縮在 GB10 上驗證通過：5.0x 壓縮、cosine sim 0.9943、Needle-in-Haystack EXACT。但目前沒有速度優勢（需要 fused kernel），且 Qwen3.5-35B 的 hybrid attention 只有 25% 的層受益——僅省 600 MB，遠低於論文對 dense 模型宣稱的 6x。
+</TLDRCard>
+
+## 白話版：壓縮 AI 的記憶體卻不損失品質
+
+AI 模型跟你對話時，需要記住整段對話歷史。這塊記憶體叫「KV cache」（鍵值快取），會隨著每條訊息成長。光是 8,000 個 token 的對話就要用掉 289 MB 的記憶體。拉長到長文件或複雜任務，瓶頸就不是 AI 的大腦，而是它的筆記本。
+
+[TurboQuant](https://research.google/blog/turboquant-redefining-ai-efficiency-with-extreme-compression/) 是 Google Research 在 ICLR 2026 發表的技術，宣稱可以把這塊記憶體壓縮 6 倍——每個值只用 3 bit 而不是通常的 16 bit，而且不損失回答品質。可以想成照片的 JPEG 壓縮：檔案小很多，但肉眼看不出差異。
+
+這篇在真實硬體——NVIDIA DGX Spark 桌上型 AI 電腦——上測試了這些宣稱。對標準 AI 模型來說，壓縮效果確實如論文所述。但對新一代的 hybrid 模型如 Qwen3.5-35B（本身就已經用了省記憶體的架構），節省幅度比標題數字暗示的小很多。數學是對的；效益取決於你跑的是什麼模型。
+
+---
 
 LLM 推理的記憶體瓶頸不在模型權重，在 KV cache。一個 8K context 的 Qwen2.5-3B，KV cache 就要 289MB，而且隨 context 線性增長。這個問題在長 context 推理和大模型上會放大到讓人難受的程度。
 

@@ -17,6 +17,17 @@ faq:
     a: "最常見原因是 JSON 語法錯誤——多餘的逗號或缺少大括號會讓重載失敗。Gateway 會把 parse error 記到 log 裡（不是靜默忽略）。檢查 /tmp/openclaw/gateway-stdout.log 是否有 parse error 訊息，修正 JSON 語法後再次儲存。"
 ---
 
+<TLDRCard>
+OpenClaw gateway 存檔即熱重載 `openclaw.json` — 不需要重啟。Bot token、模型端點、生成參數在 2 秒內生效。只有 port binding 和 launchd plist 變數才需要重啟。
+</TLDRCard>
+
+## 白話版：改設定不用再重啟你的 AI Agent
+
+如果你用過某個 app，改了設定結果要重啟整個程式才會生效，你知道那種煩躁感。現在想像你一天要改幾十次設定來調整 AI agent — 每次重啟 30 秒，每次都會打斷思路。
+
+OpenClaw 對它的設定檔內建了 [file watcher](https://nodejs.org/api/fs.html#fswatchfilename-options-listener)。存檔後，新設定兩秒內就生效。程式繼續跑、進行中的對話不中斷，你可以立刻驗證改動。30 秒迴圈和 2 秒迴圈之間的差距，在密集開發的時候會快速累積。
+
+---
 
 <VideoEmbed src="/videos/config-hot-reload.mp4" />
 ## 前言

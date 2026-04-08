@@ -17,6 +17,17 @@ faq:
     a: "任意非零整數。同一個 turn 內要用同一個 draftId 才能更新同一個泡泡。draftId 為 0 是無效值，sendMessageDraft 不會有任何反應。建議用 Math.ceil(Math.random() * 1e9) 每個 turn 生成。"
 ---
 
+<TLDRCard>
+把 `editMessageText` 輪詢換成 Telegram Bot API 9.5 的 `sendMessageDraft`，讓 openclaw 有真正的即時串流動畫。關鍵陷阱：`draftId` 不能為 0、`threadParams` 在私訊要用 optional chaining、GLM 模型要關掉 reasoning-parser。
+</TLDRCard>
+
+## 白話版：讓 AI 聊天機器人即時打字給你看
+
+你知道通訊 app 裡看到「正在輸入...」的感覺嗎？大部分 AI 聊天機器人沒有這個 — 它們靜默好幾秒，然後一口氣把整段回覆倒出來。像是在等信，而不是看人打字。
+
+[Telegram Bot API 9.5](https://core.telegram.org/bots/api) 加了一個叫 `sendMessageDraft` 的功能，讓 bot 可以顯示一個會持續更新的打字預覽動畫，新字到了就推上去。這篇記錄怎麼改 openclaw 來使用它，以及兩個會讓功能靜默壞掉的坑：一個在私訊裡是 undefined 的變數（會讓 bot crash），和一個把所有輸出路由到看不見的欄位的 reasoning-mode flag。
+
+---
 
 <VideoEmbed src="/videos/telegram-streaming.mp4" />
 ## 前言

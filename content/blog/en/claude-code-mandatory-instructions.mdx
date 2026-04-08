@@ -17,6 +17,17 @@ faq:
     a: "Attention mechanisms give higher weight to recent tokens. CLAUDE.md sits at the beginning of the context window. After hours of tool calls and conversation turns, the instruction is far back and deprioritized. The fix is to inject reminders at the point of use via hooks, not to write the instruction louder."
 ---
 
+<TLDRCard>
+Writing "MANDATORY" in CLAUDE.md does not make Claude Code follow the instruction reliably — Transformer attention deprioritizes tokens far back in context. The fix: PreToolUse hooks that inject reminders at the moment of relevance, structural friction, and short context windows.
+</TLDRCard>
+
+## Plain-Language Version: Why Shouting Instructions at AI Does Not Work
+
+Imagine a factory sign that says "WEAR GOGGLES - MANDATORY" in big letters. New employees follow it. Veterans who have walked past it a thousand times ignore it — not out of defiance, but because the sign has faded into background noise.
+
+AI models work the same way. Instructions loaded at the start of a long session lose influence as new content piles on top. This is called [recency bias](https://en.wikipedia.org/wiki/Recency_bias) in the context of Transformer attention — the model naturally pays more attention to what it just saw. The solution is not to write the instruction louder (caps, bold, underline). The solution is to show the instruction at the right moment — like a safety interlock that physically prevents the machine from starting until goggles are on.
+
+---
 
 <VideoEmbed src="/videos/mandatory-rules.mp4" />
 ## Preface

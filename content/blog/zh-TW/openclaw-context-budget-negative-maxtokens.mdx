@@ -17,6 +17,17 @@ faq:
     a: "設定 contextWindow: 131072、reserveTokens: 8192（model 輸出空間）、keepRecentTokens: 32768、maxHistoryShare: 0.5。reserveTokens 只需要涵蓋 model 輸出空間——不需要 buffer system prompt overhead，因為 overhead 已經在 131K 上限之內。"
 ---
 
+<TLDRCard>
+openclaw 的 `contextWindow` 設成 32K 但模型實際有 131K 時，context budget 計算出負數的 `max_tokens` — 靜默地觸發 400 error。修法：讓 `contextWindow` 和 vLLM 的 `--max-model-len` 完全一致，而且要用 camelCase（snake_case 會被靜默忽略）。
+</TLDRCard>
+
+## 白話版：當你的 AI 以為自己的記憶體比實際少
+
+想像你的車油表顯示 10 公升，但油箱其實裝得下 50 公升。導航系統根據油表數字計算路線，拒絕開始一段它認為油不夠的旅程 — 即使你油箱其實很滿。
+
+這裡發生的就是這樣。AI agent 的設定告訴它模型有 32K token 的 context window，但模型實際支援 131K。Agent 計算回應還剩多少空間，得到負數，模型回了一個 [400 error](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Status/400)。修法只有兩行：填對數字、用對 config key 名稱（camelCase 的 `contextWindow`，不是 snake_case 的 `context_window` — 後者會被靜默忽略）。
+
+---
 
 <VideoEmbed src="/videos/context-budget.mp4" />
 ## 前言

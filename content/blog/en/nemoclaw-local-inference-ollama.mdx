@@ -6,6 +6,15 @@ updatedAt: "2026-04-07"
 tags: ["NemoClaw", "OpenClaw", "OpenShell", "Ollama", "vLLM", "AI Agent", "NVIDIA", "GX10", "Local Inference"]
 series: "NemoClaw"
 part: 3
+faq:
+  - q: "How do I switch NemoClaw from NVIDIA cloud to a local Ollama model?"
+    a: "Edit ~/.nemoclaw/sandboxes/<name>/config.yaml and change three fields: set endpoint to 'http://localhost:11434/v1', set model to your Ollama model name (from 'ollama list'), and set api_key to 'ollama'. Then run 'nemoclaw <name> restart' to apply."
+  - q: "Where is NemoClaw's per-sandbox inference configuration file?"
+    a: "At ~/.nemoclaw/sandboxes/<sandbox-name>/config.yaml. This path is not documented in NemoClaw v0.1.0 — there is no 'nemoclaw config show' command. You need to list the directory after onboard to find it."
+  - q: "Is it safe to use an uncensored model with NemoClaw?"
+    a: "Yes, because NemoClaw's security operates at two independent layers. OpenShell enforces policy at the tool execution layer — filesystem access, tool allowlists — regardless of which model is running. An uncensored model removes content refusals (what the model says) but OpenShell still restricts agent actions (what the agent does). The two concerns are orthogonal."
+  - q: "What is the difference between using Ollama vs vLLM as NemoClaw's local inference backend?"
+    a: "Ollama is easier to set up, supports multiple models in memory, and swaps models quickly. vLLM gives lower time-to-first-token (~0.12s vs ~0.4s), cleaner handling of structured output and tool calls, and better thinking-mode support via --reasoning-parser. For single-model personal use, either works; for production behavior, vLLM is preferred."
 ---
 
 

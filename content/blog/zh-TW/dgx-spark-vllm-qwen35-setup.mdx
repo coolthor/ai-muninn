@@ -19,6 +19,21 @@ faq:
 
 
 <VideoEmbed src="/videos/vllm-qwen35.mp4" />
+
+<TLDRCard>
+在 DGX Spark（GB10）上將 Qwen3.5-35B 從 Ollama 遷移到 vLLM，透過 prefix caching 讓 TTFT 從 2-4 秒降到 0.12 秒，decode 速度維持 47 tok/s。關鍵地雷：`--enable-chunked-prefill` 對 SSM+MoE hybrid 模型會造成 9 倍 throughput 衰退（50 降到 5.7 tok/s）。
+</TLDRCard>
+
+## 白話版：為什麼換 AI 引擎很重要
+
+把 AI 模型想成一個廚師，服務軟體想成它工作的廚房。同一個廚師（模型）做出同品質的菜（回答），但一個有系統的廚房（[vLLM](https://github.com/vllm-project/vllm)）出餐速度就是比基本款廚房（[Ollama](https://ollama.com)）快。
+
+這裡具體改善的是「第一個字出來的時間」——你等多久 AI 才開始回答。用 Ollama 時，每次你問問題，AI 都要從頭重讀一遍它的完整指令手冊（system prompt），這要 2-4 秒。vLLM 會記住上次問題用過的指令手冊，所以 0.12 秒就開始回答。對人類閒聊來說，2 秒還好。但對一個每小時打幾十通電話的 AI agent 來說，這個差距會快速累積。
+
+這篇記錄了在 NVIDIA DGX Spark（一台有 128 GB 記憶體的桌上型 AI 電腦）上的遷移過程。遇到六個不明顯的問題，其中一個不小心讓 AI 慢了 9 倍。完整的可用設定和每個陷阱都記在這裡。
+
+---
+
 ## 前言
 
 從手工具換到流水線，做出來的東西沒有變，但每小時產量不同。輸出品質一樣，經濟效益不同。

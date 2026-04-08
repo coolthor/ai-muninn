@@ -17,6 +17,17 @@ faq:
     a: "在 4K-8K token 時量 throughput，不是在短 context。Agent session 到第 5-8 輪就會到達 4K-8K token。一個短 context 快但 8K 時衰退 25% 的模型，對 agent 工作負載的適合度遠不如稍慢但 scaling 平坦的模型。"
 ---
 
+<TLDRCard>
+純 MoE 模型（GLM-4.7-Flash）在 8K context 下損失 27% throughput（KV cache 增長），SSM hybrid（Qwen3.5-35B）則幾乎零衰退。為長駐 agent 選模型時，要在實際 context 長度下 benchmark，不是短 prompt。
+</TLDRCard>
+
+## 白話版：為什麼有些 AI 模型聊越久越慢
+
+想像兩個員工。一個每次回信之前都要從頭重讀整串 email — 串越長就越慢。另一個在腦中維護一份持續更新的摘要，不管串多長都一樣快。這就是傳統 [Transformer attention](https://en.wikipedia.org/wiki/Transformer_(deep_learning_architecture)) 和 [State Space Model（SSM）](https://en.wikipedia.org/wiki/State-space_representation)的差別。
+
+對一個整天運行、有長 system prompt 和多輪對話的 AI agent 來說，這個差距影響巨大。一個短 prompt 跑 58 tok/s 但實際對話長度下掉到 42 的模型，實戰中比一個穩穩 56 的模型還慢。這篇文章呈現 benchmark 數據並解釋原因 — 幫你為 agent 工作負載選對模型，而不只是看標題數字最漂亮的那個。
+
+---
 
 <VideoEmbed src="/videos/context-decay.mp4" />
 ## 前言

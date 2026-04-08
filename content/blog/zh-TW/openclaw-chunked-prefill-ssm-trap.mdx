@@ -17,6 +17,17 @@ faq:
     a: "吞吐量崩潰但 server 看起來正常（請求成功、沒有 error），先查 configuration flag，再查 model 和硬體。SSM 模型的第一個嫌疑是 --enable-chunked-prefill。同時也要確認沒有 Ollama 記憶體衝突，以及每個請求是否都帶了 enable_thinking: false。"
 ---
 
+<TLDRCard>
+在 SSM hybrid 模型（Qwen3.5-35B）上加 `--enable-chunked-prefill`，吞吐量從 47 tok/s 崩到 5.7 tok/s — 因為 SSM 遞迴層需要序列性的 state 傳遞，chunked 處理會摧毀這個流程。
+</TLDRCard>
+
+## 白話版：為什麼一個「加速」設定反而讓 AI 慢了 8 倍
+
+想像一條生產線。如果每個站的工作互不相干，你可以把工作切成批次平行處理 — 這就是 [chunked prefill](https://docs.vllm.ai/en/latest/performance/optimization.html) 對標準 AI 模型做的事。但有些較新的模型（叫 SSM hybrid）運作方式更像接力賽：每個站必須把棒子親手交給下一站。把接力賽切成段，選手花在傳棒子的時間比跑步還多。
+
+這裡發生的就是這樣。一個原本要改善 GPU 使用率的設定 flag，把快速的模型變成比 CPU 還慢。沒有錯誤訊息，沒有 crash — 模型只是靜靜地以八分之一的速度回應。如果你在用 [vLLM](https://github.com/vllm-project/vllm)，而且模型的架構裡有「SSM」、「Mamba」或「DeltaNet」，不要加這個 flag。
+
+---
 
 <VideoEmbed src="/videos/chunked-prefill-ssm.mp4" />
 ## 前言

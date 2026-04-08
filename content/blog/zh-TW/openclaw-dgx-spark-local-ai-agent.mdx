@@ -17,6 +17,17 @@ faq:
     a: "先用 Ollama——單一 binary、一條指令、GB10 開箱即用。先把 OpenClaw 接上去、測試工具、調整 system prompt。等 agent 穩定後，再遷移到 vLLM 獲得 prefix caching 的好處。不要先嘗試 SGLang——設定複雜度會佔用你需要用在 agent 迭代的時間。"
 ---
 
+<TLDRCard>
+零 API 成本的完整本地 AI agent 架構：Mac Mini M4 長駐跑 OpenClaw + SearXNG 當 gateway，GX10（DGX Spark）負責 GPU 推理，Telegram 當介面。六個實戰部署心得。
+</TLDRCard>
+
+## 白話版：在家跑自己的 AI 助理 — 不用月費
+
+雲端 AI 服務按訊息或月費收費。如果你可以在自己已有的硬體上跑 AI 助理，完全不需要持續付費呢？
+
+這個架構就是這樣做的。一台低功耗的 Mac Mini 24/7 開著當「大腦」— 負責路由、工具呼叫和網路搜尋。另一台 GPU 機器（NVIDIA DGX Spark）在需要的時候負責重度運算。兩台透過 [Tailscale](https://tailscale.com/)（一個不需要對外開放的私有網路）連線。你透過 Telegram 跟 agent 說話，就像傳訊息給朋友一樣。結果就是一個永遠在線的 AI 助理，初始硬體投入之後，每則訊息零成本。
+
+---
 
 <VideoEmbed src="/videos/local-ai-arch.mp4" />
 ## 前言

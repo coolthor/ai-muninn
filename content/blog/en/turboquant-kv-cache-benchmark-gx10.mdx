@@ -2,13 +2,37 @@
 title: "[Benchmark] TurboQuant on GX10: Is 3-bit KV Cache Compression Actually Lossless?"
 description: "Real benchmark numbers for Google's TurboQuant on a GB10/SM121 (DGX Spark) — actual compression ratios, Qwen2.5-3B accuracy validation, and why Qwen3.5-35B's hybrid attention architecture makes things complicated."
 date: "2026-03-30"
+updatedAt: "2026-03-30"
 tags: ["TurboQuant", "KV Cache", "Quantization", "vLLM", "Benchmark", "Qwen3.5", "GX10", "SM121"]
 series: "DGX Spark"
 part: 3
 locale: "en"
+faq:
+  - q: "Does TurboQuant 3-bit KV cache compression actually work without accuracy loss?"
+    a: "On GB10 with Qwen2.5-3B-Instruct, TurboQuant 3-bit achieves 5.0x compression with cosine similarity 0.9943 and 80.6% Top-1 match at 8K context. Needle-in-Haystack retrieval is EXACT at all bit widths (2/3/4-bit). The QJL bias correction eliminates systematic bias that MSE-only quantization introduces. Quality degrades slightly with longer context (0.9959 at 2K vs 0.9943 at 8K)."
+  - q: "How much memory does TurboQuant save on Qwen3.5-35B hybrid attention models?"
+    a: "Much less than for dense models. Qwen3.5-35B-A3B has only 10/40 layers with full attention (25%), each with just 2 KV heads. At 200K context, KV cache is ~2 GB in fp16, ~1 GB with fp8, and ~400 MB with TurboQuant 3-bit — saving only 600 MB. Dense models like Llama-3.1-70B with all 80 layers in full attention would see close to the paper's claimed 6x savings."
+  - q: "Is TurboQuant faster than standard KV cache on GB10 (DGX Spark)?"
+    a: "No, not currently. The community PyTorch implementation has no fused CUDA kernel — inner product takes 11ms vs 0.02ms for full-precision matmul. The paper's 8x speedup was measured on H100 with optimized kernels. Memory savings are real on GB10; speed gains require upstream kernel support, expected with vLLM PR #38280."
+  - q: "When will TurboQuant be usable in production with vLLM?"
+    a: "vLLM PR #38280 is under review as of March 2026. Once merged, it would enable --kv-cache-dtype turboquant3 as a server flag. llama.cpp has community forks but nothing merged to main. Official implementation expected Q2 2026."
 ---
 
 <VideoEmbed src="/videos/turboquant-explainer.mp4" caption="TurboQuant in 30 seconds: PolarQuant + QJL two-stage compression" />
+
+<TLDRCard>
+Google's TurboQuant 3-bit KV cache compression validates on GB10: 5.0x compression, cosine sim 0.9943, Needle-in-Haystack EXACT. But no speed gain yet (needs fused kernels), and Qwen3.5-35B's hybrid attention means only 25% of layers benefit — saving just 600 MB vs the paper's claimed 6x for dense models.
+</TLDRCard>
+
+## Plain-Language Version: Compressing AI Memory Without Losing Quality
+
+When an AI model has a conversation with you, it needs to remember the entire conversation history. This memory is called the "KV cache" (Key-Value cache), and it grows with every message. A single conversation with 8,000 tokens already uses 289 MB of memory. Scale that to long documents or complex tasks, and memory becomes the bottleneck — not the AI's brain, but its notepad.
+
+[TurboQuant](https://research.google/blog/turboquant-redefining-ai-efficiency-with-extreme-compression/), published by Google Research at ICLR 2026, claims to compress this memory by 6x using just 3 bits per value instead of the usual 16, with no loss in answer quality. Think of it like JPEG compression for photos: the file gets much smaller, but you can't tell the difference by looking at it.
+
+This article tests those claims on real hardware — an NVIDIA DGX Spark desktop AI computer. The compression works as advertised for standard AI models. But for newer hybrid models like Qwen3.5-35B (which already use memory-efficient architectures), the savings are much smaller than the headline number suggests. The math works; the benefit depends on what you're running.
+
+---
 
 The memory bottleneck in LLM inference isn't the model weights — it's the KV cache. An 8K-context Qwen2.5-3B already needs 289MB for KV alone, and it scales linearly. At long contexts or with large models, this becomes genuinely painful.
 

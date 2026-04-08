@@ -17,6 +17,17 @@ faq:
     a: "Attention 機制給越近的 token 越高的權重。CLAUDE.md 放在 context window 的開頭，幾小時的工具呼叫和對話 turn 之後，這條指令已經被推到很遠的位置而被降權。修法是透過 hook 在使用時注入提醒，而不是把指令寫得更大聲。"
 ---
 
+<TLDRCard>
+在 CLAUDE.md 裡寫「MANDATORY」不會讓 Claude Code 確實遵守 — Transformer attention 會降權距離遠的 token。真正有效的方法：PreToolUse hook 在關鍵時刻注入提醒、結構性摩擦、以及短 context window。
+</TLDRCard>
+
+## 白話版：為什麼對 AI 大聲喊指令沒有用
+
+想像工廠牆上掛了一塊大牌子：「配戴護目鏡 — 強制規定」。新員工會照做。每天經過這塊牌子一千次的老鳥直接無視 — 不是反抗，而是那塊牌子已經變成背景雜訊了。
+
+AI 模型也是同樣的運作方式。在長 session 開頭載入的指令，隨著新內容不斷堆疊，影響力會下降。這在 Transformer attention 的背景下叫做 [recency bias](https://en.wikipedia.org/wiki/Recency_bias) — 模型自然會更注意它剛看到的東西。解法不是把指令寫得更大聲（大寫、粗體、底線）。解法是在正確的時機出示指令 — 就像安全連鎖裝置，不戴護目鏡機器就不能啟動。
+
+---
 
 <VideoEmbed src="/videos/mandatory-rules.mp4" />
 ## 前言

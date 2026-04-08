@@ -45,7 +45,7 @@ AI 模型有四種主流架構：**Dense**（全員出動，穩但慢）、**MoE
 
 ## Dense — 全員出動
 
-Dense（密集）是最直覺的架構。模型裡的每一個參數，在每一次回答時都會被用到。
+Dense（密集）是最直覺的架構，基於標準的 [Transformer](https://en.wikipedia.org/wiki/Transformer_(deep_learning_architecture)) 設計。模型裡的每一個參數，在每一次回答時都會被用到。
 
 ### 像什麼？
 
@@ -75,7 +75,7 @@ Dense（密集）是最直覺的架構。模型裡的每一個參數，在每一
 
 ## MoE — 專家輪班
 
-MoE（Mixture of Experts，混合專家）是目前最流行的「作弊」方式 — 模型很大，但每次只用一小部分。
+[MoE（Mixture of Experts，混合專家）](https://en.wikipedia.org/wiki/Mixture_of_experts)是目前最流行的「作弊」方式 — 模型很大，但每次只用一小部分。
 
 ### 像什麼？
 

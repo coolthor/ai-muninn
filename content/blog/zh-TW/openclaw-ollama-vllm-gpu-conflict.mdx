@@ -17,6 +17,17 @@ faq:
     a: "應該。在 systemd override 裡設 OLLAMA_KEEP_ALIVE=0。代價是每次 Ollama request 都要等 15-25 秒的 cold load。只有在 Ollama 是唯一 model server 的情況下，才應該保持 KEEP_ALIVE=2h。"
 ---
 
+<TLDRCard>
+128GB 的機器 vLLM 重啟時 OOM，原因是 Ollama 的 `KEEP_ALIVE=2h` 靜靜地佔住了 19-51GB GPU 記憶體。修法：vLLM 重啟前一律跑 `curl localhost:11434/api/ps` 確認，vLLM 成為主力後把 `KEEP_ALIVE` 改成 0。
+</TLDRCard>
+
+## 白話版：兩個 AI 程式搶同一塊記憶體
+
+想像一個有 128 個車位的停車場。你到了之後看板寫「已滿」— 但環顧四周，有 40 台車早就辦完事了。沒人叫它們走，所以就這樣停著。
+
+[Ollama](https://ollama.com/) 和 [vLLM](https://github.com/vllm-project/vllm) 共用 GPU 記憶體時就是這樣。Ollama 預設會把上次用過的模型留在記憶體裡兩小時（`KEEP_ALIVE` 設定），即使沒人在用。當 vLLM 嘗試啟動，空間不夠 — 錯誤訊息只說「記憶體不足」，完全沒提是 Ollama 在佔位。修法就是在啟動 vLLM 之前，用一行 API call 把停著的模型趕出去。
+
+---
 
 <VideoEmbed src="/videos/gpu-conflict.mp4" />
 ## 前言

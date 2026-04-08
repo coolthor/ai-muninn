@@ -17,6 +17,17 @@ faq:
     a: "使用 Fastlane：capture_ios_screenshots 負責多裝置、多語言截圖，deliver 負責 metadata 和 binary 上傳。Claude 可以直接透過 Bash 呼叫 Fastlane lane。在 CLAUDE.md 加入 max_retries: 0 的規定，並要求在任何重試前必須先讀取錯誤輸出，防止無限迴圈。"
 ---
 
+<TLDRCard>
+把 iOS 測試從截圖優先改成 `ui_describe_all` 優先，Claude Code 的 context 用量從 81,290 KB 降到 15,215 KB — 砍掉 81%，測試更快也更穩定。外加 Fastlane 整合自動化 App Store 截圖和上傳。
+</TLDRCard>
+
+## 白話版：教 AI 用「讀」的測 App，不用「看」的
+
+想像認識一棟建築，是每個房間拍一張照比較快，還是直接看門上的標示牌？照片給你的資訊一樣，但處理成本貴 10 倍。這就是 Claude Code 用截圖測試 iOS app 時在做的事 — 每張圖片消耗的「記憶體」（context）遠超過文字描述。
+
+修法：大部分檢查改用 [accessibility 描述](https://developer.apple.com/documentation/accessibility)取代截圖。iOS Simulator MCP 的 `ui_describe_all` 工具把整個畫面狀態以文字回傳 — 按鈕標籤、數值、啟用狀態 — context 成本只有截圖的零頭。截圖只在需要確認視覺 layout 時才用。「儲存按鈕有沒有出現？」「價格欄位顯示的數字對不對？」這類問題，文字比圖片更快、更便宜、更可靠。
+
+---
 
 <VideoEmbed src="/videos/ios-context-saving.mp4" />
 ## 前言

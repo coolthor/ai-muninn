@@ -17,6 +17,17 @@ faq:
     a: "Use mcp__pal__clink with absolute_file_paths set for each model call. Codex reads all provided files before engaging; Gemini reasons about architecture from them. Pass continuation_id on follow-up calls to maintain context without re-uploading files."
 ---
 
+<TLDRCard>
+A `/debate` command routes the same prompt to Codex CLI and Gemini CLI in parallel, then synthesizes where they agree and disagree. Disagreements between models trained on different data reveal genuine uncertainty that a single reviewer misses.
+</TLDRCard>
+
+## Plain-Language Version: Getting a Second Opinion from a Different AI
+
+When you ask one doctor for advice, you get one perspective shaped by their training and experience. A second doctor with different training might disagree — and that disagreement is often the most valuable information, because it shows you where the answer is genuinely uncertain.
+
+This `/debate` command does the same thing with AI models. It sends your question to both [Codex CLI](https://github.com/openai/codex) (OpenAI, strong on code details) and [Gemini CLI](https://github.com/google-gemini/gemini-cli) (Google, strong on architecture) simultaneously. Where they agree, you can be more confident. Where they disagree, you know to look closer. It is not about which model is "better" — it is about using their different blind spots to triangulate a more reliable answer.
+
+---
 
 <VideoEmbed src="/videos/ai-debate.mp4" />
 ## Preface

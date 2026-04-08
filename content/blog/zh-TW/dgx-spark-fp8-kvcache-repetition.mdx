@@ -19,6 +19,21 @@ faq:
 
 
 <VideoEmbed src="/videos/fp8-kvcache-bug.mp4" />
+
+<TLDRCard>
+在 GB10 上沒有 calibration data 的情況下加 `--kv-cache-dtype fp8`，vLLM 的輸出會在約 500 token 後崩成重複迴圈。Startup log 警告 `q_scale=1.0`——代表 FP8 量化在沒有校準的狀態下運行。修法：拿掉這個 flag，用 BF16 KV cache。GB10 有 128GB unified memory，VRAM 不是瓶頸，FP8 KV cache 根本沒必要用。
+</TLDRCard>
+
+## 白話版：為什麼 AI 輸出寫到 500 字就壞掉
+
+AI 模型在生成文字的時候，需要記住它已經寫過的所有東西——這塊記憶叫做「KV cache」。在記憶體比較小的機器上，工程師會用一種叫 FP8（8-bit 浮點數）的格式壓縮這塊記憶，讓同樣的空間可以塞進更多對話。可以想成是照片的 JPEG 壓縮：檔案變小了，但細節會損失。
+
+問題是，這種壓縮需要針對每個模型做校準——像是收音機要調到正確的頻率。沒有校準的話，壓縮用的是一個通用設定，短回覆沒問題，但長輸出時會悄悄地讓記憶出錯。大概到第 500 個字的時候，AI 的記憶已經偏移到它開始重複自己，陷入迴圈。
+
+在 [NVIDIA DGX Spark](https://www.nvidia.com/en-us/products/workstations/dgx-spark/)（GB10 晶片、128GB 記憶體）上，這種壓縮根本不需要——記憶體大到不壓縮也放得下。修法就是把壓縮的 flag 關掉。這篇文章解釋根本原因、怎麼從 server log 發現問題、以及為什麼這個優化不適用於這台硬體。
+
+---
+
 ## 前言
 
 優化有前提條件。前提條件沒滿足，你得到的不是比較差的優化——你得到的是看起來有效、然後在第 500 個 token 悄悄崩潰的東西。

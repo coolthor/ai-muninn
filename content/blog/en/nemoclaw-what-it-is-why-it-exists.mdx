@@ -6,6 +6,15 @@ updatedAt: "2026-04-07"
 tags: ["NemoClaw", "OpenClaw", "OpenShell", "AI Agent", "NVIDIA", "DGX Spark", "GX10"]
 series: "NemoClaw"
 part: 1
+faq:
+  - q: "What is NemoClaw and how is it different from OpenClaw?"
+    a: "NemoClaw is NVIDIA's all-in-one AI agent framework announced at GTC 2026 (v0.1.0). It bundles OpenClaw (the open-source agent runtime), OpenShell (a security sandbox that enforces filesystem and tool restrictions at the gateway level), and the NVIDIA Agent Toolkit. The key difference from standalone OpenClaw is OpenShell — without it, OpenClaw has no security boundary."
+  - q: "What does OpenShell do in NemoClaw?"
+    a: "OpenShell is a security sandbox layer that runs as a separate process (port 8080 by default) between the user and the OpenClaw agent core. It intercepts all agent-initiated tool calls and enforces policy: file system access is scoped to /sandbox and /tmp, and only allowlisted commands can execute. The agent cannot bypass or negotiate these restrictions."
+  - q: "Can NemoClaw run with a local model instead of NVIDIA's cloud?"
+    a: "Yes. NemoClaw's inference backend accepts any OpenAI-compatible API endpoint. While it defaults to Nemotron cloud (which requires a paid NVIDIA account), you can point it at a local vLLM or Ollama instance by editing the per-sandbox config.yaml file."
+  - q: "Is NemoClaw open source?"
+    a: "Yes. NemoClaw, OpenClaw, and OpenShell are all open source. OpenClaw was open source before NemoClaw existed. NemoClaw packages them together with NVIDIA Agent Toolkit integrations and onboarding tooling."
 ---
 
 
@@ -32,7 +41,7 @@ I installed NemoClaw on my NVIDIA DGX Spark (a desktop AI workstation) and ran i
 
 NemoClaw is a composition of three things:
 
-1. **OpenClaw** — the open-source AI agent framework. It handles the agent loop: tool calls, reasoning, memory, conversation context. If you've used it, it feels similar to LangGraph or AutoGen but with a focus on local/private inference.
+1. **[OpenClaw](https://github.com/NVIDIA/OpenClaw)** — the open-source AI agent framework. It handles the agent loop: tool calls, reasoning, memory, conversation context. If you've used it, it feels similar to LangGraph or AutoGen but with a focus on local/private inference.
 
 2. **OpenShell** — a security sandbox layer that sits in front of OpenClaw. It runs as a separate process (port 8080 by default) and intercepts all agent-initiated tool calls. File system access is scoped to `/sandbox` and `/tmp`. Commands that aren't in the policy allowlist are blocked before they reach the agent core.
 

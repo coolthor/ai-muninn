@@ -19,6 +19,21 @@ faq:
 
 
 <VideoEmbed src="/videos/fp8-kvcache-bug.mp4" />
+
+<TLDRCard>
+Adding `--kv-cache-dtype fp8` to vLLM on GB10 without calibration data causes outputs to collapse into repetition loops after ~500 tokens. The startup log warns `q_scale=1.0` — meaning FP8 quantization is running uncalibrated. Fix: remove the flag and use BF16 KV cache. On GB10 with 128GB unified memory, VRAM is not the constraint, so FP8 KV cache is unnecessary.
+</TLDRCard>
+
+## Plain-Language Version: Why AI Output Breaks After 500 Words
+
+When an AI model generates text, it needs to remember everything it has already written — this memory is called the "KV cache." On machines with limited memory, engineers compress this cache using a format called FP8 (8-bit floating point) to fit more conversation into less space. Think of it like JPEG compression for photos: smaller file, but some detail is lost.
+
+The problem is that this compression needs to be calibrated for each specific model — like tuning a radio to the right frequency. Without calibration, the compression uses a generic setting that works okay for short responses but silently corrupts the memory over longer outputs. Around 500 words in, the AI's memory has drifted so far that it starts repeating itself in a loop.
+
+On the [NVIDIA DGX Spark](https://www.nvidia.com/en-us/products/workstations/dgx-spark/) (GB10 chip, 128GB memory), this compression is unnecessary anyway — there is more than enough memory to store the cache uncompressed. The fix is simply to turn off the compression flag. This article explains the root cause, how to spot it in the server logs, and why it does not apply to this hardware.
+
+---
+
 ## Preface
 
 Optimization has a prerequisite condition. When the condition isn't met, you don't get a worse version of the optimization — you get something that looks like it worked and then quietly fails at output token 500.

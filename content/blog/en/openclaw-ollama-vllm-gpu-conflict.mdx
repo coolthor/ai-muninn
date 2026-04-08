@@ -17,6 +17,17 @@ faq:
     a: "Yes, if vLLM is your primary serving path. Set OLLAMA_KEEP_ALIVE=0 in the systemd override. The tradeoff: every Ollama request incurs a 15-25 second cold load. Keep KEEP_ALIVE=2h only if Ollama is your only model server."
 ---
 
+<TLDRCard>
+vLLM OOMed on a 128GB machine because Ollama's `KEEP_ALIVE=2h` was silently holding 19-51GB of GPU memory from a previous session. The fix: always run `curl localhost:11434/api/ps` before vLLM restarts, and set `KEEP_ALIVE=0` once vLLM is your primary stack.
+</TLDRCard>
+
+## Plain-Language Version: When Two AI Programs Fight Over the Same Memory
+
+Picture a parking lot with 128 spaces. You arrive and the sign says "FULL" — but looking around, 40 of those cars finished their errands hours ago. Nobody told them to leave, so they are just sitting there.
+
+That is what happens when [Ollama](https://ollama.com/) and [vLLM](https://github.com/vllm-project/vllm) share the same GPU memory. Ollama keeps its last-used model loaded for two hours by default (the `KEEP_ALIVE` setting), even if nothing is using it. When vLLM tries to start, there is not enough room — and the error message just says "out of memory" without mentioning that Ollama is the one hogging it. The fix is a one-line API call to evict the parked model before starting vLLM.
+
+---
 
 <VideoEmbed src="/videos/gpu-conflict.mp4" />
 ## Preface

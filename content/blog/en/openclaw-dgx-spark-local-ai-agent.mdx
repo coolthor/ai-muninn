@@ -17,6 +17,17 @@ faq:
     a: "Start with Ollama — single binary, one command, works on GB10 out of the box. Connect OpenClaw, test tools, tune the system prompt. Once the agent is stable, migrate to vLLM for prefix caching. Don't try SGLang first — setup complexity will consume the time you need for agent iteration."
 ---
 
+<TLDRCard>
+A full local AI agent stack with zero API cost: Mac Mini M4 as always-on gateway running OpenClaw + SearXNG, GX10 (DGX Spark) for GPU inference via Tailscnet. Telegram as the UI. Six deployment lessons from building it.
+</TLDRCard>
+
+## Plain-Language Version: Running Your Own AI Assistant at Home — No Monthly Bills
+
+Cloud AI services charge per message or per month. What if you could run your own AI assistant on hardware you already own, with no ongoing cost?
+
+That is what this setup does. A low-power Mac Mini stays on 24/7 as the "brain" — it handles routing, tools, and web search. A separate GPU machine (NVIDIA DGX Spark) does the heavy thinking when asked. They talk over [Tailscale](https://tailscale.com/), a private network that connects your machines without exposing them to the internet. You talk to the agent through Telegram, just like messaging a friend. The result is an always-on AI assistant that costs nothing per message after the initial hardware investment.
+
+---
 
 <VideoEmbed src="/videos/local-ai-arch.mp4" />
 ## Preface

@@ -19,6 +19,21 @@ faq:
 
 
 <VideoEmbed src="/videos/nemotron-120b-debug.mp4" />
+
+<TLDRCard>
+Nemotron-3-Super-120B-NVFP4 在單顆 GB10（DGX Spark，SM121）上跑到 13-16 tok/s，使用約 108 GB 的 128 GB unified memory。必須用 stable vLLM image（v0.17.1-cu130，不是 nightly）、`--moe-backend marlin` CLI flag，以及三個 NVFP4 專屬環境變數。五個 SM121 專屬坑和完整可用的 docker 指令。
+</TLDRCard>
+
+## 白話版：在桌上型電腦跑 1200 億參數的 AI
+
+想像你買了一顆專為賽道設計的跑車引擎，然後裝進你的日常代步車。引擎勉強裝得下，但車上的電腦不認這顆引擎的變體，每個感測器、燃油映射和點火參數都需要手動調整。
+
+在 NVIDIA DGX Spark 上跑 [Nemotron-3-Super-120B](https://huggingface.co/nvidia/Nemotron-3-Super-120B-Instruct-NVFP4) 就是這種感覺。DGX Spark 是一台桌上型 AI 電腦，有 128 GB 的共用記憶體。Nemotron 是 NVIDIA 自家的 1200 億參數推理模型——它能分析複雜問題、寫程式、做多步驟邏輯推理。108 GB 的體積幾乎填滿整台機器的記憶體，只留下剛好夠用的空間讓 AI「記住」對話上下文。
+
+問題在於：DGX Spark 用的是 GB10 晶片（內部代號 SM121），跟大多數 AI 軟體針對的資料中心晶片（SM100/SM120）有微妙的不同。軟體不會當掉——它只是靜默地做錯事。這篇記錄了整整一天除錯中遇到的五個具體陷阱，並附上最終可用的完整指令。如果你在 DGX Spark 上跑大型 AI 模型，這些修正都適用。
+
+---
+
 ## 前言
 
 同一座工廠，不同的生產線。GB10 和 B200 都是 Blackwell。它們共享製程、共享行銷家族，但在 kernel 層面幾乎沒有相容性。讓某個 model 在 SM121 上跑起來，不代表下一個 model 能用同樣的方式跑——甚至不代表能跑。

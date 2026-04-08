@@ -19,6 +19,23 @@ faq:
 
 
 <VideoEmbed src="/videos/ollama-benchmark.mp4" />
+
+<TLDRCard>
+Benchmarked 8 LLMs on DGX Spark (GB10, 128 GB) across 7 task categories. Best agent stack: qwen3-coder-next q4_K_M at 47 tok/s (primary) + qwen3-vl:30b at 19 GB (vision), using only 71 GB combined. gpt-oss 120B failed tool calling with invalid JSON despite being 3x larger. q4 vs q8 quality difference was nearly invisible.
+</TLDRCard>
+
+## Plain-Language Version: Choosing the Right AI Brain for Your Desktop
+
+When you run AI models on your own computer instead of paying for cloud services like ChatGPT, you face a choice: which model should you actually use? There are hundreds of open-source AI models available, each with different strengths, sizes, and speeds. Picking the wrong one wastes your hardware.
+
+This benchmark tested eight different AI models on an [NVIDIA DGX Spark](https://www.nvidia.com/en-us/products/dgx/spark/) — a desktop computer with 128 GB of shared memory designed for AI workloads. Each model was tested on seven real tasks: logic puzzles, writing code, translating between languages, math, summarizing documents, finding bugs, and calling external tools (like searching the web or reading files).
+
+The key finding: a smaller, well-tuned 32-billion-parameter model beat a 120-billion-parameter model on the most critical task — generating structured data that software can read. The bigger model couldn't reliably produce valid JSON, which is like a translator who speaks fluently but can't fill out a standard form correctly. Size isn't everything in AI — training focus matters more.
+
+For a deeper look at how [Ollama](https://ollama.com) (the tool used to run these models) works, see the official documentation.
+
+---
+
 ## Preface
 
 Before any quest, you choose your weapons. Not all weapons suit all fights — and you don't find that out until after the first dungeon, when the sword you thought was general-purpose turns out to melt on contact with acid.

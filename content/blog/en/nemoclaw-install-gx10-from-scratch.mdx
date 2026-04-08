@@ -6,6 +6,15 @@ updatedAt: "2026-03-23"
 tags: ["NemoClaw", "OpenClaw", "OpenShell", "AI Agent", "NVIDIA", "DGX Spark", "GX10", "GB10"]
 series: "NemoClaw"
 part: 2
+faq:
+  - q: "Why does the NemoClaw installer fail on DGX Spark / GX10?"
+    a: "The installer fails for four reasons not covered in official docs: Node.js must be v20+ (GX10 ships with v18), npm link needs sudo on system-managed Node, the OpenShell binary URL in the docs returns 404 (the actual release is a tar.gz), and Ubuntu 24.04's cgroup v2 requires adding cgroupns=host to Docker daemon.json before onboard."
+  - q: "How do I install OpenShell on aarch64 Linux for NemoClaw?"
+    a: "Download the tar.gz from GitHub releases (not the binary URL in the docs, which 404s). For aarch64: curl the openshell-aarch64-unknown-linux-musl.tar.gz from the latest release, extract it, and move the binary to /usr/local/bin/openshell. For x86_64, use the x86_64-unknown-linux-musl variant."
+  - q: "What is the 'Exec format error' when running openshell on Linux?"
+    a: "This usually means the download failed silently — curl saved an HTML error page (404 response) instead of the actual binary. Run 'file openshell' to check: it will show 'ASCII text' instead of 'ELF'. Re-download from the correct GitHub release URL (tar.gz format)."
+  - q: "How do I fix the cgroup v2 error during NemoClaw onboard?"
+    a: "Ubuntu 24.04 uses cgroup v2 by default, but OpenShell's internal k3s expects cgroup v1 paths. Add '\"default-cgroupns-mode\": \"host\"' to /etc/docker/daemon.json and restart Docker. Verify with 'stat -fc %T /sys/fs/cgroup/' — if it shows 'cgroup2fs', the fix is needed."
 ---
 
 
@@ -24,6 +33,16 @@ Environment going in:
 <TLDRCard>
 NemoClaw on GX10 (GB10/SM121) needs four fixes that aren't in the official docs: upgrade Node.js to v22, manually run `sudo npm link` after the installer, install OpenShell from the tar.gz release (not the binary URL in the docs — that 404s), and add `cgroupns=host` to Docker daemon.json before onboard. After those, `nemoclaw setup-spark` and `NEMOCLAW_NON_INTERACTIVE=1 nemoclaw onboard` complete cleanly.
 </TLDRCard>
+
+## Plain-Language Version: Installing AI Agent Software on Unusual Hardware
+
+Installing software on a computer usually means clicking "Download" and following the prompts. On specialized AI hardware like the [NVIDIA DGX Spark](https://www.nvidia.com/en-us/products/workstations/dgx-spark/) (or the ASUS GX10, which uses the same chip), it is not that simple. The machine runs Linux, uses an ARM processor instead of the Intel/AMD chip in most PCs, and ships with older versions of some tools.
+
+NemoClaw is NVIDIA's AI agent framework — software that lets an AI assistant run on your machine, read files, and execute tasks. The official install guide assumes you are on a standard setup. On the GX10, four things go wrong that the guide does not mention: the pre-installed Node.js is too old, a file permission step fails silently, a download link in the documentation is broken, and a Linux container setting needs to be changed.
+
+None of these are hard to fix once you know about them. This article walks through each one in order, with the exact commands. Total time from a blank GX10 to a running AI agent sandbox: about 30 minutes.
+
+---
 
 ## Step 1: Upgrade Node.js to v22
 

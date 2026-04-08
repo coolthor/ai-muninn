@@ -19,6 +19,21 @@ faq:
 
 
 <VideoEmbed src="/videos/vllm-qwen35.mp4" />
+
+<TLDRCard>
+Migrating Qwen3.5-35B from Ollama to vLLM on DGX Spark (GB10) dropped TTFT from 2-4s to 0.12s via prefix caching, while maintaining 47 tok/s decode speed. Critical gotcha: `--enable-chunked-prefill` causes a 9x throughput regression (50 to 5.7 tok/s) on SSM+MoE hybrid models.
+</TLDRCard>
+
+## Plain-Language Version: Why Switching AI Engines Matters
+
+Think of an AI model like a chef, and the serving software like the kitchen it works in. The same chef (model) can produce the same quality food (answers), but a well-organized kitchen (vLLM) gets orders out faster than a basic one ([Ollama](https://ollama.com)).
+
+The specific improvement here is "time to first token" — how long you wait before the AI starts responding. With Ollama, every time you ask a question, the AI re-reads its entire instruction manual (system prompt) from scratch. That takes 2-4 seconds. [vLLM](https://github.com/vllm-project/vllm) remembers the instruction manual from the last question, so it starts answering in 0.12 seconds. For a human chatting casually, 2 seconds is fine. For an AI agent that makes dozens of calls per hour, that difference adds up fast.
+
+This article covers the migration on an NVIDIA DGX Spark — a desktop AI computer with 128 GB of memory. Six non-obvious problems were encountered, including one that accidentally slowed the AI by 9x. The working configuration and every trap are documented here.
+
+---
+
 ## Preface
 
 Switching from hand tools to a conveyor belt doesn't change what you're making — it changes how many you make per hour. The output quality is the same. The economics are different.

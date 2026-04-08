@@ -19,6 +19,21 @@ faq:
 
 
 <VideoEmbed src="/videos/nemotron-120b-debug.mp4" />
+
+<TLDRCard>
+Nemotron-3-Super-120B-NVFP4 runs at 13-16 tok/s on a single GB10 (DGX Spark, SM121) using ~108 GB of the 128 GB unified memory. Requires stable vLLM image (v0.17.1-cu130, not nightly), `--moe-backend marlin` CLI flag, and three NVFP4-specific env vars. Five SM121-specific pitfalls documented with a working docker command.
+</TLDRCard>
+
+## Plain-Language Version: Running a 120-Billion-Parameter AI on a Desktop
+
+Imagine buying a sports car engine designed for a race track, then installing it in your daily driver. The engine fits — barely — but every sensor, fuel map, and timing parameter needs manual adjustment because the car's computer doesn't recognize this specific engine variant.
+
+That's what running [Nemotron-3-Super-120B](https://huggingface.co/nvidia/Nemotron-3-Super-120B-Instruct-NVFP4) on an NVIDIA DGX Spark looks like. The DGX Spark is a desktop-sized AI computer with 128 GB of shared memory. Nemotron is NVIDIA's own 120-billion-parameter reasoning model — it can analyze complex problems, write code, and think through multi-step logic. At 108 GB, it fills almost the entire machine's memory, leaving just enough room for the AI to "remember" the conversation context.
+
+The catch: the DGX Spark uses a chip called GB10 (internally labeled SM121), which is subtly different from the data center chips (SM100/SM120) that most AI software targets. The software doesn't crash — it just silently does the wrong thing. This article documents five specific traps encountered during a full day of debugging, and provides the exact command that makes it work. If you're running large AI models on DGX Spark hardware, these fixes apply to you.
+
+---
+
 ## Preface
 
 Same factory, different assembly line. GB10 and B200 are both Blackwell. They share a manufacturing process, a marketing family, and almost no kernel-level compatibility. Getting one model working on SM121 does not mean the next one works the same way — or at all.

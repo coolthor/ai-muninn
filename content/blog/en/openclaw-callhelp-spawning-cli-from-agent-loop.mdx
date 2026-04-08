@@ -17,6 +17,17 @@ faq:
     a: "Tasks where the agent recognizes a gap: code generation where it's uncertain about correctness, debugging an error it hasn't seen before, or domains it's less confident in. The agent decides — callhelp is just a tool available in the loop, not a routing rule."
 ---
 
+<TLDRCard>
+When a local AI agent hits its ceiling, let it spawn Codex CLI as a subprocess mid-reasoning with `--full-auto -q`. The agent decides when to call for help, and the result comes back as a tool response — keeping your Claude quota untouched.
+</TLDRCard>
+
+## Plain-Language Version: What If Your AI Assistant Could Ask a Smarter AI for Help?
+
+Imagine you have a personal assistant who handles most of your tasks well, but occasionally hits something beyond their expertise — say, a tricky legal question or a complex spreadsheet formula. Instead of failing silently, what if they could pick up the phone and call a specialist, get the answer, and continue working?
+
+That is exactly what the `callhelp` tool does for a local AI agent. The agent runs on your own hardware using an open-source model, but when it recognizes a gap in its abilities, it spawns [Codex CLI](https://github.com/openai/codex) — OpenAI's command-line coding tool — as a subprocess, asks its question, reads the answer, and keeps going. The critical detail: the subprocess must run with `--full-auto` mode because there is no human present to approve actions. Without that flag, it hangs forever waiting for a "yes" that never comes.
+
+---
 
 <VideoEmbed src="/videos/callhelp-spawning.mp4" />
 ## Preface

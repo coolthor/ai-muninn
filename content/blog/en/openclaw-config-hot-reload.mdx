@@ -17,6 +17,17 @@ faq:
     a: "The most common cause is invalid JSON — a trailing comma or missing brace prevents the reload. The gateway logs the parse error instead of silently ignoring it. Check /tmp/openclaw/gateway-stdout.log for a parse error message, fix the JSON syntax, then save again."
 ---
 
+<TLDRCard>
+OpenClaw gateway hot-reloads `openclaw.json` on file save — no restart needed. Bot tokens, model endpoints, and generation parameters are live in 2 seconds. Only port bindings and launchd plist variables require a restart.
+</TLDRCard>
+
+## Plain-Language Version: Stop Restarting Your AI Agent for Every Config Change
+
+If you have ever changed a setting in an app and had to restart the whole thing to see the effect, you know the frustration. Now imagine doing that dozens of times a day while building an AI agent — each restart takes 30 seconds, and you lose your train of thought every time.
+
+OpenClaw has a built-in [file watcher](https://nodejs.org/api/fs.html#fswatchfilename-options-listener) on its config file. Save the file, and the new settings are live within two seconds. The process keeps running, active conversations are not interrupted, and you can verify the change immediately. The difference between a 30-second loop and a 2-second loop compounds fast during active development.
+
+---
 
 <VideoEmbed src="/videos/config-hot-reload.mp4" />
 ## Preface

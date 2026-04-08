@@ -17,6 +17,17 @@ faq:
     a: "透過 filesystem。Subprocess 把輸出寫到可預測的路徑（如 /tmp/result.md），agent 讀取該路徑。這是正確的交接點：簡單、明確、可測試——agent 不需要在自己的 context 裡保存任何中間狀態。"
 ---
 
+<TLDRCard>
+AI agent 直接編排大量序列步驟時，context 會被中間狀態塞滿、輸出品質降級。Codex-executor 模式的解法：agent 派生一個全新 subprocess 處理重活，只讀回一個結果檔 — 從 8 次 tool call 變成 2 次。
+</TLDRCard>
+
+## 白話版：為什麼 AI Agent 做長任務會越做越差
+
+想像一個專案經理同時負責起草、排版和歸檔。做到第五件事的時候，桌面已經被埋了，錯誤開始冒出來。AI agent 也有一樣的問題 — 它的「桌面」是 context window，每做一步就多佔一些空間。
+
+解法是委派。agent 不自己做八個步驟，而是把完整的任務描述寫好，交給 [Codex CLI](https://github.com/openai/codex) — 它在一個全新的 subprocess 裡運行，桌面是乾淨的。Subprocess 把所有工作做完、把結果寫進一個檔案，agent 讀取就好。失敗是全有或全無的：要麼 subprocess 完整完成，要麼回傳 error，不會再出現第七步寫到一半的情況。
+
+---
 
 <VideoEmbed src="/videos/codex-executor.mp4" />
 ## 前言

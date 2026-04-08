@@ -17,6 +17,17 @@ faq:
     a: "Any non-zero integer. Use the same draftId throughout a turn to update the same bubble. A draftId of 0 is invalid and sendMessageDraft will appear to do nothing. Generate with Math.ceil(Math.random() * 1e9) per turn."
 ---
 
+<TLDRCard>
+Replacing `editMessageText` polling with Telegram Bot API 9.5's `sendMessageDraft` gives openclaw live animated streaming output. Key traps: `draftId` must be non-zero, `threadParams` needs optional chaining for DMs, and reasoning-parser must be disabled for GLM models.
+</TLDRCard>
+
+## Plain-Language Version: Making an AI Chatbot Type in Real Time
+
+You know how in messaging apps you can see "typing..." when someone is composing a message? Most AI chatbots do not have this — they go silent for seconds, then dump the entire response at once. It is like waiting for a letter instead of watching someone type.
+
+[Telegram Bot API 9.5](https://core.telegram.org/bots/api) added a feature called `sendMessageDraft` that lets bots show a live, animated typing preview that updates as new words arrive. This article covers how to patch openclaw to use it, plus two traps that cause the feature to silently break: a variable that is undefined in private chats (crashing the bot), and a reasoning-mode flag that routes all output to an invisible field during the model's thinking phase.
+
+---
 
 <VideoEmbed src="/videos/telegram-streaming.mp4" />
 ## Preface

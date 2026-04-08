@@ -6,6 +6,15 @@ updatedAt: "2026-04-02"
 tags: ["GX10", "GB10", "DGX Spark", "power delivery", "vLLM", "hardware"]
 series: "DGX Spark"
 part: 6
+faq:
+  - q: "怎麼確認我的 DGX Spark / GX10 是不是卡在 30W 安全模式？"
+    a: "隨便跑一個 GPU 負載，然後執行：nvidia-smi --query-gpu=power.draw,utilization.gpu,clocks.sm --format=csv,noheader。正常的機器在負載下顯示約 35W、96% 利用率。30W 安全模式的機器顯示約 5W、利用率接近零，不管跑什麼都一樣。"
+  - q: "GX10 / DGX Spark 的 30W 安全模式是什麼原因造成的？"
+    a: "PD（Power Delivery）controller 有缺陷，導致 USB-C PD 3.1 跟 240W 變壓器的協商靜默失敗。機器能正常開機，但 PD 從來沒有升到高功率模式，PMIC 把整個 power rail 鎖在約 30W。dmesg 裡會看到 'Detected insufficient power on the PCIe slot (27W)'。"
+  - q: "30W 安全模式可以用韌體更新修嗎？"
+    a: "不行。ASUS 建議做 PD firmware 的 double flash，但受影響的用戶回報 throttling 沒解。NVIDIA support 的結論是硬體缺陷，需要 RMA。可以先更新到 BIOS v0103（PD 0x507）排除看看，但如果問題還在就準備 RMA。"
+  - q: "我的 GX10 GPU 顯示 5W 和 0% 利用率，是 30W 安全模式嗎？"
+    a: "不一定。有另一個軟體 bug：舊版 driver（550.54.15 + CUDA 12.4）會讓 GPU 卡在 5W/0%。升到 Driver 580.x + CUDA 13.0 就修了。先查 driver 版本。升級後問題還在的話，才可能是硬體 PD controller 缺陷。"
 ---
 
 一個看起來像軟體問題的硬體問題是最浪費時間的那種。你花了一天調 vLLM 的參數、換量化格式、翻 kernel log——結果機器從頭到尾就是在餓死狀態。
@@ -15,6 +24,18 @@ part: 6
 <TLDRCard>
 部分 GX10 出廠帶有 PD controller 缺陷，不管跑什麼負載，整台機器的總功耗都被永久鎖在約 30W。刷韌體無效，NVIDIA 建議直接 RMA。一個指令可以在 30 秒內確認你有沒有中招。
 </TLDRCard>
+
+## 白話版：你的 AI 機器其實在「餓肚子」
+
+[NVIDIA DGX Spark](https://www.nvidia.com/en-us/products/workstations/dgx-spark/)（以及它的 ASUS GX10 版本）是一台桌上型 AI 工作站，需要很大的功率——透過 USB-C 線供應最多 180 瓦。可以想成是一台高性能跑車：需要足夠的油壓才能發揮。
+
+有些機器出廠時電源協商晶片就有問題。機器開得起來、看起來正常、AI 任務也跑得動——就是異常地慢。就像一台跑車的油管被捏住了：引擎會轉，但永遠上不了二檔。系統把自己鎖在大約 30 瓦，而不是應有的 180 瓦。
+
+最麻煩的是，所有症狀看起來都像軟體問題。你花好幾個小時調 AI 模型設定、換各種配置、翻 log——但真正的問題是硬體在「餓死」。一個終端機指令（`nvidia-smi`）可以在 30 秒內告訴你有沒有中招。
+
+如果中了，修法不是調軟體——是保固換新（RMA）。這篇文章告訴你怎麼診斷、以及下一步該做什麼。
+
+---
 
 ## 先跑這個診斷
 

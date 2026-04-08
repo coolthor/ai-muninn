@@ -17,6 +17,17 @@ faq:
     a: "Set contextWindow: 131072, reserveTokens: 8192 (output headroom), keepRecentTokens: 32768, and maxHistoryShare: 0.5. The reserveTokens value only needs to cover model output space — it doesn't need to buffer system prompt overhead, which is already within the 131K ceiling."
 ---
 
+<TLDRCard>
+When openclaw's `contextWindow` config was set to 32K but the model served 131K, the context budget math produced a negative `max_tokens` — causing a silent 400 error. The fix: match `contextWindow` to vLLM's `--max-model-len` exactly, and use camelCase (not snake_case, which is silently ignored).
+</TLDRCard>
+
+## Plain-Language Version: When Your AI Thinks It Has Less Memory Than It Actually Does
+
+Imagine your car's fuel gauge says 10 liters, but the tank actually holds 50. The navigation system calculates routes based on the gauge reading and refuses to start a trip it thinks is too long — even though you have plenty of fuel.
+
+That is what happened here. The AI agent's config told it the model had a 32K token context window, but the model actually supported 131K. The agent calculated how much room was left for its response, got a negative number, and the model rejected the request with a [400 error](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Status/400). The fix was two lines: set the right number and use the right config key name (camelCase `contextWindow`, not snake_case `context_window` which is silently ignored).
+
+---
 
 <VideoEmbed src="/videos/context-budget.mp4" />
 ## Preface

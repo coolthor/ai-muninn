@@ -6,6 +6,15 @@ updatedAt: "2026-03-23"
 tags: ["NemoClaw", "OpenClaw", "OpenShell", "AI Agent", "NVIDIA", "DGX Spark", "GX10", "GB10"]
 series: "NemoClaw"
 part: 2
+faq:
+  - q: "為什麼 NemoClaw 安裝在 DGX Spark / GX10 上會失敗？"
+    a: "安裝失敗有四個官方文件沒提到的原因：Node.js 必須 v20+（GX10 出廠是 v18）、npm link 在 system-managed Node 上需要 sudo、文件裡的 OpenShell binary URL 回傳 404（實際 release 是 tar.gz 格式）、Ubuntu 24.04 的 cgroup v2 需要在 onboard 前把 cgroupns=host 加進 Docker daemon.json。"
+  - q: "怎麼在 aarch64 Linux 上安裝 OpenShell？"
+    a: "從 GitHub releases 下載 tar.gz（不是文件裡的 binary URL，那個 404）。aarch64 的話：curl 最新 release 的 openshell-aarch64-unknown-linux-musl.tar.gz，解壓縮，把 binary 搬到 /usr/local/bin/openshell。x86_64 用 x86_64-unknown-linux-musl 版本。"
+  - q: "跑 openshell 出現 'Exec format error' 是什麼意思？"
+    a: "通常代表下載靜默失敗——curl 存了一個 HTML 錯誤頁（404 回應）而不是實際的 binary。跑 'file openshell' 確認：如果顯示 'ASCII text' 而不是 'ELF'，就是下載到錯的東西了。重新從正確的 GitHub release URL（tar.gz 格式）下載。"
+  - q: "NemoClaw onboard 時 cgroup v2 錯誤怎麼修？"
+    a: "Ubuntu 24.04 預設用 cgroup v2，但 OpenShell 內部的 k3s 需要 cgroup v1 的路徑。在 /etc/docker/daemon.json 加上 '\"default-cgroupns-mode\": \"host\"' 然後重啟 Docker。用 'stat -fc %T /sys/fs/cgroup/' 確認——如果顯示 'cgroup2fs' 就需要修。"
 ---
 
 
@@ -24,6 +33,16 @@ part: 2
 <TLDRCard>
 GX10（GB10/SM121）安裝 NemoClaw 需要四個官方文件沒寫清楚的修復：Node.js 升到 v22、安裝後手動跑 `sudo npm link`、從 tar.gz 安裝 OpenShell（文件裡的 binary URL 404）、在 onboard 前加 `cgroupns=host` 到 Docker daemon.json。修完後，`nemoclaw setup-spark` 和 `NEMOCLAW_NON_INTERACTIVE=1 nemoclaw onboard` 就可以跑完。
 </TLDRCard>
+
+## 白話版：在特殊硬體上安裝 AI Agent 軟體
+
+在一般電腦上裝軟體，通常就是按「下載」然後跟著提示走。但在 [NVIDIA DGX Spark](https://www.nvidia.com/en-us/products/workstations/dgx-spark/)（或者用同一顆晶片的 ASUS GX10）這種專門的 AI 硬體上，事情沒那麼簡單。這台機器跑 Linux、用的是 ARM 處理器而不是一般 PC 裡的 Intel/AMD 晶片，而且出廠自帶的一些工具版本偏舊。
+
+NemoClaw 是 NVIDIA 的 AI Agent 框架——讓 AI 助手在你的機器上跑、能讀檔案、能執行任務的軟體。官方安裝指南假設你的環境是標準的。但在 GX10 上，有四件事會出問題而且指南沒提到：預裝的 Node.js 版本太舊、一個檔案權限步驟靜默失敗、文件裡的下載連結壞了、還有一個 Linux 容器設定需要改。
+
+這些都不難修，但前提是你知道它們存在。這篇文章照順序走過每一個問題，附上完整指令。從空白 GX10 到 AI Agent sandbox 跑起來，總共大概 30 分鐘。
+
+---
 
 ## Step 1：Node.js 升到 v22
 

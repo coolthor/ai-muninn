@@ -17,6 +17,17 @@ faq:
     a: "Delete the session registry file. A stale session_id carries its old context, including any output format it was trained on in that session. Start fresh: delete the registry and let the agent create a new session on the next run."
 ---
 
+<TLDRCard>
+`claude -p` subprocess drops all intermediate turns — tool calls, reasoning, in-progress output — returning only the final text. Migrating to [claude-agent-sdk](https://docs.anthropic.com/en/docs/agents-and-tools/claude-code/sdk) with `query()` async generator gives real-time streaming of every turn, plus session resume and parallel execution.
+</TLDRCard>
+
+## Plain-Language Version: Why Your Multi-Agent System Only Shows the Final Answer
+
+Imagine asking three assistants to research different topics simultaneously, but you can only see what each one writes in their final report — not their working notes, not their intermediate findings, nothing until they are done. That is what happens when you run AI agents as subprocesses: you get the finished output, but miss everything in between.
+
+The [claude-agent-sdk](https://docs.anthropic.com/en/docs/agents-and-tools/claude-code/sdk) fixes this by providing a streaming interface. Instead of waiting for the subprocess to finish, your orchestrator receives every intermediate step as it happens — tool calls, reasoning, partial outputs — in real time. This article covers the migration from subprocess to SDK, the `setting_sources` trap that loads thousands of unnecessary tokens into each sub-agent, and how to handle stale sessions that ignore new instructions.
+
+---
 
 <VideoEmbed src="/videos/agent-orchestrator.mp4" />
 ## Preface

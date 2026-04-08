@@ -17,6 +17,17 @@ faq:
     a: "刪除 session registry 檔案。舊的 session_id 帶著過去的 context，包括該 session 中訓練好的輸出格式。解決方法：刪除 registry，讓 agent 在下次執行時建立新 session。"
 ---
 
+<TLDRCard>
+`claude -p` subprocess 會丟掉所有中間 turn — tool call、推理、進行中的輸出 — 只回傳最終文字。遷移到 [claude-agent-sdk](https://docs.anthropic.com/en/docs/agents-and-tools/claude-code/sdk) 的 `query()` async generator，可以即時串流每一個 turn，還有 session resume 和並行執行。
+</TLDRCard>
+
+## 白話版：為什麼你的 Multi-Agent 系統只顯示最後的答案
+
+想像你同時派三個助理去研究不同的主題，但你只能看到每個人的最終報告 — 看不到他們的工作筆記、中間發現，什麼都看不到，直到他們做完。用 subprocess 跑 AI agent 就是這樣：你拿到完成品，但錯過了中間的一切。
+
+[claude-agent-sdk](https://docs.anthropic.com/en/docs/agents-and-tools/claude-code/sdk) 透過串流介面解決這個問題。不用等 subprocess 跑完，你的 orchestrator 可以即時收到每一個中間步驟 — tool call、推理、部分輸出。這篇記錄從 subprocess 遷移到 SDK 的過程、`setting_sources` 這個會把數千無用 token 載入每個 sub-agent 的陷阱，以及如何處理會忽略新指令的過期 session。
+
+---
 
 <VideoEmbed src="/videos/agent-orchestrator.mp4" />
 ## 前言

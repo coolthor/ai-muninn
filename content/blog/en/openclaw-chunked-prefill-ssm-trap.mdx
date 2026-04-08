@@ -17,6 +17,17 @@ faq:
     a: "When throughput collapses but the server appears healthy (requests succeed, no errors), investigate configuration flags before the model or hardware. For SSM models, --enable-chunked-prefill is the first suspect. Also check for Ollama memory conflicts and whether enable_thinking is set to false per-request."
 ---
 
+<TLDRCard>
+Adding `--enable-chunked-prefill` to an SSM hybrid model (Qwen3.5-35B) caused an 8x throughput collapse — from 47 tok/s to 5.7 tok/s — because SSM recurrent layers require sequential state passing that chunked processing destroys.
+</TLDRCard>
+
+## Plain-Language Version: Why a "Speed Boost" Flag Made the AI 8x Slower
+
+Think of an assembly line. If every station works independently, you can split the work into batches and run them in parallel — that is what [chunked prefill](https://docs.vllm.ai/en/latest/performance/optimization.html) does for standard AI models. But some newer models (called SSM hybrids) work like a relay race: each station must physically hand a baton to the next one. Split the relay into chunks, and the runners spend more time passing batons than actually running.
+
+That is exactly what happened here. A single configuration flag meant to improve GPU utilization turned a fast model into one slower than a CPU could produce. No error message, no crash — the model just silently served responses at one-eighth speed. If you are running [vLLM](https://github.com/vllm-project/vllm) with a model that has "SSM," "Mamba," or "DeltaNet" in its architecture, do not add this flag.
+
+---
 
 <VideoEmbed src="/videos/chunked-prefill-ssm.mp4" />
 ## Preface

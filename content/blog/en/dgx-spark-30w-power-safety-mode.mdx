@@ -6,6 +6,15 @@ updatedAt: "2026-04-02"
 tags: ["GX10", "GB10", "DGX Spark", "power delivery", "vLLM", "hardware"]
 series: "DGX Spark"
 part: 6
+faq:
+  - q: "How do I check if my DGX Spark / GX10 is stuck in 30W safety mode?"
+    a: "Run any GPU workload, then execute: nvidia-smi --query-gpu=power.draw,utilization.gpu,clocks.sm --format=csv,noheader. Healthy units show ~35W and 96% utilization under load. Units in 30W safety mode show ~5W and near-zero utilization regardless of workload."
+  - q: "What causes the 30W power safety mode on GX10 / DGX Spark?"
+    a: "A PD (Power Delivery) controller defect causes USB-C PD 3.1 negotiation with the 240W adapter to fail silently. The machine boots normally but never escalates beyond the default safe power level (~30W). The PMIC then restricts the entire power rail. dmesg shows 'Detected insufficient power on the PCIe slot (27W)'."
+  - q: "Can I fix the 30W safety mode with a firmware update?"
+    a: "No. ASUS recommends a 'double flash' of PD controller firmware, but affected users report the throttling persists. NVIDIA support's conclusion is that this is a hardware defect requiring RMA. Update to BIOS v0103 (PD 0x507) to rule it out, but expect to RMA if the issue remains."
+  - q: "My GX10 GPU shows 5W and 0% utilization — is it the 30W safety mode?"
+    a: "Not necessarily. There is a separate software bug where outdated drivers (550.54.15 + CUDA 12.4) cause the GPU to appear stuck at 5W/0%. Upgrading to Driver 580.x + CUDA 13.0 fixes this. Check driver versions first. If the issue persists after upgrading, then it may be the hardware PD controller defect."
 ---
 
 A power supply problem that looks like a software problem is the worst kind. You spend a day tuning vLLM flags, switching quantization formats, reading kernel logs — and the whole time the machine was just starving for power.
@@ -15,6 +24,18 @@ This picks up from the series so far ([Part 5](/en/blog/dgx-spark-fp8-kvcache-re
 <TLDRCard>
 Some GX10 units ship with a PD controller defect that permanently caps total system power at ~30W regardless of workload. Firmware reflash does not fix it. NVIDIA recommends RMA. Run one command to find out if you are affected.
 </TLDRCard>
+
+## Plain-Language Version: When Your AI Machine Is Secretly Running on Fumes
+
+The [NVIDIA DGX Spark](https://www.nvidia.com/en-us/products/workstations/dgx-spark/) (and its ASUS GX10 variant) is a desktop AI workstation that needs a lot of power — up to 180 watts delivered through a USB-C cable. Think of it like a high-performance car: it needs premium fuel at full pressure to perform.
+
+Some units shipped with a defective power negotiation chip. The machine turns on, looks normal, and even runs AI tasks — just painfully slowly. It is like driving a sports car with the fuel line pinched: the engine runs, but it never gets past first gear. The system caps itself at about 30 watts instead of the full 180.
+
+The tricky part is that everything looks like a software problem. You spend hours tweaking AI model settings, swapping configurations, and reading logs — when the real issue is that the hardware is starving for electricity. One terminal command (`nvidia-smi`) reveals whether you are affected in 30 seconds.
+
+If you are, the fix is not software — it is a warranty replacement (RMA). This article shows exactly how to diagnose it and what to do next.
+
+---
 
 ## The Diagnostic (Run This First)
 

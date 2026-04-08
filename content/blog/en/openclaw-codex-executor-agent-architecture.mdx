@@ -17,6 +17,17 @@ faq:
     a: "Through the filesystem. The subprocess writes its output to a predictable path (/tmp/result.md). The agent reads that path. This is the correct handoff point: simple, explicit, testable — the agent never needs to hold intermediate state in its own context."
 ---
 
+<TLDRCard>
+When an AI agent orchestrates many sequential steps directly, its context fills with intermediate state and output degrades. The Codex-executor pattern fixes this: the agent spawns a fresh subprocess for the heavy work and reads a single result file — 2 tool calls instead of 8.
+</TLDRCard>
+
+## Plain-Language Version: Why Your AI Agent Gets Worse at Long Tasks
+
+Think of a project manager who also does all the drafting, formatting, and filing. By the fifth task, their desk is buried and mistakes creep in. AI agents have the same problem — their "desk" is a context window, and it fills up with every step they take.
+
+The fix is delegation. Instead of the agent doing eight steps itself, it writes a complete task description and hands it to [Codex CLI](https://github.com/openai/codex) — which runs in a fresh subprocess with a clean desk. The subprocess does all the work, writes the result to a file, and the agent reads it. Failure is all-or-nothing: either the subprocess completes everything, or it returns an error. No more half-finished outputs at step seven.
+
+---
 
 <VideoEmbed src="/videos/codex-executor.mp4" />
 ## Preface

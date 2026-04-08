@@ -19,6 +19,21 @@ faq:
 
 
 <VideoEmbed src="/videos/gpt-oss-120b.mp4" />
+
+<TLDRCard>
+gpt-oss-120B（Microsoft，MXFP4）在 DGX Spark（GB10，SM121）上跑到 ~59 tok/s，接近 273 GB/s 頻寬上限。六個坑擋在路上，包括一個靜默無效的環境變數（`VLLM_NVFP4_GEMM_BACKEND` 沒用，正確的是 `VLLM_MXFP4_BACKEND=marlin`）和 `--enforce-eager` 讓速度砍半到 26 tok/s。附完整 serve script 和有順序的檢查清單。
+</TLDRCard>
+
+## 白話版：1200 億參數 AI，零 API 費用
+
+雲端 AI 服務按 token 計費——你的 AI 每讀或寫一個字都要花錢。一個 24 小時運行、每小時打幾十通電話的 AI agent，一個月下來可能要花上幾百美元。替代方案：在自己的硬體上跑 AI。沒有 per-token 費用，沒有 rate limit，不依賴別人的伺服器。
+
+這篇記錄的是如何在 NVIDIA DGX Spark——一台有 128 GB 共用記憶體的桌上型電腦——上跑 Microsoft 的 [gpt-oss-120B](https://github.com/vllm-project/vllm) 開源模型。這個 1200 億參數的模型跑到每秒 59 個 token（大約每秒 59 個字元），接近硬體的理論上限，足以即時對話。
+
+從「下載模型」到「它能用了」之間有六個坑。最難找的是一個看起來正確但被軟體靜默忽略的環境變數，導致 AI 陷入重複迴圈。六個坑的完整路徑和可用的啟動腳本都記在這裡。關於影響 DGX Spark 上所有模型的 SM121 硬體問題，見[第一篇](/zh-TW/blog/part1-why-your-dgx-spark-says-exclamation-marks)。
+
+---
+
 ## 前言
 
 目標很簡單：讓跑在這台機器上的 openclaw agent 有一個 120B 的大腦。本地推論，沒有 API 配額，沒有 rate limit，沒有每個 token 的費用。一個隨時可用、速度貼近硬體頻寬上限、不會把資料傳出去的模型。

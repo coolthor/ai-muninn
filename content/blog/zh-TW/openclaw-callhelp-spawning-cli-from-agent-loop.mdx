@@ -17,6 +17,17 @@ faq:
     a: "Agent 自己認識到有能力缺口時：對程式碼正確性不確定的 code generation 任務、沒遇過的 debug 錯誤、或較不熟悉的 domain。由 agent 自己決定——callhelp 只是 loop 裡的一個可用 tool，不是硬性 routing 規則。"
 ---
 
+<TLDRCard>
+本地 AI agent 遇到能力天花板時，讓它用 `--full-auto -q` 在推理途中 spawn Codex CLI。Agent 自己決定什麼時候要叫幫手，結果以 tool response 回來，你的 Claude quota 完全不受影響。
+</TLDRCard>
+
+## 白話版：如果你的 AI 助理可以打電話問更厲害的 AI？
+
+想像你有一個私人助理，大部分事情都處理得不錯，但偶爾會碰到超出能力範圍的問題——比方說一個複雜的法律條文，或一個難算的試算表公式。如果他不是默默卡住，而是拿起電話打給專家、拿到答案、然後繼續做事呢？
+
+`callhelp` tool 做的就是這件事。Agent 跑在你自己的硬體上，用開源模型運作，但當它發現自己搞不定的時候，會 spawn [Codex CLI](https://github.com/openai/codex)（OpenAI 的命令列程式碼工具）當 subprocess，問問題、讀答案、繼續跑。關鍵細節：subprocess 必須帶 `--full-auto` 模式，因為旁邊沒有人可以批准動作。少了這個 flag，它會永遠等一個不會來的「確認」。
+
+---
 
 <VideoEmbed src="/videos/callhelp-spawning.mp4" />
 ## 前言

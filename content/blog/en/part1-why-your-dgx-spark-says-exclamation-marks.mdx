@@ -19,6 +19,21 @@ faq:
 
 
 <VideoEmbed src="/videos/sm121-bug.mp4" />
+
+<TLDRCard>
+DGX Spark (GB10, SM121) silently produces `!!!!!` garbage output with NVFP4 models because CUTLASS FP4 kernels target SM120 (GB200), not SM121. Four independent bugs must be fixed: PTX instruction mismatch, Marlin thread race, missing SupportsQuant for GDN layers, and false-positive CUTLASS FP4 device selection. After all fixes, Qwen3.5-122B runs at ~15 tok/s via Marlin W4A16.
+</TLDRCard>
+
+## Plain-Language Version: When Your AI Hardware Works But Doesn't
+
+Imagine buying a brand-new printer that connects, powers on, and prints — but every page comes out as the same character repeated thousands of times. No error message. No warning light. The printer thinks everything is fine.
+
+That's exactly what happens when you run certain AI models on NVIDIA's [DGX Spark](https://www.nvidia.com/en-us/products/dgx/spark/). The hardware is real enterprise equipment. The models are official releases from NVIDIA and others. But the DGX Spark uses a chip variant (SM121) that's subtly different from the data center version (SM120) — like a car that looks identical to the European model but has a different engine computer. The AI software doesn't know they're different, so it uses instructions that produce wrong math. The output: `!!!!!!!!!!!!!!` for every single prompt.
+
+This article traces four independent bugs that all had to be fixed to get from garbage output to coherent text. Each bug is invisible on its own — fixing three out of four still gives you garbage. The diagnostic signature (every row of numbers being identical) and the complete fix set are documented here.
+
+---
+
 ## Preface
 
 You bought enterprise GPU hardware. You downloaded a model that says it supports the hardware. You ran the standard command. The server started with no errors. The model output `!!!!!!!!!!!!!!` for every single prompt.

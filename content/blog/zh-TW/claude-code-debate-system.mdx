@@ -17,6 +17,17 @@ faq:
     a: "使用 mcp__pal__clink，並為每次 model 呼叫設定 absolute_file_paths。後續跟進呼叫帶上 continuation_id，就能維持 context 而無需重新上傳檔案。"
 ---
 
+<TLDRCard>
+`/debate` 指令把同一個 prompt 同時發給 Codex CLI 和 Gemini CLI，再綜合它們的共識與分歧。不同訓練資料的模型之間的分歧，揭示出單一 reviewer 看不到的真正不確定性。
+</TLDRCard>
+
+## 白話版：找另一個 AI 要第二意見
+
+問一個醫生，你得到一個受他訓練和經驗影響的觀點。問第二個訓練背景不同的醫生，他可能會不同意 — 而這個不同意往往是最有價值的資訊，因為它告訴你答案真正不確定的地方在哪。
+
+這個 `/debate` 指令對 AI 模型做同樣的事。它把你的問題同時發給 [Codex CLI](https://github.com/openai/codex)（OpenAI，擅長程式碼細節）和 [Gemini CLI](https://github.com/google-gemini/gemini-cli)（Google，擅長架構）。它們意見一致的地方，你可以更有信心。意見不同的地方，你知道要更仔細看。重點不是哪個模型「比較好」— 而是利用它們不同的盲點，三角定位出更可靠的答案。
+
+---
 
 <VideoEmbed src="/videos/ai-debate.mp4" />
 ## 前言

@@ -17,6 +17,17 @@ faq:
     a: "Measure throughput at 4K-8K tokens, not at short context. Agent sessions reach 4K-8K tokens by message 5-8. A model that benchmarks faster at 200 tokens but loses 25% throughput at 8K is worse for agent workloads than a slightly slower model with flat scaling."
 ---
 
+<TLDRCard>
+Pure MoE models (GLM-4.7-Flash) lose 27% throughput at 8K context due to KV cache scaling, while SSM hybrids (Qwen3.5-35B) show ~0% decay. For always-on agents that quickly reach 4K-8K tokens, benchmark at realistic context lengths — not short prompts.
+</TLDRCard>
+
+## Plain-Language Version: Why Some AI Models Slow Down in Long Conversations
+
+Imagine two employees. One re-reads every email in the entire thread before replying — the longer the thread, the slower they get. The other keeps a running mental summary and replies at the same speed regardless of thread length. That is the difference between traditional [Transformer attention](https://en.wikipedia.org/wiki/Transformer_(deep_learning_architecture)) and [State Space Models (SSM)](https://en.wikipedia.org/wiki/State-space_representation).
+
+For an AI agent that runs all day with a long system prompt and multi-turn conversations, this matters enormously. A model that benchmarks at 58 tokens/second on short prompts but drops to 42 at realistic conversation lengths is slower in practice than a model that holds steady at 56. This article shows the benchmark data and explains why — helping you pick the right model for agent workloads, not just the one with the best headline number.
+
+---
 
 <VideoEmbed src="/videos/context-decay.mp4" />
 ## Preface

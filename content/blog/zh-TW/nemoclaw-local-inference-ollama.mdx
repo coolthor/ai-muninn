@@ -6,6 +6,15 @@ updatedAt: "2026-04-07"
 tags: ["NemoClaw", "OpenClaw", "OpenShell", "Ollama", "vLLM", "AI Agent", "NVIDIA", "GX10", "Local Inference"]
 series: "NemoClaw"
 part: 3
+faq:
+  - q: "怎麼把 NemoClaw 從 NVIDIA 雲端切換到本地 Ollama 模型？"
+    a: "編輯 ~/.nemoclaw/sandboxes/<name>/config.yaml，改三個欄位：endpoint 改成 'http://localhost:11434/v1'、model 改成你的 Ollama 模型名稱（用 'ollama list' 查）、api_key 設成 'ollama'。然後跑 'nemoclaw <name> restart' 套用。"
+  - q: "NemoClaw 每個 sandbox 的推理設定檔在哪？"
+    a: "在 ~/.nemoclaw/sandboxes/<sandbox-name>/config.yaml。這個路徑在 NemoClaw v0.1.0 的文件裡沒有記載，也沒有 'nemoclaw config show' 指令。需要在 onboard 後直接 list 目錄才能找到。"
+  - q: "在 NemoClaw 裡用 uncensored 模型安全嗎？"
+    a: "安全，因為 NemoClaw 的安全機制在兩個獨立的層運作。OpenShell 在工具執行層執行政策——檔案系統存取、工具 allowlist——跟用哪個模型無關。Uncensored 模型拿掉了內容拒絕（模型說什麼），但 OpenShell 仍然限制 agent 的行為（agent 做什麼）。這兩件事是正交的。"
+  - q: "NemoClaw 的本地推理後端用 Ollama 跟 vLLM 有什麼差別？"
+    a: "Ollama 設定簡單、支援多模型同時在記憶體、換模型快。vLLM 的 TTFT 更低（約 0.12s vs 約 0.4s）、structured output 和 tool call 處理更穩、thinking mode 支援更好（透過 --reasoning-parser）。個人使用跑單一模型的話兩個都行；要 production 行為選 vLLM。"
 ---
 
 

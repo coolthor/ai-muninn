@@ -19,6 +19,21 @@ faq:
 
 
 <VideoEmbed src="/videos/gpt-oss-120b.mp4" />
+
+<TLDRCard>
+gpt-oss-120B (Microsoft, MXFP4) hits ~59 tok/s on DGX Spark (GB10, SM121) — near the 273 GB/s bandwidth ceiling. Six bugs stood in the way, including a silent env var (`VLLM_NVFP4_GEMM_BACKEND` does nothing; correct var is `VLLM_MXFP4_BACKEND=marlin`) and `--enforce-eager` halving speed to 26 tok/s. Working serve script and ordered checklist included.
+</TLDRCard>
+
+## Plain-Language Version: A 120-Billion-Parameter AI for Zero API Cost
+
+Cloud AI services charge per token — every word your AI reads or writes costs money. For an AI agent that runs 24/7, making dozens of calls per hour, those costs add up to hundreds of dollars per month. The alternative: run the AI on your own hardware. No per-token fee, no rate limits, no dependency on someone else's server.
+
+This article documents how to run Microsoft's [gpt-oss-120B](https://github.com/vllm-project/vllm) — a 120-billion-parameter open-source model — on an NVIDIA DGX Spark, a desktop computer with 128 GB of shared memory. The model achieves 59 tokens per second (roughly 59 characters per second), which is near the hardware's theoretical maximum. That's fast enough for real-time conversation.
+
+Between "download the model" and "it works" were six bugs. The hardest to find: an environment variable that looks correct but is silently ignored by the software, causing the AI to fall into repetitive loops. The full path through all six bugs, with a working startup script, is documented here. For background on the SM121 hardware issues that affect all models on DGX Spark, see [Part 1](/en/blog/part1-why-your-dgx-spark-says-exclamation-marks).
+
+---
+
 ## Preface
 
 The goal was simple: give the openclaw agent running on this machine a 120B model as its brain. Local inference, no API quota, no rate limits, no cost per token. A model that's always available, runs at the edge of the hardware's bandwidth ceiling, and doesn't phone home.
