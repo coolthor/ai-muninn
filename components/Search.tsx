@@ -11,7 +11,6 @@ interface SearchResult {
 export default function Search({ locale }: { locale: string }) {
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<SearchResult[]>([])
-  const [open, setOpen] = useState(false)
   const pagefindRef = useRef<{ search: (q: string) => Promise<{ results: Array<{ data: () => Promise<{ url: string; meta: { title: string }; excerpt: string }> }> }> } | null>(null)
 
   useEffect(() => {
@@ -55,18 +54,6 @@ export default function Search({ locale }: { locale: string }) {
 
   const isZh = locale === 'zh-TW'
 
-  if (!open) {
-    return (
-      <button
-        onClick={() => setOpen(true)}
-        className="text-xs transition-colors hover:text-[var(--cyan)] cursor-pointer"
-        style={{ color: 'var(--text-dim)' }}
-      >
-        <span style={{ color: 'var(--cyan)' }}>❯</span> search
-      </button>
-    )
-  }
-
   return (
     <div className="mb-6">
       <div className="flex items-center gap-2 text-xs" style={{ color: 'var(--text-dim)' }}>
@@ -77,24 +64,15 @@ export default function Search({ locale }: { locale: string }) {
           value={query}
           onChange={e => setQuery(e.target.value)}
           placeholder={isZh ? '搜尋文章...' : 'search posts...'}
-          autoFocus
           className="flex-1 bg-transparent border-b outline-none text-xs py-1"
           style={{ borderColor: 'var(--border)', color: 'var(--text)' }}
           onKeyDown={e => {
             if (e.key === 'Escape') {
-              setOpen(false)
               setQuery('')
               setResults([])
             }
           }}
         />
-        <button
-          onClick={() => { setOpen(false); setQuery(''); setResults([]) }}
-          className="hover:text-[var(--cyan)] transition-colors cursor-pointer"
-          style={{ color: 'var(--text-dim)' }}
-        >
-          esc
-        </button>
       </div>
 
       {results.length > 0 && (
