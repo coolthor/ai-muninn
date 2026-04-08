@@ -10,6 +10,7 @@ import type { Metadata } from 'next'
 import TLDRCard from '@/components/TLDRCard'
 import VideoEmbed from '@/components/VideoEmbed'
 import ShareButtons from '@/components/ShareButtons'
+import TocSidebar from '@/components/TocSidebar'
 
 const BASE_URL = 'https://ai-muninn.com'
 
@@ -242,40 +243,48 @@ export default async function BlogPost({
         </div>
       </header>
 
-      {/* TOC */}
-      {(() => {
-        const slugger = new GithubSlugger()
-        const headings = post.content
-          .split('\n')
-          .filter(line => /^#{2,3}\s/.test(line))
-          .map(line => {
-            const level = line.startsWith('### ') ? 3 : 2
-            const text = line.replace(/^#{2,3}\s+/, '').replace(/\*\*/g, '')
-            const id = slugger.slug(text)
-            return { level, text, id }
-          })
-        if (headings.length < 3) return null
-        return (
-          <details className="mb-8 text-xs" open>
-            <summary className="cursor-pointer mb-2" style={{ color: 'var(--text-dim)' }}>
-              <span style={{ color: 'var(--cyan)' }}>❯</span> cat --toc
-            </summary>
-            <ul className="space-y-1 pl-4" style={{ color: 'var(--text-dim)' }}>
-              {headings.map((h, i) => (
-                <li key={i} style={{ paddingLeft: h.level === 3 ? '1rem' : 0 }}>
-                  <a href={`#${h.id}`} className="hover:text-[var(--cyan)] transition-colors">
-                    {h.text}
-                  </a>
-                </li>
-              ))}
-            </ul>
-          </details>
-        )
-      })()}
+      {/* content + sidebar TOC */}
+      <div className="relative">
+        {(() => {
+          const slugger = new GithubSlugger()
+          const headings = post.content
+            .split('\n')
+            .filter(line => /^#{2,3}\s/.test(line))
+            .map(line => {
+              const level = line.startsWith('### ') ? 3 : 2
+              const text = line.replace(/^#{2,3}\s+/, '').replace(/\*\*/g, '')
+              const id = slugger.slug(text)
+              return { level, text, id }
+            })
+          if (headings.length < 3) return null
+          return (
+            <>
+              {/* Mobile TOC — inline collapsible */}
+              <details className="mb-8 text-xs xl:hidden">
+                <summary className="cursor-pointer mb-2" style={{ color: 'var(--text-dim)' }}>
+                  <span style={{ color: 'var(--cyan)' }}>❯</span> cat --toc
+                </summary>
+                <ul className="space-y-1 pl-4" style={{ color: 'var(--text-dim)' }}>
+                  {headings.map((h, i) => (
+                    <li key={i} style={{ paddingLeft: h.level === 3 ? '1rem' : 0 }}>
+                      <a href={`#${h.id}`} className="hover:text-[var(--cyan)] transition-colors">
+                        {h.text}
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              </details>
 
-      {/* content */}
-      <div className="prose">
-        <MDXRemote source={post.content} components={{ TLDRCard, VideoEmbed }} options={{ mdxOptions: { remarkPlugins: [remarkGfm], rehypePlugins: [rehypeSlug] } }} />
+              {/* Desktop TOC — fixed sidebar with active tracking */}
+              <TocSidebar headings={headings} />
+            </>
+          )
+        })()}
+
+        {/* content */}
+        <div className="prose">
+          <MDXRemote source={post.content} components={{ TLDRCard, VideoEmbed }} options={{ mdxOptions: { remarkPlugins: [remarkGfm], rehypePlugins: [rehypeSlug] } }} />
+        </div>
       </div>
 
       {/* FAQ section */}

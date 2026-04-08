@@ -13,7 +13,7 @@ export default function TLDRCard({ children }: { children: React.ReactNode }) {
       >
         TL;DR
       </p>
-      <div style={{ color: 'var(--text-muted)' }}>{children}</div>
+      <div style={{ color: 'var(--text-dim)' }}>{children}</div>
     </div>
   )
 }
