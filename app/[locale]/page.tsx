@@ -2,6 +2,7 @@ import Link from 'next/link'
 import { getAllPosts } from '@/lib/blog'
 import { routing } from '@/i18n/routing'
 import type { Metadata } from 'next'
+import Search from '@/components/Search'
 
 const BASE_URL = 'https://ai-muninn.com'
 
@@ -104,6 +105,7 @@ export default async function Home({ params }: { params: Promise<{ locale: strin
 
       {posts.length > 0 ? (
         <section>
+          <Search locale={locale} />
           <p className="text-xs mb-4" style={{ color: 'var(--text-dim)' }}>
             <span style={{ color: 'var(--cyan)' }}>❯</span> {t.prompt}
           </p>
