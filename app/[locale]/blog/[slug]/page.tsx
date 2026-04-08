@@ -36,6 +36,12 @@ export async function generateMetadata({
   const otherLocale = locale === 'en' ? 'zh-TW' : 'en'
   const otherExists = hasTranslation(slug, otherLocale)
 
+  // Extract OG image from first VideoEmbed in content
+  const videoMatch = post.content.match(/VideoEmbed\s+src="\/videos\/([^"]+)\.mp4"/)
+  const ogImage = videoMatch
+    ? `${BASE_URL}/og/${videoMatch[1]}.jpg`
+    : undefined
+
   return {
     title: post.title,
     description: post.description,
@@ -60,11 +66,13 @@ export async function generateMetadata({
       publishedTime: post.date,
       tags: post.tags,
       ...(post.series && { section: post.series }),
+      ...(ogImage && { images: [{ url: ogImage, width: 1280, height: 720 }] }),
     },
     twitter: {
       card: 'summary_large_image',
       title: post.title,
       description: post.description,
+      ...(ogImage && { images: [ogImage] }),
     },
   }
 }
