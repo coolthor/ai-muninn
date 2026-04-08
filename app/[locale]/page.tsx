@@ -2,6 +2,7 @@ import Link from 'next/link'
 import { getAllPosts } from '@/lib/blog'
 import { routing } from '@/i18n/routing'
 import type { Metadata } from 'next'
+import type { BlogPost } from '@/lib/blog'
 import Search from '@/components/Search'
 
 const BASE_URL = 'https://ai-muninn.com'
@@ -31,28 +32,45 @@ export async function generateMetadata({
   }
 }
 
-const ui: Record<Locale, { prompt: string; viewAll: string; noPost: string; whoami: string[] }> = {
+const CONCEPT_SERIES = new Set(['AI 怎麼問', 'Ask AI Right', 'LLM 101'])
+
+function splitByCategory(posts: BlogPost[]): { concepts: BlogPost[]; fieldNotes: BlogPost[] } {
+  const concepts: BlogPost[] = []
+  const fieldNotes: BlogPost[] = []
+  for (const post of posts) {
+    if (post.series && CONCEPT_SERIES.has(post.series)) {
+      concepts.push(post)
+    } else {
+      fieldNotes.push(post)
+    }
+  }
+  return { concepts, fieldNotes }
+}
+
+const ui = {
   en: {
-    prompt: '❯ ls -lt ~/blog | head -5',
-    viewAll: 'view all posts →',
-    noPost: 'no posts yet. first one incoming.',
     whoami: [
       'hardware enthusiast running 120B models at home on DGX Spark',
       'building options trading infrastructure with AI agents',
       'occasionally ships iOS apps',
     ],
+    concepts: { title: 'Concepts & Methods', sub: 'For those who want to understand how AI works' },
+    fieldNotes: { title: 'Field Notes', sub: 'For those who run models and debug the hard way' },
+    viewAll: 'view all posts →',
+    noPost: 'no posts yet. first one incoming.',
   },
   'zh-TW': {
-    prompt: '❯ ls -lt ~/blog | head -5',
-    viewAll: '查看全部文章 →',
-    noPost: '還沒有文章，第一篇即將發布。',
     whoami: [
       '在家用 DGX Spark 跑 120B 模型的硬體愛好者',
       '用 AI Agent 建造期權交易基礎設施',
       '偶爾也會上架 iOS App',
     ],
+    concepts: { title: '概念與方法 (Concepts)', sub: '給想理解 AI 怎麼運作的人' },
+    fieldNotes: { title: '實戰紀錄 (Field Notes)', sub: '給在跑模型、踩過坑的人' },
+    viewAll: '查看全部文章 →',
+    noPost: '還沒有文章，第一篇即將發布。',
   },
-}
+} as const
 
 const personSchema = {
   '@context': 'https://schema.org',
@@ -66,12 +84,41 @@ const personSchema = {
   description: 'AI infrastructure engineer. Runs 120B models at home, builds options trading systems with AI agents.',
 }
 
+function PostList({ posts, locale, max }: { posts: BlogPost[]; locale: string; max: number }) {
+  const shown = posts.slice(0, max)
+  return (
+    <ul className="space-y-4">
+      {shown.map(post => (
+        <li key={post.slug} className="flex items-baseline gap-4">
+          <span className="text-xs shrink-0 tabular-nums" style={{ color: 'var(--text-dim)' }}>
+            {post.date}
+          </span>
+          <div className="min-w-0">
+            <Link
+              href={`/${locale}/blog/${post.slug}`}
+              className="text-sm hover:text-[var(--cyan-dim)] transition-colors"
+              style={{ color: 'var(--cyan)' }}
+            >
+              {post.title}
+            </Link>
+            {post.description && (
+              <p className="text-xs mt-0.5 line-clamp-1" style={{ color: 'var(--text-muted)' }}>
+                {post.description}
+              </p>
+            )}
+          </div>
+        </li>
+      ))}
+    </ul>
+  )
+}
+
 export default async function Home({ params }: { params: Promise<{ locale: string }> }) {
   const { locale } = await params
   const l = locale as Locale
   const allPosts = getAllPosts(locale)
-  const posts = allPosts.slice(0, 5)
   const totalCount = allPosts.length
+  const { concepts, fieldNotes } = splitByCategory(allPosts)
   const t = ui[l] ?? ui.en
 
   return (
@@ -103,48 +150,56 @@ export default async function Home({ params }: { params: Promise<{ locale: strin
         </div>
       </section>
 
-      {posts.length > 0 ? (
-        <section>
-          <Search locale={locale} />
-          <p className="text-xs mb-4" style={{ color: 'var(--text-dim)' }}>
-            <span style={{ color: 'var(--cyan)' }}>❯</span> {t.prompt}
-          </p>
-          <ul className="space-y-4">
-            {posts.map(post => (
-              <li key={post.slug} className="flex items-baseline gap-4">
-                <span className="text-xs shrink-0 tabular-nums" style={{ color: 'var(--text-dim)' }}>
-                  {post.date}
-                </span>
-                <div className="min-w-0">
-                  <Link
-                    href={`/${l}/blog/${post.slug}`}
-                    className="text-sm hover:text-[var(--cyan-dim)] transition-colors"
-                    style={{ color: 'var(--cyan)' }}
-                  >
-                    {post.title}
-                  </Link>
-                  {post.description && (
-                    <p className="text-xs mt-0.5 line-clamp-1" style={{ color: 'var(--text-muted)' }}>
-                      {post.description}
-                    </p>
-                  )}
-                </div>
-              </li>
-            ))}
-          </ul>
-          <div className="mt-6">
-            <Link href={`/${l}/blog`} className="text-xs" style={{ color: 'var(--text-dim)' }}>
-              {l === 'zh-TW'
-                ? `顯示 5 / ${totalCount} 篇 · ${t.viewAll}`
-                : `showing 5 of ${totalCount} · ${t.viewAll}`}
-            </Link>
-          </div>
-        </section>
-      ) : (
+      <Search locale={locale} />
+
+      {totalCount === 0 ? (
         <section className="text-sm" style={{ color: 'var(--text-dim)' }}>
           <p><span style={{ color: 'var(--cyan)' }}>❯</span> ls ~/blog</p>
           <p className="pl-4 mt-1">{t.noPost}</p>
         </section>
+      ) : (
+        <>
+          {/* 概念與方法 */}
+          {concepts.length > 0 && (
+            <section>
+              <p className="text-xs mb-1" style={{ color: 'var(--text-dim)' }}>
+                <span style={{ color: 'var(--cyan)' }}>❯</span> cat ~/blog/{l === 'zh-TW' ? '概念' : 'concepts'}
+              </p>
+              <p className="text-sm font-semibold mb-1" style={{ color: 'var(--text)' }}>
+                {t.concepts.title}
+              </p>
+              <p className="text-xs mb-4" style={{ color: 'var(--text-dim)' }}>
+                {t.concepts.sub}
+              </p>
+              <PostList posts={concepts} locale={l} max={5} />
+            </section>
+          )}
+
+          {/* 實戰紀錄 */}
+          {fieldNotes.length > 0 && (
+            <section>
+              <p className="text-xs mb-1" style={{ color: 'var(--text-dim)' }}>
+                <span style={{ color: 'var(--cyan)' }}>❯</span> cat ~/blog/{l === 'zh-TW' ? '實戰' : 'field-notes'}
+              </p>
+              <p className="text-sm font-semibold mb-1" style={{ color: 'var(--text)' }}>
+                {t.fieldNotes.title}
+              </p>
+              <p className="text-xs mb-4" style={{ color: 'var(--text-dim)' }}>
+                {t.fieldNotes.sub}
+              </p>
+              <PostList posts={fieldNotes} locale={l} max={5} />
+            </section>
+          )}
+
+          {/* Footer */}
+          <div>
+            <Link href={`/${l}/blog`} className="text-xs" style={{ color: 'var(--text-dim)' }}>
+              {l === 'zh-TW'
+                ? `共 ${totalCount} 篇文章 · ${t.viewAll}`
+                : `${totalCount} posts total · ${t.viewAll}`}
+            </Link>
+          </div>
+        </>
       )}
     </div>
   )
