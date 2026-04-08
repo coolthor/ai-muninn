@@ -1,0 +1,124 @@
+---
+title: "[vLLM] GX10 供電問題：那個 30W 安全模式，韌體救不了你"
+description: "部分 GX10 出廠就帶有 PD controller 缺陷，整台機器被永久鎖在 30W。一個指令診斷你有沒有中招，以及什麼時候應該放棄刷韌體直接申請 RMA。"
+date: "2026-04-02"
+updatedAt: "2026-04-02"
+tags: ["GX10", "GB10", "DGX Spark", "power delivery", "vLLM", "hardware"]
+series: "DGX Spark"
+part: 6
+---
+
+一個看起來像軟體問題的硬體問題是最浪費時間的那種。你花了一天調 vLLM 的參數、換量化格式、翻 kernel log——結果機器從頭到尾就是在餓死狀態。
+
+這篇接在系列前幾篇之後（[Part 5](/zh-TW/blog/dgx-spark-fp8-kvcache-repetition)），不討論模型行為或 CUDA 錯誤，只談底層硬體。
+
+<TLDRCard>
+部分 GX10 出廠帶有 PD controller 缺陷，不管跑什麼負載，整台機器的總功耗都被永久鎖在約 30W。刷韌體無效，NVIDIA 建議直接 RMA。一個指令可以在 30 秒內確認你有沒有中招。
+</TLDRCard>
+
+## 先跑這個診斷
+
+隨便給 GPU 一個負載——一個 inference request、矩陣乘法都行——然後：
+
+```bash
+nvidia-smi --query-gpu=power.draw,utilization.gpu,clocks.sm --format=csv,noheader
+```
+
+兩種結果：
+
+**正常：**
+```
+35.65 W, 96 %, 2522 MHz
+```
+
+**30W 安全模式：**
+```
+4.80 W, 2 %, 2411 MHz
+```
+
+在安全模式下，GPU 利用率接近零，不管你丟多少工作進去。不是過熱降頻——是 PMIC 在電源層面就把你鎖住了。
+
+我這台在跑 Qwen3.5-35B-A3B-FP8 生成 300 tokens 的時候：
+
+```
+power.draw = 35.65 W  |  utilization.gpu = 96%  |  clocks.sm = 2522 MHz
+throughput  = ~50 tok/s
+```
+
+沒有 throttling，正常。
+
+## 根本原因：PD Controller Firmware 協商失敗
+
+GX10 透過 USB-C PD 3.1（180W EPR）供電。PD controller 要跟 240W 變壓器協商，才能解鎖高功率模式（20V/5A 以上或 28V）。
+
+問題機器的 PD controller 這個協商會靜默失敗。變壓器插著，機器也開得起來，但 PD 從來沒有升到高功率，PMIC 就把整個 power rail 鎖在約 30W。
+
+dmesg 裡會看到：
+
+```
+Detected insufficient power on the PCIe slot (27W)
+```
+
+這個訊息會出現在多個 Mellanox NIC 上——代表是全機的電源餓死，不是單一元件的問題。
+
+## 什麼方法沒用
+
+ASUS 的官方建議是 PD firmware 的「double flash」：
+
+```
+刷韌體 → 重開 → 再刷 → 再重開
+```
+
+[NVIDIA Developer Forums 的帖子](https://forums.developer.nvidia.com/t/asus-ascent-gx10-dgx-spark-permanent-power-throttle-at-30w-safety-mode-pd-firmware-negotiation-failure/355255)裡有人照著做，throttling 沒解。NVIDIA support 的結論是：**硬體缺陷，直接 RMA**。
+
+軟體觸碰不到這個問題的根源。PD controller 本身壞掉了。
+
+## 另一個 5W 鎖死（不同問題，可以修）
+
+還有另一種情況值得知道：GPU 卡在 5W、利用率 0%，原因是 driver 版本太舊（550.54.15 + CUDA 12.4）。
+
+這個是軟體問題：
+
+```bash
+sudo apt dist-upgrade
+sudo fwupdmgr refresh && sudo fwupdmgr update
+```
+
+升到 Driver 580.x + CUDA 13.0 就解了，2026 年 1 月確認 fixed。
+
+如果 GPU 利用率低但不是完全歸零，先確認 driver 版本，別急著認定是硬體問題。
+
+## 韌體版本
+
+目前最新韌體：**BIOS v0103（2026/03/18）**
+
+```
+SOC / 0x305
+EC  / 2.78.18.3
+PD  / 0x507
+```
+
+我這台目前是 PD `0x500`，有空再更新。沒有 30W 症狀的話不急。如果已經在安全模式，更新 PD firmware 大概也救不了，但 RMA 之前還是做一次排除看看。
+
+## 這次的收穫
+
+**最浪費時間的地方：** 30W 問題是靜默的。機器開得起來、指令跑得動、requests 也服務得了——就是慢。沒有直接量 `power.draw` + `utilization.gpu` 的話，看起來完全像 vLLM 設定的問題。
+
+**可以複用的診斷思路：** 任何新硬體上跑出來的 inference 速度異常，先在負載下同時量 `power.draw` 和 `utilization.gpu`。利用率高但功耗遠低於 TDP，先查電源鏈，再調軟體。
+
+**一句話結論：** 看起來像設定問題的硬體缺陷最費時，因為軟體側的調試空間是無限的。
+
+## Checklist
+
+1. 在 GPU 負載下跑 `nvidia-smi --query-gpu=power.draw,utilization.gpu,clocks.sm --format=csv,noheader`
+2. 利用率低 → 先確認 driver 版本，升到 580.x + CUDA 13.0
+3. 利用率高但速度異常慢 → 查 dmesg 有沒有 30W 的 signature
+4. 確認 30W → 做 ASUS 的 PD firmware double flash，沒用就 RMA
+5. 無論如何都更新到 BIOS v0103（PD 0x507）——其他用戶回報更新後溫度有下降
+
+---
+
+*系列其他文章：*
+- *[Part 5 — FP8 KV Cache 輸出退化](/zh-TW/blog/dgx-spark-fp8-kvcache-repetition)*
+- *[Part 4 — SM121 上的 NVFP4 除錯](/zh-TW/blog/part1-why-your-dgx-spark-says-exclamation-marks)*
+- *[Part 3 — TurboQuant KV Cache Benchmark](/zh-TW/blog/turboquant-kv-cache-benchmark-gx10)*

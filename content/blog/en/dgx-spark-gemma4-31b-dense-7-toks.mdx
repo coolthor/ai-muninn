@@ -21,6 +21,16 @@ faq:
 Gemma 4 31B dense NVFP4 runs at **7.0 tok/s** on DGX Spark — exactly matching community benchmarks. The 26B-A4B MoE does 52 tok/s on the same hardware. Dense models hit a bandwidth wall at 273 GB/s that no quantization can fix.
 </TLDRCard>
 
+## Plain-Language Version: Why Bigger Models Aren't Always Better
+
+Gemma 4 comes in two large sizes: 26B MoE (Mixture of Experts) and 31B Dense. The 31B has more parameters — the "knowledge" baked into the model. You'd expect it to be better. But on hardware with limited memory bandwidth, like the [NVIDIA DGX Spark](https://www.nvidia.com/en-us/products/dgx-spark/) (273 GB/s), the 31B is 7.4x slower than the 26B.
+
+The reason: a "dense" model reads all 31 billion parameters for every word it generates. An "MoE" model only reads 3.8 billion — it picks the relevant experts and ignores the rest. On a narrow memory pipe, reading less data per word means generating words faster.
+
+I tested both on the same GPU to quantify exactly how much the architecture matters. The 31B hit 7 tok/s. The 26B hit 52 tok/s. No amount of compression fixes a bandwidth wall.
+
+---
+
 ## Preface
 
 Sometimes the best use of an experiment is to confirm what the math already said. The arithmetic predicted ~4.4 tok/s for a 31B dense model on a 273 GB/s memory bus. The actual result was 7.0 tok/s — better than predicted thanks to NVFP4 compression, but still 7.4x slower than the MoE variant.

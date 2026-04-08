@@ -27,7 +27,7 @@ Gemma 4 31B on a 32GB MacBook Pro: Ollama defaults to **1.5 tok/s** (swap), but 
 
 When you run an AI model on your laptop, the model needs two things in memory: the model itself (its "brain") and a scratch pad called the KV cache (its "short-term memory" for the conversation). The bigger the conversation window, the bigger this scratch pad.
 
-Gemma 4 31B — Google's largest dense model — takes up 19 GB. A MacBook Pro with 32 GB of RAM should have 13 GB left over. That sounds like plenty for a scratch pad. But Ollama, the most popular tool for running local AI models, defaults to a conversation window of 32,768 tokens. At that size, the scratch pad alone can eat 10+ GB. Total: 29+ GB. Add macOS overhead, and the system starts writing memory to the SSD — a process called swapping that's roughly 100x slower than RAM.
+[Gemma 4](https://blog.google/technology/developers/gemma-4/) 31B — Google's largest dense model — takes up 19 GB. A MacBook Pro with 32 GB of RAM should have 13 GB left over. That sounds like plenty for a scratch pad. But [Ollama](https://ollama.com), the most popular tool for running local AI models, defaults to a conversation window of 32,768 tokens. At that size, the scratch pad alone can eat 10+ GB. Total: 29+ GB. Add macOS overhead, and the system starts writing memory to the SSD — a process called swapping that's roughly 100x slower than RAM.
 
 The result: a laptop that should generate text at 10+ tokens per second crawls at 1.5, while the fans scream and the chassis burns.
 

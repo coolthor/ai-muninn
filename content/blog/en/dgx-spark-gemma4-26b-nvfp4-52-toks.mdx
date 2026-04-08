@@ -2,7 +2,7 @@
 title: "[vLLM] Gemma 4 26B-A4B NVFP4 on DGX Spark: 52 tok/s with 16 GB of Weights"
 description: "Deploying Gemma 4 26B-A4B MoE NVFP4 on GB10 via vLLM 0.19 — 52 tok/s decode, 16.5 GB model, 82 GB free KV cache. Includes the Phase 0 decision that killed the 31B variant."
 date: "2026-04-05"
-updatedAt: "2026-04-05"
+updatedAt: "2026-04-07"
 tags: ["Gemma 4", "NVFP4", "vLLM", "DGX Spark", "GB10", "SM121", "MoE", "benchmark"]
 series: "DGX Spark"
 part: 7
@@ -22,6 +22,18 @@ faq:
 <TLDRCard>
 Gemma 4 26B-A4B NVFP4 runs at **52 tok/s** on DGX Spark (GB10) via vLLM 0.19, using only 16.5 GB of model memory and leaving 82 GB for KV cache. The 31B dense variant is 7.5x slower — don't bother.
 </TLDRCard>
+
+## Plain-Language Version: What Is Gemma 4? What Does 52 tok/s Mean?
+
+Gemma 4 is an open-source AI model released by Google in April 2026. Open-source means anyone can download it and run it on their own computer — no payment to Google, no internet connection required. It can chat, write code, and answer questions like ChatGPT, but it lives on your machine.
+
+The model comes in two variants: 31B (31 billion parameters, the full version) and 26B-A4B (26 billion parameters total, but only 3.8 billion active at a time). The latter is called MoE (Mixture of Experts) — think of a company with 260 employees where only 38 show up to handle each task while the rest stay idle. This means it moves far less data per inference step, so it runs much faster.
+
+What does 52 tok/s (tokens per second) feel like? One token is roughly one Chinese character or half an English word. 52 tok/s means the AI generates about 52 characters per second — close to your reading speed, so conversations feel instant. By comparison, the 31B full version manages 7 tok/s on the same hardware. Seven characters per second. It types slower than you read.
+
+I benchmarked both variants on an NVIDIA DGX Spark (a ~$3,000 desktop AI workstation). This article covers the full decision process, deployment steps, and every gotcha along the way.
+
+---
 
 ## Preface
 

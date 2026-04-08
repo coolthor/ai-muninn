@@ -29,7 +29,7 @@ When you run an AI model on your own computer instead of in the cloud, the speed
 
 But there's a catch. If the model is too large to fit in your computer's memory, it spills onto the SSD (a process called swapping). SSDs are roughly 100x slower than RAM. When that happens, it doesn't matter how fast your memory bandwidth is — the model crawls.
 
-I tested Google's Gemma 4 — all four sizes, from the tiny E2B to the full 31B — on four different machines ranging from a $600 Mac mini to a custom gaming PC with an RTX 5090. Same software (Ollama), same prompts, same methodology.
+I tested [Google's Gemma 4](https://blog.google/technology/developers/gemma-4/) — all four sizes, from the tiny E2B to the full 31B — on four different machines ranging from a $600 Mac mini to a custom gaming PC with an [RTX 5090](https://www.nvidia.com/en-us/geforce/graphics-cards/50-series/rtx-5090/). Same software ([Ollama](https://ollama.com)), same prompts, same methodology.
 
 The result: a MacBook Pro with 1.5x the bandwidth of a $3,000 DGX Spark ran the 31B model 5x slower — because it ran out of memory and started swapping.
 

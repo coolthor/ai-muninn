@@ -2,7 +2,7 @@
 title: "NemoClaw Explained: NVIDIA's All-in-One AI Agent Framework for DGX Spark"
 description: "NemoClaw = OpenClaw + OpenShell + NVIDIA Agent Toolkit in one package. What problem it solves, how the architecture works, and whether it's worth installing on your DGX Spark."
 date: "2026-03-23"
-updatedAt: "2026-03-23"
+updatedAt: "2026-04-07"
 tags: ["NemoClaw", "OpenClaw", "OpenShell", "AI Agent", "NVIDIA", "DGX Spark", "GX10"]
 series: "NemoClaw"
 part: 1
@@ -15,6 +15,18 @@ OpenClaw has been running as my personal AI agent on the local Mac for a while. 
 <TLDRCard>
 NemoClaw (v0.1.0, GTC 2026) bundles OpenClaw agent core + OpenShell security sandbox + NVIDIA Agent Toolkit into a single installable framework. The key addition is OpenShell: a policy enforcement layer that runs between the user and the agent, sandboxing file access and restricting tool execution. Without it, OpenClaw is a capable but permissive agent runtime. With it, OpenClaw becomes deployable in contexts where you can't trust the agent to self-limit.
 </TLDRCard>
+
+## Plain-Language Version: What Does NemoClaw Actually Do?
+
+If you've used ChatGPT or Claude, you know AI can chat and answer questions. But there's a big gap between "chatting" and "doing things for you." You can ask ChatGPT how to organize your photos — it'll give you the steps, but it won't actually sort the files on your hard drive.
+
+That's the problem NemoClaw wants to solve. It's an open-source framework NVIDIA announced at GTC 2026, built to let AI go beyond talking and start doing — reading your files, running commands, remembering previous conversations. Think of it as an assistant that lives inside your computer.
+
+Sounds powerful, but also risky, right? An AI that can read and write files — what if it goes rogue? This is where NemoClaw is fundamentally different from just installing a random AI agent. It ships with a built-in security sandbox called OpenShell. Think of it as a fence around the AI — the AI can do anything inside the fence, but it can't get out. Which folders it can access, which tools it can use — you define all of it.
+
+I installed NemoClaw on my NVIDIA DGX Spark (a desktop AI workstation) and ran it for a while. This article covers what's inside it, how the architecture works, and whether it's worth installing.
+
+---
 
 ## What NemoClaw Actually Is
 

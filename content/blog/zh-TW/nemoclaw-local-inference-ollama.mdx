@@ -2,7 +2,7 @@
 title: "[AI Agent] NemoClaw 不靠雲端：把 Nemotron 換成本地 Ollama 模型"
 description: "怎麼把 NemoClaw 的推理後端指向本地 Ollama 或 vLLM endpoint。Config 位置、模型替換，以及雲端消失後 OpenShell 仍然在做什麼。"
 date: "2026-03-24"
-updatedAt: "2026-03-24"
+updatedAt: "2026-04-07"
 tags: ["NemoClaw", "OpenClaw", "OpenShell", "Ollama", "vLLM", "AI Agent", "NVIDIA", "GX10", "Local Inference"]
 series: "NemoClaw"
 part: 3
@@ -17,6 +17,18 @@ part: 3
 <TLDRCard>
 NemoClaw 的推理後端是 OpenAI-compatible，可以在每個 sandbox 的 `~/.nemoclaw/sandboxes/<name>/config.yaml` 裡設定。換成本地 Ollama endpoint（`http://localhost:11434/v1`）需要改三個欄位：endpoint URL、model name、api_key（設成 `"ollama"`）。OpenShell 的 filesystem 和工具政策跟推理後端無關——不管跑哪個模型都照樣執行。
 </TLDRCard>
+
+## 白話版：為什麼要在自己電腦跑 AI？
+
+現在大部分人用 AI 的方式是打開瀏覽器、連上 ChatGPT 或 Claude 的網站。你打字，文字傳到遠端伺服器，AI 處理完再傳回來。這叫「雲端推理」——方便，但你的每一句話都離開了你的電腦。
+
+還有另一種方式：把 AI 模型下載到自己的機器上跑。這叫「本地推理」。Ollama 是目前最簡單的工具之一——一行指令就能在你的電腦上跑各種開源 AI 模型，不需要連網、不需要付月費、對話內容完全不離開你的硬碟。
+
+這篇文章講的是怎麼把 NemoClaw（NVIDIA 的 AI agent 框架）從雲端模式切換成本地模式。原本它預設用 NVIDIA 自家的雲端 API，免費試用 30 天。過期之後呢？與其付費，不如指向桌上那台已經有 128GB 記憶體的 DGX Spark。
+
+改三個設定值，agent 就從雲端搬回本地了。而且安全機制（OpenShell 沙箱）跟用哪個模型無關——不管你跑雲端還是本地、用哪個模型，圍欄照樣在。
+
+---
 
 ## 為什麼要換後端
 

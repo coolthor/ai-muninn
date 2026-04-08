@@ -2,7 +2,7 @@
 title: "[vLLM] Qwen3.5-122B Runs. But at 14 tok/s."
 description: "After fixing the four SM121 NVFP4 bugs, Qwen3.5-122B boots cleanly and generates correct output. Then you check the speed. 14 tok/s. No flags to fix it. Here's why — and what to wait for."
 date: "2026-03-19"
-updatedAt: "2026-03-19"
+updatedAt: "2026-04-07"
 tags: ["DGX Spark", "SM121", "Qwen3.5-122B", "vLLM", "NVFP4", "Marlin", "GDN", "LLM Serving"]
 series: "Qwen3.5-122B on DGX Spark"
 part: 1
@@ -19,6 +19,23 @@ faq:
 
 
 <VideoEmbed src="/videos/qwen-122b-speed.mp4" />
+
+<TLDRCard>
+Qwen3.5-122B boots correctly on DGX Spark (GB10/SM121) after the Part 1 SM121 fixes — output is coherent, model works. Speed stabilizes at 14 tok/s regardless of tuning. Root cause: Marlin has no specialized kernel for GDN (Gated Delta Network) SSM layers, so they fall back to a generic compute path. No flag fixes this. Theoretical ceiling is ~30 tok/s; current ceiling is ~14 tok/s. Use gpt-oss-120B (~59 tok/s) for interactive workloads until Marlin ships GDN support.
+</TLDRCard>
+
+## Plain-Language Version: A 122-Billion-Parameter AI Model — Why Only 14 tok/s?
+
+Let's start with the numbers. 122 billion parameters means this AI model has 122 billion adjustable "knobs" — more parameters generally means smarter, capable of handling more complex tasks. Qwen3.5-122B is one of the largest open-source models available, with capabilities approaching ChatGPT's level.
+
+14 tok/s means 14 characters generated per second. Is it usable? Yes. Is it comfortable? Not really. Chatting with it feels like texting someone who types slowly. On the same machine, another model of similar size (gpt-oss-120B) runs at 59 tok/s — four times faster.
+
+Why the huge gap? It's not the hardware, and it's not misconfiguration. Qwen3.5-122B uses a newer architecture (GDN — a hybrid of traditional Transformer and SSM layers), and the current software doesn't have optimized kernels for it yet. Imagine a 12-lane highway where 6 lanes are freshly paved and 6 are still dirt — traffic flows, but half the lanes are stuck at construction-zone speed.
+
+This article documents my journey from "I must have configured something wrong" to "this is a software-level limitation, not a user error." If you're considering running large models yourself, this story could save you hours of troubleshooting.
+
+---
+
 ## Preface
 
 This article is about a result that looks like failure but isn't.

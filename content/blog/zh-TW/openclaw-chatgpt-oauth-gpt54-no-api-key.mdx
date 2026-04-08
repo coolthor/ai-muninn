@@ -2,7 +2,7 @@
 title: "[AI Agent] openclaw + ChatGPT OAuth：不買 API 額度也能用 GPT-5.4"
 description: "openclaw 2026.3.13 加入了 OpenAI OAuth 登入。一行指令讓你的 agent 用 ChatGPT Plus 訂閱取得 GPT-5.4 的 100 萬 token context，不需要另外買 API credits。"
 date: "2026-03-24"
-updatedAt: "2026-03-24"
+updatedAt: "2026-04-07"
 tags: ["openclaw", "GPT-5.4", "ChatGPT", "OAuth", "AI agent"]
 series: "OpenClaw"
 part: 11
@@ -17,6 +17,18 @@ part: 11
 <TLDRCard>
 `openclaw models auth login --provider openai-codex` 讓你用 ChatGPT Plus 帳號把 GPT-5.4（100 萬 token context）加進 openclaw，不需要 OpenAI API key。三個地雷：需要互動式 terminal、auth 後要重啟 gateway、default model 要另外設定。
 </TLDRCard>
+
+## 白話版：你的 ChatGPT Plus 訂閱其實能做更多
+
+很多人每個月付 20 美金訂 ChatGPT Plus，用來聊天、寫文章、問問題。但大部分人不知道的是，這個訂閱背後的 AI 模型（GPT-5.4）其實可以被「借」出來給其他工具用——不只是 ChatGPT 網頁。
+
+openclaw 是一個開源的 AI agent 框架，讓你在自己的電腦上跑 AI 助手。2026 年 3 月的更新加了一個功能：用你的 ChatGPT Plus 帳號登入，你的 agent 就能直接使用 GPT-5.4，不需要另外買 OpenAI 的 API 額度。
+
+這代表什麼？如果你本來就在付 ChatGPT Plus，你現在可以讓自己的 AI agent 也用到同一個模型的能力——100 萬 token 的上下文視窗、最新的推理能力——而且不用多花一毛錢。就像你已經有健身房月費了，現在發現原來游泳池也包含在裡面。
+
+設定大概五分鐘，但有三個地雷在官方文件裡沒寫清楚。這篇會帶你走完全程。
+
+---
 
 ## 2026.3.13 改了什麼
 

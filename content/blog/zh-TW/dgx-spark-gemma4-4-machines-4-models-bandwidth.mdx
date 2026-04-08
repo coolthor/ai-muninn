@@ -29,7 +29,7 @@ Gemma 4 在 RTX 5090、M1 Max、DGX Spark、M4 四台機器上測試。**E2B 在
 
 但有個陷阱。如果模型太大塞不進記憶體，就會溢出到 SSD（這叫 swap）。SSD 比 RAM 慢大約 100 倍。一旦發生 swap，記憶體頻寬再高都沒用 — 模型直接龜速。
 
-我用 Google 的 Gemma 4 — 從最小的 E2B 到最大的 31B — 在四台不同的機器上測試。從 $600 的 Mac mini 到裝了 RTX 5090 的桌機。同樣的軟體（Ollama）、同樣的 prompt、同樣的方法。
+我用 [Google 的 Gemma 4](https://blog.google/technology/developers/gemma-4/) — 從最小的 E2B 到最大的 31B — 在四台不同的機器上測試。從 $600 的 Mac mini 到裝了 RTX 5090 的桌機。同樣的軟體（Ollama）、同樣的 prompt、同樣的方法。
 
 結果：MacBook Pro 頻寬是 DGX Spark 的 1.5 倍，但跑 31B 反而慢了 5 倍 — 因為記憶體不夠開始 swap。
 

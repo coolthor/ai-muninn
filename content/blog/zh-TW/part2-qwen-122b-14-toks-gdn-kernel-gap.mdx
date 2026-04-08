@@ -2,7 +2,7 @@
 title: "[vLLM] Qwen3.5-122B 跑起來了。但只有 14 tok/s。"
 description: "修完四個 SM121 NVFP4 bug 之後，Qwen3.5-122B 能跑、輸出正確。然後你看了速度：14 tok/s。沒有 flag 能修它。為什麼——以及在等什麼。"
 date: "2026-03-19"
-updatedAt: "2026-03-19"
+updatedAt: "2026-04-07"
 tags: ["DGX Spark", "SM121", "Qwen3.5-122B", "vLLM", "NVFP4", "Marlin", "GDN", "LLM Serving"]
 series: "Qwen3.5-122B on DGX Spark"
 part: 1
@@ -19,6 +19,23 @@ faq:
 
 
 <VideoEmbed src="/videos/qwen-122b-speed.mp4" />
+
+<TLDRCard>
+Qwen3.5-122B 在套用第一篇的 SM121 修法後能在 DGX Spark（GB10）正常啟動，輸出正確。速度穩定在 14 tok/s，怎麼調都不動。根本原因：Marlin 沒有針對 GDN（Gated Delta Network）SSM 層的特化 kernel，導致這些層走 generic fallback 路徑。沒有 flag 能修它。理論上限 ~30 tok/s，目前實際上限 ~14 tok/s。等 Marlin 加入 GDN kernel 支援前，互動式任務用 gpt-oss-120B（~59 tok/s）。
+</TLDRCard>
+
+## 白話版：1220 億參數的 AI 模型，為什麼只跑 14 tok/s？
+
+先解釋一下數字。1220 億參數代表這個 AI 模型有 1220 億個可調整的「旋鈕」——參數越多，模型通常越聰明、能處理的任務越複雜。Qwen3.5-122B 是目前最大的開源模型之一，能力接近 ChatGPT 等級。
+
+14 tok/s 代表每秒生成 14 個字。能用嗎？能。舒服嗎？不太。打字聊天會有明顯的等待感，像跟一個打字很慢的人對話。同一台機器上另一個類似大小的模型（gpt-oss-120B）可以跑到 59 tok/s，快了四倍。
+
+為什麼差這麼多？不是機器的問題，也不是設定的問題。Qwen3.5-122B 用了一種比較新的架構（GDN，一種混合了傳統 Transformer 和 SSM 的設計），而目前的軟體還沒有針對這種架構做最佳化。就像一條 12 線道的高速公路，6 條已經鋪好柏油路、6 條還是泥土路——車子在跑，但一半的車道在施工限速。
+
+這篇文章記錄了我怎麼從「以為是自己設定錯」到「確認是軟體層的限制」的整個過程。如果你也在考慮跑大模型，這個故事能幫你省下很多排查時間。
+
+---
+
 ## 前言
 
 這篇講的是一個看起來像失敗、但其實不是的結果。

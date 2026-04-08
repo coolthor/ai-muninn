@@ -2,7 +2,7 @@
 title: "NemoClaw 是什麼？NVIDIA 一鍵 AI Agent 框架完整解析"
 description: "NemoClaw = OpenClaw + OpenShell + NVIDIA Agent Toolkit 三合一。這篇講清楚它解決什麼問題、架構怎麼運作、值不值得在 DGX Spark 上裝。"
 date: "2026-03-23"
-updatedAt: "2026-03-23"
+updatedAt: "2026-04-07"
 tags: ["NemoClaw", "OpenClaw", "OpenShell", "AI Agent", "NVIDIA", "DGX Spark", "GX10"]
 series: "NemoClaw"
 part: 1
@@ -15,6 +15,18 @@ OpenClaw 在我的本地 Mac 上跑了一段時間，扮演個人 AI agent。GTC
 <TLDRCard>
 NemoClaw（v0.1.0，GTC 2026）把 OpenClaw agent core + OpenShell 安全沙箱 + NVIDIA Agent Toolkit 打包成一個框架。關鍵新增是 OpenShell：一個在使用者和 agent 之間執行政策的層，沙箱化檔案存取、限制工具執行。沒有它，OpenClaw 是個能幹但寬鬆的 agent runtime；有了它，OpenClaw 才能部署在你不能完全信任 agent 自我限制的場景。
 </TLDRCard>
+
+## 白話版：NemoClaw 到底在幹嘛？
+
+如果你用過 ChatGPT 或 Claude，你已經知道 AI 能聊天、能回答問題。但「聊天」跟「幫你做事」之間有一道很大的鴻溝。你可以問 ChatGPT「怎麼整理照片」，它會告訴你步驟——但它不會真的幫你把硬碟裡的照片整理好。
+
+NemoClaw 想解決的就是這件事。它是 NVIDIA 在 2026 年 GTC 大會上發布的開源框架，目標是讓 AI 不只會說，還能動手做。讀你的檔案、執行指令、記住上次的對話——像一個住在你電腦裡的助手。
+
+聽起來很厲害，但也很危險對吧？一個能讀寫檔案的 AI，如果失控怎麼辦？這就是 NemoClaw 跟「隨便裝一個 AI agent」最大的差別：它內建了一個叫 OpenShell 的安全沙箱。你可以把它想成是 AI 的圍欄——AI 能在圍欄裡面做任何事，但出不去。要讀哪些資料夾、能用哪些工具，全部由你定義。
+
+我在自己的 NVIDIA DGX Spark（一台桌上型 AI 工作站）上裝了 NemoClaw，實際跑了一段時間。這篇文章會告訴你：它裡面到底有什麼東西、架構怎麼運作、以及值不值得裝。
+
+---
 
 ## NemoClaw 實際上是什麼
 

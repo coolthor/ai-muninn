@@ -21,6 +21,16 @@ faq:
 vLLM serves Gemma 4 26B-A4B at **52 tok/s** on GB10 while Ollama tops at **40 tok/s** with the same model — a 30% gap from Marlin kernels, CUDA graphs, and torch.compile fusion. Ollama has a silent CPU/GPU split trap that can halve speed to 16 tok/s.
 </TLDRCard>
 
+## Plain-Language Version: vLLM vs Ollama
+
+[vLLM](https://github.com/vllm-project/vllm) and [Ollama](https://ollama.com) are two popular tools for running AI models on your own hardware. Ollama is simple — one command to download and run a model. vLLM is more complex to set up but designed for production serving with higher throughput.
+
+The question most people ask is: "Does the extra complexity of vLLM actually make it faster?" On an NVIDIA DGX Spark with the same Gemma 4 model, vLLM was 30% faster (52 vs 40 tok/s). The gap comes from GPU-level optimizations — [CUDA graphs](https://developer.nvidia.com/blog/cuda-graphs/), compiled kernels, and smarter memory management.
+
+I tested both runtimes head-to-head on identical hardware to measure the real-world difference. The 30% gap is consistent, but Ollama has a hidden trap that can make it 60% slower if you don't catch it.
+
+---
+
 ## Preface
 
 Same model, same weights, same GPU, same memory bus. One runtime is 30% faster. The interesting question isn't which one — it's why, and whether the gap matters for your use case.

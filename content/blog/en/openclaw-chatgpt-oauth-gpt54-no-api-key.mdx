@@ -2,7 +2,7 @@
 title: "[AI Agent] openclaw + ChatGPT OAuth: GPT-5.4 Without Buying API Credits"
 description: "openclaw 2026.3.13 added OpenAI OAuth login. One command gives your agent GPT-5.4's 1M context window using a ChatGPT Plus subscription instead of API credits."
 date: "2026-03-24"
-updatedAt: "2026-03-24"
+updatedAt: "2026-04-07"
 tags: ["openclaw", "GPT-5.4", "ChatGPT", "OAuth", "AI agent"]
 series: "OpenClaw"
 part: 11
@@ -17,6 +17,18 @@ This is Part 11 of the [OpenClaw series](/en/blog/openclaw-dgx-spark-local-ai-ag
 <TLDRCard>
 `openclaw models auth login --provider openai-codex` adds GPT-5.4 (1,050,000-token context) to your openclaw agent using a ChatGPT Plus account. No OpenAI API key required. Three gotchas: needs an interactive terminal, gateway must restart after auth, and the default model must be set separately.
 </TLDRCard>
+
+## Plain-Language Version: Your ChatGPT Plus Subscription Can Do More Than You Think
+
+A lot of people pay $20/month for ChatGPT Plus — to chat, write, ask questions. What most people don't realize is that the AI model behind it (GPT-5.4) can be "borrowed" by other tools, not just the ChatGPT website.
+
+openclaw is an open-source AI agent framework that runs on your own computer. A March 2026 update added a feature: log in with your ChatGPT Plus account, and your agent gets access to GPT-5.4 directly — no separate OpenAI API billing required.
+
+What does this mean? If you're already paying for ChatGPT Plus, you can now let your local AI agent use the same model — 1 million token context window, latest reasoning capabilities — without spending an extra cent. It's like discovering the swimming pool was included in your gym membership all along.
+
+Setup takes about five minutes, but there are three gotchas the release notes don't mention. This article walks you through the whole process.
+
+---
 
 ## What Changed in 2026.3.13
 

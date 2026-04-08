@@ -21,6 +21,16 @@ faq:
 Gemma 4 31B dense NVFP4 在 DGX Spark 上跑 **7.0 tok/s** — 跟社群 benchmark 完全吻合。同硬體上 26B-A4B MoE 跑 52 tok/s。Dense 模型在 273 GB/s 頻寬牆面前，量化救不了。
 </TLDRCard>
 
+## 白話版：為什麼更大的模型不一定更好
+
+[Gemma 4](https://blog.google/technology/developers/gemma-4/) 有兩個大型版本：26B MoE（Mixture of Experts，混合專家）和 31B Dense（密集）。31B 參數更多 — 代表模型「記住」的知識更多。直覺上應該更強。但在記憶體頻寬有限的硬體上，像 [NVIDIA DGX Spark](https://www.nvidia.com/en-us/products/dgx-spark/)（273 GB/s），31B 比 26B 慢了 7.4 倍。
+
+原因是：「dense」模型每生成一個字都要讀完全部 310 億個參數。「MoE」模型每次只讀 38 億 — 它會挑相關的專家出來做事，其他的不管。在窄的記憶體管道上，每個字讀的資料越少，生成速度越快。
+
+我在同一個 GPU 上測了兩個模型，量化架構對速度的影響到底有多大。31B 只有 7 tok/s。26B 有 52 tok/s。頻寬之牆不是壓縮能解決的。
+
+---
+
 ## 前言
 
 有時候實驗最大的價值是驗證算術已經告訴你的事。計算預測 31B dense 在 273 GB/s 記憶體匯流排上約 4.4 tok/s。實測 7.0 tok/s — 靠 NVFP4 壓縮比預期好，但仍然比 MoE 慢 7.4 倍。

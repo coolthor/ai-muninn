@@ -21,6 +21,16 @@ faq:
 同一個 Gemma 4 26B-A4B 在 GB10 上，vLLM 跑 **52 tok/s**、Ollama 跑 **40 tok/s** — 差 30% 來自 Marlin kernel、CUDA graphs 和 torch.compile 融合。Ollama 還有一個靜默 CPU/GPU split 陷阱，會把速度砍到 16 tok/s。
 </TLDRCard>
 
+## 白話版：vLLM vs Ollama
+
+[vLLM](https://github.com/vllm-project/vllm) 和 [Ollama](https://ollama.com) 是兩個最流行的本機 AI 推論工具。Ollama 簡單 — 一行指令就能下載和跑模型。vLLM 設定比較複雜，但它是為生產環境設計的，有更高的吞吐量。
+
+大家最常問的問題：「vLLM 比較難裝，但真的比較快嗎？」在同一台 NVIDIA DGX Spark 上用同一個 Gemma 4 模型測，vLLM 快 30%（52 vs 40 tok/s）。差距來自 GPU 層級的優化 — [CUDA graphs](https://developer.nvidia.com/blog/cuda-graphs/)、編譯過的 kernel、更聰明的記憶體管理。
+
+我在相同硬體上正面對決測了兩個 runtime。30% 的差距很穩定，但 Ollama 還有一個隱藏陷阱，踩到的話會慢 60%。
+
+---
+
 ## 前言
 
 同模型、同權重、同 GPU、同記憶體匯流排。一個 runtime 快 30%。有趣的不是哪個快，而是為什麼，以及這個差距對你有沒有意義。

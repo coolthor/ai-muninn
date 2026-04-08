@@ -2,7 +2,7 @@
 title: "[AI Agent] NemoClaw Without the Cloud: Swapping Nemotron for a Local Ollama Model"
 description: "How to point NemoClaw's inference backend to a local Ollama or vLLM endpoint. Config location, model swap, and what OpenShell still enforces when the cloud is gone."
 date: "2026-03-24"
-updatedAt: "2026-03-24"
+updatedAt: "2026-04-07"
 tags: ["NemoClaw", "OpenClaw", "OpenShell", "Ollama", "vLLM", "AI Agent", "NVIDIA", "GX10", "Local Inference"]
 series: "NemoClaw"
 part: 3
@@ -17,6 +17,18 @@ This continues from [Part 2](/en/blog/nemoclaw-install-gx10-from-scratch), which
 <TLDRCard>
 NemoClaw's inference backend is OpenAI-compatible and configurable per-sandbox via `~/.nemoclaw/sandboxes/<name>/config.yaml`. Pointing it at a local Ollama endpoint (`http://localhost:11434/v1`) requires three changes: endpoint URL, model name, and API key (set to `"ollama"`). OpenShell's filesystem and tool policy enforcement is independent of the inference backend — it applies regardless of which model is running.
 </TLDRCard>
+
+## Plain-Language Version: Why Run AI on Your Own Computer?
+
+Most people use AI by opening a browser and visiting ChatGPT or Claude's website. You type, your words travel to a remote server, the AI processes them, and sends the answer back. This is "cloud inference" — convenient, but every word you type leaves your computer.
+
+There's another way: download the AI model and run it on your own machine. This is "local inference." Ollama is one of the simplest tools for this — one command downloads and runs open-source AI models on your hardware. No internet needed, no monthly fee, and your conversations never leave your hard drive.
+
+This article covers switching NemoClaw (NVIDIA's AI agent framework) from cloud mode to local mode. By default, it uses NVIDIA's cloud API with a 30-day free trial. When that expires, instead of paying, you can point it at the DGX Spark already sitting on your desk with 128 GB of memory.
+
+Three config values changed, and the agent moves from cloud to local. The security sandbox (OpenShell) doesn't care which model you're running — whether it's cloud or local, the fence stays up.
+
+---
 
 ## Why Swap the Backend
 

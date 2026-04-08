@@ -1,0 +1,124 @@
+---
+title: "[vLLM] GX10 Power Delivery: The 30W Safety Mode No Firmware Can Fix"
+description: "Some GX10 units ship with a PD controller defect that caps the whole system at 30W permanently. How to diagnose it in 30 seconds, and when to stop troubleshooting and just RMA."
+date: "2026-04-02"
+updatedAt: "2026-04-02"
+tags: ["GX10", "GB10", "DGX Spark", "power delivery", "vLLM", "hardware"]
+series: "DGX Spark"
+part: 6
+---
+
+A power supply problem that looks like a software problem is the worst kind. You spend a day tuning vLLM flags, switching quantization formats, reading kernel logs — and the whole time the machine was just starving for power.
+
+This picks up from the series so far ([Part 5](/en/blog/dgx-spark-fp8-kvcache-repetition)). This one is not about model behavior or CUDA errors. It is about the hardware beneath all of that.
+
+<TLDRCard>
+Some GX10 units ship with a PD controller defect that permanently caps total system power at ~30W regardless of workload. Firmware reflash does not fix it. NVIDIA recommends RMA. Run one command to find out if you are affected.
+</TLDRCard>
+
+## The Diagnostic (Run This First)
+
+Fire any GPU-bound workload — an inference request, a quick matrix multiply, anything — then sample:
+
+```bash
+nvidia-smi --query-gpu=power.draw,utilization.gpu,clocks.sm --format=csv,noheader
+```
+
+Two outcomes:
+
+**Healthy:**
+```
+35.65 W, 96 %, 2522 MHz
+```
+
+**30W safety mode:**
+```
+4.80 W, 2 %, 2411 MHz
+```
+
+In safety mode, GPU utilization stays near zero regardless of how much work you throw at it. The machine is not thermal-throttling — it is power-starved at the PMIC level.
+
+On my unit, running Qwen3.5-35B-A3B-FP8 via vLLM during a 300-token generation:
+
+```
+power.draw = 35.65 W  |  utilization.gpu = 96%  |  clocks.sm = 2522 MHz
+throughput  = ~50 tok/s
+```
+
+No throttling. Normal behavior.
+
+## Root Cause: PD Controller Firmware Negotiation Failure
+
+The GX10 takes power via USB-C PD 3.1 (180W EPR spec). The PD controller negotiates with the 240W adapter to unlock high-power mode — somewhere around 20V/5A or 28V.
+
+On affected units, this negotiation fails silently. The adapter is plugged in, the machine boots normally, but the PD controller never escalates beyond the default safe power level. The PMIC then restricts the entire main power rail to approximately 30W.
+
+The dmesg signature:
+
+```
+Detected insufficient power on the PCIe slot (27W)
+```
+
+That message appears across multiple Mellanox network controllers — confirming this is system-wide power starvation, not a single component issue.
+
+## What Does Not Fix It
+
+ASUS's recommended procedure is a "double flash" of the PD controller firmware:
+
+```
+Flash → Reboot → Flash → Reboot
+```
+
+Users in the [NVIDIA Developer Forums thread](https://forums.developer.nvidia.com/t/asus-ascent-gx10-dgx-spark-permanent-power-throttle-at-30w-safety-mode-pd-firmware-negotiation-failure/355255) followed this exactly. The throttling persisted. NVIDIA support's conclusion: **hardware defect, RMA required**.
+
+This is not a fixable firmware issue. The PD controller itself has failed in a way that software cannot reach.
+
+## The Other Power Bug (Different Problem, Actually Fixable)
+
+There is a separate issue worth knowing: GPU stuck at 5W with 0% utilization, caused by running an outdated driver stack (550.54.15 + CUDA 12.4).
+
+This one is software:
+
+```bash
+sudo apt dist-upgrade
+sudo fwupdmgr refresh && sudo fwupdmgr update
+```
+
+Upgrading to Driver 580.x + CUDA 13.0 resolved it. Confirmed fixed as of January 2026.
+
+If your GPU utilization is low but not stuck at near-zero, check driver versions before assuming hardware failure.
+
+## Firmware Version
+
+The latest firmware as of this writing: **BIOS v0103 (2026/03/18)**
+
+```
+SOC / 0x305
+EC  / 2.78.18.3
+PD  / 0x507
+```
+
+My unit is currently on PD `0x500`. Updating is worth doing, but if you are not seeing 30W symptoms, it is not urgent. If you are in safety mode, updating PD firmware is unlikely to help — but do it before initiating RMA to rule it out.
+
+## What Was Gained
+
+**What cost the most time:** The 30W issue manifests silently. The machine boots, runs commands, serves requests — just slowly. Without the direct `power.draw` + `utilization.gpu` check, it would look like a vLLM config problem or an underpowered model.
+
+**Transferable diagnostic:** For any unexpectedly slow inference on new hardware, sample `power.draw` and `utilization.gpu` simultaneously under load. If utilization is high and power is low relative to rated TDP, the power delivery chain deserves scrutiny before any software tuning.
+
+**The pattern:** Hardware defects that look like configuration problems waste the most time because the debugging surface is infinite on the software side.
+
+## Checklist
+
+1. Run `nvidia-smi --query-gpu=power.draw,utilization.gpu,clocks.sm --format=csv,noheader` under load
+2. If utilization is low: check driver version, upgrade to 580.x + CUDA 13.0
+3. If utilization is high but throughput is inexplicably low: check for 30W dmesg signature
+4. If 30W confirmed: double-flash PD firmware per ASUS docs, then RMA if no change
+5. Update to BIOS v0103 (PD 0x507) regardless — cooler temps reported by other users post-update
+
+---
+
+*Also in this series:*
+- *[Part 5 — FP8 KV Cache Repetition](/en/blog/dgx-spark-fp8-kvcache-repetition)*
+- *[Part 4 — NVFP4 Debugging on SM121](/en/blog/part1-why-your-dgx-spark-says-exclamation-marks)*
+- *[Part 3 — TurboQuant KV Cache Benchmark](/en/blog/turboquant-kv-cache-benchmark-gx10)*

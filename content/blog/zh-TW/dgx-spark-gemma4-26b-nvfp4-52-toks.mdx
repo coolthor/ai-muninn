@@ -2,7 +2,7 @@
 title: "[vLLM] Gemma 4 26B-A4B NVFP4 跑在 DGX Spark：52 tok/s，模型只佔 16 GB"
 description: "在 GB10 上用 vLLM 0.19 部署 Gemma 4 26B-A4B MoE NVFP4 — 52 tok/s decode、16.5 GB 模型、82 GB KV cache 可用。包含 Phase 0 決策過程和完整踩坑記錄。"
 date: "2026-04-05"
-updatedAt: "2026-04-05"
+updatedAt: "2026-04-07"
 tags: ["Gemma 4", "NVFP4", "vLLM", "DGX Spark", "GB10", "SM121", "MoE", "benchmark"]
 series: "DGX Spark"
 part: 7
@@ -22,6 +22,18 @@ faq:
 <TLDRCard>
 Gemma 4 26B-A4B NVFP4 在 DGX Spark (GB10) 上用 vLLM 0.19 跑出 **52 tok/s**，模型只佔 16.5 GB，KV cache 剩 82 GB。31B dense 版只有 6.9 tok/s，別浪費時間。
 </TLDRCard>
+
+## 白話版：Gemma 4 是什麼？52 tok/s 是什麼意思？
+
+Gemma 4 是 Google 在 2026 年 4 月發布的開源 AI 模型。開源代表任何人都可以下載、在自己的電腦上跑，不需要付 Google 錢、不需要連網。跟 ChatGPT 一樣能聊天、寫程式、回答問題，但它住在你的機器裡。
+
+這個模型有兩個版本：31B（310 億參數，完整版）和 26B-A4B（260 億參數，但每次只用 38 億）。後面那個叫 MoE（Mixture of Experts）——你可以想成一間公司有 260 個員工，但每次只派 38 個人出來做事，其他人休息。這代表它需要搬動的資料量少很多，所以快很多。
+
+52 tok/s（每秒 52 個 token）大概是什麼概念？一個 token 大約等於一個中文字或半個英文單字。52 tok/s 意味著 AI 每秒可以生成大約 52 個字——跟你閱讀的速度差不多，對話起來不會有等待感。相比之下，同家族的 31B 完整版只有 7 tok/s，每秒 7 個字，打字比你慢。
+
+我在 NVIDIA DGX Spark（一台售價約 3,000 美金的桌上型 AI 工作站）上實測了這兩個版本。這篇記錄完整的決策過程、部署步驟、和踩坑紀錄。
+
+---
 
 ## 前言
 
