@@ -2,6 +2,8 @@ import { notFound } from 'next/navigation'
 import Link from 'next/link'
 import { MDXRemote } from 'next-mdx-remote/rsc'
 import remarkGfm from 'remark-gfm'
+import rehypeSlug from 'rehype-slug'
+import GithubSlugger from 'github-slugger'
 import { getAllSlugs, getPost, hasTranslation, type FaqItem } from '@/lib/blog'
 import { routing } from '@/i18n/routing'
 import type { Metadata } from 'next'
@@ -240,9 +242,40 @@ export default async function BlogPost({
         </div>
       </header>
 
+      {/* TOC */}
+      {(() => {
+        const slugger = new GithubSlugger()
+        const headings = post.content
+          .split('\n')
+          .filter(line => /^#{2,3}\s/.test(line))
+          .map(line => {
+            const level = line.startsWith('### ') ? 3 : 2
+            const text = line.replace(/^#{2,3}\s+/, '').replace(/\*\*/g, '')
+            const id = slugger.slug(text)
+            return { level, text, id }
+          })
+        if (headings.length < 3) return null
+        return (
+          <details className="mb-8 text-xs" open>
+            <summary className="cursor-pointer mb-2" style={{ color: 'var(--text-dim)' }}>
+              <span style={{ color: 'var(--cyan)' }}>❯</span> cat --toc
+            </summary>
+            <ul className="space-y-1 pl-4" style={{ color: 'var(--text-dim)' }}>
+              {headings.map((h, i) => (
+                <li key={i} style={{ paddingLeft: h.level === 3 ? '1rem' : 0 }}>
+                  <a href={`#${h.id}`} className="hover:text-[var(--cyan)] transition-colors">
+                    {h.text}
+                  </a>
+                </li>
+              ))}
+            </ul>
+          </details>
+        )
+      })()}
+
       {/* content */}
       <div className="prose">
-        <MDXRemote source={post.content} components={{ TLDRCard, VideoEmbed }} options={{ mdxOptions: { remarkPlugins: [remarkGfm] } }} />
+        <MDXRemote source={post.content} components={{ TLDRCard, VideoEmbed }} options={{ mdxOptions: { remarkPlugins: [remarkGfm], rehypePlugins: [rehypeSlug] } }} />
       </div>
 
       {/* FAQ section */}
