@@ -1,0 +1,177 @@
+---
+title: "[LLM 101] So Many Models — Which One Should You Download?"
+description: "Gemma, Llama, Qwen, Mistral — the model list is overwhelming. This guide uses car-buying logic to help you pick the right AI model based on size, speed, and quality."
+date: "2026-04-10"
+updatedAt: "2026-04-10"
+tags: ["LLM", "Model Selection", "Ollama", "Beginner", "Gemma", "Llama", "Qwen"]
+series: "LLM 101"
+part: 3
+faq:
+  - q: "How do I know how big an AI model is?"
+    a: "Look for the B number in the name — e.g. 7B means 7 billion parameters. More parameters = smarter but more memory. 7B needs about 4-5 GB, 70B needs about 40 GB. Quick formula: parameters (B) × 0.6 = required GB of memory (at 4-bit quantization)."
+  - q: "What if my computer doesn't have enough memory?"
+    a: "Three options: 1) Pick a smaller model (7B or 14B), 2) Use a quantized version (Q4 is 4x smaller than original), 3) If you have a dedicated GPU, use its VRAM instead. 8 GB RAM → 7B max, 16 GB → 14B, 32 GB → 30B."
+  - q: "Which is better — Gemma, Llama, or Qwen?"
+    a: "Each has strengths. Google's Gemma is balanced and multilingual, Meta's Llama has the largest English ecosystem, Alibaba's Qwen is best for Chinese and strong at coding. At the same size, try Qwen (best Chinese) or Gemma (most balanced) first."
+  - q: "What do Q4, Q8, FP16 mean in model names?"
+    a: "These are quantization levels — compression ratios for model files. FP16 is original quality (largest, slowest), Q8 is light compression (nearly lossless), Q4 is heavy compression (4x smaller, slight quality drop). Think MP3 128kbps vs 320kbps vs FLAC. Q4 is fine for daily use."
+---
+
+<TLDRCard>
+Choosing a model is like buying a car: check your **parking space** (memory) first, then decide **sedan or truck** (model size), then pick a **brand** (Gemma, Llama, Qwen). One formula: **parameters (B) × 0.6 ≈ required GB of memory**. 8 GB RAM → 7B, 16 GB → 14B, 32 GB → 30B.
+</TLDRCard>
+
+## Plain-Language Version: How to pick the right AI model from hundreds of options
+
+If you open [Ollama's model library](https://ollama.com/library), you'll see hundreds of AI models with names that get longer by the day: Gemma 4 E4B, Llama 3.3 70B, Qwen3-Coder 235B-A22B. Each one claims to be great, but can your computer even run it? And if it can, which one is right for you?
+
+It's exactly like buying a car. You wouldn't go test-drive a Ferrari before checking if it fits in your garage. Same with AI models: first figure out what your computer can handle, then pick the best one within that range.
+
+Last article, we covered the [four different "body types" of AI models](/en/blog/llm-101-dense-moe-ple-ssm-architectures). This one teaches you how to narrow down hundreds of models to the right one in three steps.
+
+---
+
+## Preface
+
+You walk into a dealership with 500 cars. Each one has a spec sheet: horsepower, torque, fuel economy, 0-60 time. You're not a race car driver. You just need something for your commute.
+
+How do you choose?
+
+Most people don't start with horsepower. You start with: how big is my parking space? What's my budget? Am I mostly on highways or city streets?
+
+Choosing an AI model works the same way. Don't let the spec sheets intimidate you. Three steps is all you need.
+
+---
+
+## Step 1: How big is your parking space? (Memory)
+
+This is the most important step, because the best model in the world is useless if it can't run on your machine.
+
+AI models need to be loaded into memory to run. Bigger model = more memory needed. "Memory" here means:
+- **If you have a dedicated GPU** (NVIDIA RTX series) → look at the GPU's VRAM
+- **If you're on a Mac** → look at unified memory (total RAM)
+- **If you're on a regular laptop** → look at RAM, minus what the OS uses (usually 60-70% available)
+
+### Quick estimation formula
+
+The **B** in model names stands for Billion parameters. To estimate memory usage:
+
+> **Parameters (B) × 0.6 ≈ Required GB of memory**
+
+This assumes 4-bit quantization (explained later). Some examples:
+
+| Model size | Memory needed (approx.) | What computer |
+|-----------|------------------------|---------------|
+| 1-3B | 1-2 GB | Phone, low-end laptop |
+| 7B | 4-5 GB | 8 GB laptop |
+| 14B | 8-9 GB | 16 GB laptop or Mac |
+| 30B | 18-20 GB | 32 GB Mac or 24 GB GPU |
+| 70B | 40-45 GB | 64 GB+ or pro GPU |
+
+**How much memory does your computer have?** That's your parking space. Once you know this, move to the next step.
+
+---
+
+## Step 2: Sedan or truck? (Size vs. quality)
+
+After confirming your memory limit, you'll find several models that "fit in the garage." Now comes the tradeoff:
+
+**Bigger model = smarter, but slower**
+
+A 30B model usually answers much better than a 7B — better comprehension, cleaner logic, less hallucination. But it's also much slower.
+
+According to the [Chatbot Arena](https://lmarena.ai/) human blind-test rankings, doubling a model's size typically improves quality by 10-20%. But speed may drop by more than half.
+
+**How it feels in practice:**
+
+| Speed | What it feels like |
+|-------|-------------------|
+| 40+ tok/s | Instant, like chatting |
+| 15-30 tok/s | Acceptable, slight wait |
+| 5-10 tok/s | Slow but usable |
+| < 5 tok/s | Painful, makes you want to quit |
+
+**So how to choose?**
+
+- **Daily chat, translation, writing** → Pick the **biggest model** your memory allows. Quality > speed when you're asking one question at a time.
+- **Coding, debugging** → Go **bigger**. Code quality differences between small and large models are stark — 7B often writes code that runs but has logic bugs.
+- **Real-time chat, quick Q&A** → Pick **medium size**. The sweet spot for speed/quality balance is usually 14-30B.
+- **Very limited resources (8 GB or less)** → Pick **7B**, no hesitation. Today's 7B models are smarter than 70B models from two years ago.
+
+---
+
+## Step 3: Pick a brand (Gemma, Llama, Qwen)
+
+Once you've decided on a size, you'll find several brands at that size. Like deciding between Toyota, Honda, and Tesla after settling on a mid-size sedan.
+
+The major AI model brands in 2026:
+
+| Brand | Made by | Best at | Chinese | Sizes |
+|-------|---------|---------|---------|-------|
+| **Gemma** | Google | Multilingual, reasoning, balanced | Good | 1B, 4B, 12B, 27B |
+| **Llama** | Meta | English ecosystem, largest community | Fair | 1B, 3B, 8B, 70B, 405B |
+| **Qwen** | Alibaba | Chinese, coding | Best | 0.6B, 1.8B, 7B, 14B, 32B, 72B |
+| **Mistral** | Mistral AI | Efficiency, European languages | Fair | 7B, 8x7B, 8x22B |
+| **Phi** | Microsoft | Small model champion | Fair | 3B, 14B |
+
+**Recommendations:**
+
+- **Mostly Chinese** → Qwen or Gemma
+- **Mostly English** → Llama or Gemma
+- **Coding** → Qwen-Coder or Gemma
+- **Very limited memory (≤ 8 GB)** → Phi-3 or Gemma 4B
+- **Not sure** → Start with **Qwen 14B** or **Gemma 12B** — best value for the Chinese-speaking world
+
+---
+
+## Quantization: same car, different compression
+
+You may have noticed the same model comes in many "versions": Q4_K_M, Q8_0, FP16. These are **quantization** levels — like the difference between MP3 128kbps, 320kbps, and FLAC for music files.
+
+| Level | Size | Quality | Plain English |
+|-------|------|---------|--------------|
+| FP16 | Largest | Best | FLAC — lossless, but huge |
+| Q8 | ~Half of FP16 | Nearly lossless | MP3 320kbps — can't tell the difference |
+| Q4 | ~Quarter of FP16 | Slight loss | MP3 128kbps — good enough for daily use |
+| Q2 | Smallest | Noticeable loss | 64kbps — you can hear it |
+
+**Pick Q4 for daily use.** It's one-quarter the size of the original with quality loss that most users can't feel. The memory formula above already assumes Q4.
+
+Want better quality? Go Q8. But memory usage doubles — make sure your "parking space" can fit it.
+
+---
+
+## Worked example: I have a 16 GB Mac. What should I pick?
+
+Walk through the steps:
+
+1. **Memory**: 16 GB, minus OS leaves about 10-12 GB usable
+2. **Model size limit**: 10 GB ÷ 0.6 ≈ 14-16B range
+3. **Use case**: Daily chat + occasional coding
+4. **Language**: Mostly Chinese
+
+**Recommendation**: `qwen3:14b` (Q4 version, ~9 GB)
+
+One command in Ollama:
+
+```bash
+ollama run qwen3:14b
+```
+
+Don't like it? Try Gemma:
+
+```bash
+ollama run gemma4:12b
+```
+
+Try both, ask the same question, compare answers. Keep whichever you prefer.
+
+---
+
+## One sentence
+
+**Check your parking space (memory), pick the car size (parameters), then choose the brand. If unsure, start with Qwen 14B or Gemma 12B.**
+
+Next up: what is quantization? What's the actual difference between Q4, Q8, and FP16?
+
+*This is Part 3 of the "[LLM 101](/en/blog/llm-101-ollama-vs-vllm)" series. Previous: [Four AI model architectures](/en/blog/llm-101-dense-moe-ple-ssm-architectures).*
