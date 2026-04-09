@@ -82,14 +82,39 @@ A 30B model usually answers much better than a 7B — better comprehension, clea
 
 According to the [Chatbot Arena](https://lmarena.ai/) human blind-test rankings, doubling a model's size typically improves quality by 10-20%. But speed may drop by more than half.
 
-**How it feels in practice:**
+### How fast is "fast enough"?
 
-| Speed | What it feels like |
-|-------|-------------------|
-| 40+ tok/s | Instant, like chatting |
-| 15-30 tok/s | Acceptable, slight wait |
-| 5-10 tok/s | Slow but usable |
-| < 5 tok/s | Painful, makes you want to quit |
+A useful reference: the average human reading speed is about **5 tok/s** (English ~238 words/min, Chinese ~158 chars/min — both roughly 4-5 tok/s). If AI outputs slower than you can read, you'll feel it "lagging."
+
+According to [BentoML's inference performance research](https://bentoml.com/llm/inference-optimization/llm-inference-metrics) and community benchmarks, speed tiers feel like this:
+
+| Speed | How it feels | Car analogy |
+|-------|-------------|-------------|
+| < 5 tok/s | Slower than you can read, want to quit | Gridlock traffic |
+| 5-12 tok/s | Noticeably waiting, tempted to switch tabs | City traffic, barely tolerable |
+| 12-30 tok/s | Some waiting but acceptable | Regular roads, fine |
+| **30-50 tok/s** | **Comfortable, feels like chatting** | **Highway, recommended target** |
+| 50-80 tok/s | Fast, streaming text feels natural | Express lane |
+| 80+ tok/s | Can't tell the difference anymore | Airplane, but you just need to commute |
+
+**How fast are cloud AI services?** For reference: ChatGPT (GPT-4o API) runs at about 55 tok/s, Claude at about 46 tok/s, and [Gemini Flash hits 220 tok/s](https://artificialanalysis.ai/models/gemini-2-5-flash/providers). On your own hardware, aiming for **30+ tok/s** gives a comfortable experience.
+
+### Real hardware speeds
+
+I benchmarked different model sizes on my own machines to give you a feel:
+
+| Hardware | Model (size) | Speed | Feel |
+|----------|-------------|-------|------|
+| RTX 5090 (32GB) | Gemma 4 E2B (3B) | 310 tok/s | Instant |
+| RTX 5090 (32GB) | Gemma 4 E4B (8B) | 202 tok/s | Instant |
+| DGX Spark GB10 (128GB) | Gemma 4 E4B NVFP4 (8B) | 50 tok/s | Comfortable chat |
+| DGX Spark GB10 (128GB) | Gemma 4 31B Dense | 7 tok/s | Waiting, barely usable |
+| MacBook Pro M1 Max (32GB) | 31B (oMLX) | 12.8 tok/s | Acceptable |
+| MacBook Pro M1 Max (32GB) | 31B (Ollama default) | 1.5 tok/s | Unusable |
+
+Notice the last two rows — same computer, same model, but Ollama's default context allocation killed the speed from 12.8 to 1.5 tok/s. [Full tuning details here](/en/blog/dgx-spark-gemma4-31b-rescue-mbp-32gb).
+
+**Key takeaway: when choosing a model, don't just look at size — look at how fast your hardware can run it. A 14B model at 40 tok/s feels much better than a 30B model at 5 tok/s.**
 
 **So how to choose?**
 
