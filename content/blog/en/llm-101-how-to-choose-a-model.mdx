@@ -48,8 +48,8 @@ Choosing an AI model works the same way. Don't let the spec sheets intimidate yo
 This is the most important step, because the best model in the world is useless if it can't run on your machine.
 
 AI models need to be loaded into memory to run. Bigger model = more memory needed. "Memory" here means:
-- **If you have a dedicated GPU** (NVIDIA RTX series) → look at the GPU's VRAM
-- **If you're on a Mac** → look at unified memory (total RAM)
+- **If you have a dedicated GPU** (NVIDIA RTX series) → look at the GPU's own memory (called VRAM — separate from your computer's RAM, typically 8-24 GB)
+- **If you're on a Mac** → look at your RAM (Mac memory is shared between CPU and GPU, so all of it can be used for models)
 - **If you're on a regular laptop** → look at RAM, minus what the OS uses (usually 60-70% available)
 
 ### Quick estimation formula
@@ -58,7 +58,7 @@ The **B** in model names stands for Billion parameters. To estimate memory usage
 
 > **Parameters (B) × 0.6 ≈ Required GB of memory**
 
-This assumes 4-bit quantization (explained later). Some examples:
+This assumes you download the compressed version (we'll explain "quantization" later — for now just remember this number). Some examples:
 
 | Model size | Memory needed (approx.) | What computer |
 |-----------|------------------------|---------------|
@@ -84,37 +84,39 @@ According to the [Chatbot Arena](https://lmarena.ai/) human blind-test rankings,
 
 ### How fast is "fast enough"?
 
-A useful reference: the average human reading speed is about **5 tok/s** (English ~238 words/min, Chinese ~158 chars/min — both roughly 4-5 tok/s). If AI outputs slower than you can read, you'll feel it "lagging."
+When AI answers a question, text appears word by word — it doesn't show up all at once. This speed is measured in "words per second" (technically called tok/s — tokens per second, where one token is roughly one word or Chinese character).
+
+A useful reference: your **reading speed** is about 4-5 words per second. If AI outputs slower than you can read, you'll feel it "lagging."
 
 According to [BentoML's inference performance research](https://bentoml.com/llm/inference-optimization/llm-inference-metrics) and community benchmarks, speed tiers feel like this:
 
-| Speed | How it feels | Car analogy |
-|-------|-------------|-------------|
-| < 5 tok/s | Slower than you can read, want to quit | Gridlock traffic |
-| 5-12 tok/s | Noticeably waiting, tempted to switch tabs | City traffic, barely tolerable |
-| 12-30 tok/s | Some waiting but acceptable | Regular roads, fine |
-| **30-50 tok/s** | **Comfortable, feels like chatting** | **Highway, recommended target** |
-| 50-80 tok/s | Fast, streaming text feels natural | Express lane |
-| 80+ tok/s | Can't tell the difference anymore | Airplane, but you just need to commute |
+| Words/sec | How it feels | Car analogy |
+|-----------|-------------|-------------|
+| < 5 | Slower than you can read, want to quit | Gridlock traffic |
+| 5-12 | Noticeably waiting, tempted to switch tabs | City traffic, barely tolerable |
+| 12-30 | Some waiting but acceptable | Regular roads, fine |
+| **30-50** | **Comfortable, feels like chatting** | **Highway, recommended target** |
+| 50-80 | Fast, streaming text feels natural | Express lane |
+| 80+ | Can't tell the difference anymore | Airplane, but you just need to commute |
 
-**How fast are cloud AI services?** For reference: ChatGPT (GPT-4o API) runs at about 55 tok/s, Claude at about 46 tok/s, and [Gemini Flash hits 220 tok/s](https://artificialanalysis.ai/models/gemini-2-5-flash/providers). On your own hardware, aiming for **30+ tok/s** gives a comfortable experience.
+**How fast is ChatGPT?** For reference: ChatGPT runs at about 50 words/sec, Claude at about 46, and [Gemini can hit 220](https://artificialanalysis.ai/models/gemini-2-5-flash/providers). On your own hardware, aiming for **30+ words/sec** gives a similar experience to ChatGPT.
 
-### Real hardware speeds
+### How much does speed actually vary?
 
 I benchmarked different model sizes on my own machines to give you a feel:
 
-| Hardware | Model (size) | Speed | Feel |
-|----------|-------------|-------|------|
-| RTX 5090 (32GB) | Gemma 4 E2B (3B) | 310 tok/s | Instant |
-| RTX 5090 (32GB) | Gemma 4 E4B (8B) | 202 tok/s | Instant |
-| DGX Spark GB10 (128GB) | Gemma 4 E4B NVFP4 (8B) | 50 tok/s | Comfortable chat |
-| DGX Spark GB10 (128GB) | Gemma 4 31B Dense | 7 tok/s | Waiting, barely usable |
-| MacBook Pro M1 Max (32GB) | 31B (oMLX) | 12.8 tok/s | Acceptable |
-| MacBook Pro M1 Max (32GB) | 31B (Ollama default) | 1.5 tok/s | Unusable |
+| Computer | Model size | Speed (words/sec) | Feel |
+|----------|-----------|-------------------|------|
+| High-end GPU (RTX 5090) | 3B (small) | 310 | Instant |
+| High-end GPU (RTX 5090) | 8B (medium-small) | 202 | Instant |
+| Desktop workstation (128GB) | 8B (compressed) | 50 | Comfortable chat |
+| Desktop workstation (128GB) | 31B (large) | 7 | Waiting, barely usable |
+| MacBook Pro (32GB) | 31B (tuned) | 13 | Acceptable |
+| MacBook Pro (32GB) | 31B (default settings) | 1.5 | Unusable |
 
-Notice the last two rows — same computer, same model, but Ollama's default context allocation killed the speed from 12.8 to 1.5 tok/s. [Full tuning details here](/en/blog/dgx-spark-gemma4-31b-rescue-mbp-32gb).
+Notice the last two rows — same computer, same model, but different software settings caused an 8x speed difference. Settings matter, but that's an advanced topic ([details here](/en/blog/dgx-spark-gemma4-31b-rescue-mbp-32gb) if you're curious).
 
-**Key takeaway: when choosing a model, don't just look at size — look at how fast your hardware can run it. A 14B model at 40 tok/s feels much better than a 30B model at 5 tok/s.**
+**Key takeaway: when choosing a model, don't just look at size — look at how fast your computer can run it. A medium model at 40 words/sec feels much better than a large model at 5 words/sec.**
 
 **So how to choose?**
 
