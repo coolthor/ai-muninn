@@ -2,7 +2,7 @@
 title: "[LLM 101] What Is Quantization? Q4, Q8, FP16 Explained"
 description: "Q4_K_M, Q8_0, FP16 — the same model comes in a dozen versions and the names look like hieroglyphs. This guide explains what quantization actually does, why it doesn't ruin the model, and which level to pick."
 date: "2026-04-10"
-updatedAt: "2026-04-10"
+updatedAt: "2026-04-11"
 tags: ["LLM", "Quantization", "Ollama", "Beginner", "Q4_K_M", "GGUF"]
 series: "LLM 101"
 part: 4
@@ -138,7 +138,7 @@ Here are updated formulas for estimating how much memory each level actually nee
 | Q3_K_M | B × 0.45 | 3.2 GB | 6.3 GB | 13.5 GB |
 | Q2_K | B × 0.35 | 2.5 GB | 4.9 GB | 10.5 GB |
 
-**Add about 1-2 GB for working memory** (the model also needs space to actually think while running — technically called the KV cache, but you don't need to know the term).
+**Add about 1-2 GB for working memory** (the model also needs space to actually think while running — technically called the KV cache, but you don't need to know the term). Fun fact: that working memory can also be quantized. Techniques like Google's **TurboQuant** compress the KV cache down to 3-bit with nearly no quality loss — I benchmarked it on a DGX Spark in [this deep dive](/en/blog/turboquant-kv-cache-benchmark-gx10). But that's an advanced topic; for normal use, assume the working memory stays uncompressed.
 
 A concrete read: if you have a 16 GB laptop with ~10 GB usable for AI, Q4_K_M lets you run a 14B model comfortably. Trying to run the same model in FP16 would need a 32 GB machine minimum.
 
