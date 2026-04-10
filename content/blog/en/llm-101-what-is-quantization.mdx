@@ -1,0 +1,215 @@
+---
+title: "[LLM 101] What Is Quantization? Q4, Q8, FP16 Explained"
+description: "Q4_K_M, Q8_0, FP16 — the same model comes in a dozen versions and the names look like hieroglyphs. This guide explains what quantization actually does, why it doesn't ruin the model, and which level to pick."
+date: "2026-04-10"
+updatedAt: "2026-04-10"
+tags: ["LLM", "Quantization", "Ollama", "Beginner", "Q4_K_M", "GGUF"]
+series: "LLM 101"
+part: 4
+faq:
+  - q: "What is quantization in AI models?"
+    a: "Quantization is compression for AI models. Instead of storing each model weight as a 16-bit number, you store it in 4 or 8 bits. The model gets 2-4x smaller, runs faster on the same hardware, and the quality loss is small enough that most users can't feel it. Think MP3 versus FLAC for music."
+  - q: "What does Q4_K_M mean?"
+    a: "Q4_K_M is a popular quantization format used by llama.cpp and Ollama. Q4 = 4 bits per weight. K = the newer 'K-quant' algorithm that groups weights smartly. M = medium variant (there's also S for small and L for large). For daily use, Q4_K_M is the sweet spot — 75% smaller than the original with less than 2% quality loss."
+  - q: "Does Q4 make the model much dumber than FP16?"
+    a: "No. Q4 typically loses less than 2% on quality benchmarks compared to FP16. The difference is smaller than the difference between two models of the same family at different sizes (e.g. 7B vs 14B). Most users can't tell a well-quantized Q4 from the original in everyday conversation."
+  - q: "Which quantization level should I download?"
+    a: "For daily chat and writing, pick Q4_K_M — best balance of size and quality. If you have extra memory, go Q5_K_M or Q6_K. For coding or math, Q6_K or higher helps. Avoid Q2 and Q3 unless memory is extremely tight — the quality drop is noticeable below Q4."
+---
+
+<VideoEmbed src="/videos/llm-101-what-is-quantization.mp4" />
+
+<TLDRCard>
+Quantization compresses AI models the way MP3 compresses music. A 14B model in **Q4_K_M is 75% smaller than the original FP16** (8.4 GB vs 28 GB) with **less than 2% quality loss**. For daily use, pick **Q4_K_M**. If memory allows, go **Q5_K_M** or **Q6_K**. Skip Q2 and Q3 unless you really must.
+</TLDRCard>
+
+## Plain-Language Version: What those cryptic model names actually mean
+
+Every time you browse [Ollama's model library](https://ollama.com/library) or [Hugging Face](https://huggingface.co/models) you see the same model listed in a dozen versions: `Q2_K`, `Q4_K_M`, `Q5_K_S`, `Q8_0`, `FP16`. The filenames look like wifi passwords. The sizes range from 2 GB to 30 GB for the *same* model. What's going on?
+
+All of these are the same underlying AI model, compressed to different levels. The compression is called **quantization**, and it's the single reason you can run a 14B model on a laptop at all. Without it, AI on personal hardware would still be a research curiosity.
+
+The tradeoff sounds scary — you're literally throwing away precision from the model's brain. But it works, and the quality loss is much smaller than the name "compression" suggests. This article explains why, how to read the cryptic filenames, and which level to download.
+
+---
+
+## Preface
+
+Your phone stores thousands of songs. The original studio recordings would be hundreds of gigabytes, but MP3 squeezes each song into a few megabytes and your ear barely notices. The trick: throw away the frequencies humans can't hear anyway.
+
+AI model quantization does the same trick on AI model "memories." Most of the precision in a neural network isn't doing any useful work — you can round off the numbers aggressively and the model still answers correctly. This is how a 14B model fits into 9 GB of memory instead of 28.
+
+Last article was about [choosing the right model size](/en/blog/llm-101-how-to-choose-a-model). This one zooms into the thing we glossed over: those `Q4`, `Q8`, `FP16` suffixes and why you shouldn't be afraid of the small numbers.
+
+---
+
+## What exactly is quantization?
+
+An AI model is, at its core, a giant spreadsheet of numbers called **weights** (sometimes called parameters — same thing). When a 7B model says "7 billion parameters," it literally means 7,000,000,000 numbers sitting in a file. Running the model = doing math with all those numbers at once.
+
+Each number is stored in some number of bits. The original model uses **16-bit floating point** (FP16 or BF16) — think of it as each number having 16 little switches to represent its value. This gives plenty of precision (around 4 decimal digits) but takes 2 bytes per weight.
+
+Do the math for a 7B model:
+- 7,000,000,000 weights × 2 bytes = **14 GB**
+
+That's the "original" file size.
+
+**Quantization means storing each weight with fewer bits.** If you drop from 16 bits to 4 bits, each number takes one-quarter the space:
+- 7,000,000,000 weights × 0.5 bytes = **3.5 GB**
+
+Same model, same knowledge, one-quarter the file. That's why quantization matters so much for running AI on personal hardware.
+
+---
+
+## Why doesn't it ruin the model?
+
+This is the part that feels like magic, but it isn't. There are three reasons quantization works so well:
+
+**1. Neural networks are already noisy.** A model's weights were learned through training on trillions of words, with gradient noise baked into every step. The "true" value of each weight was never precise to begin with — there's a wide range of values that would work equally well. Rounding them to 4-bit approximations mostly stays within that range.
+
+**2. Most weights are small and clustered.** Plot the histogram of any model's weights and you get a bell curve centered near zero. Smart quantization algorithms (like the "K-quant" family used by [llama.cpp](https://github.com/ggml-org/llama.cpp)) group nearby weights together and share a scale factor, so the 4-bit budget goes further where it matters.
+
+**3. Errors are statistical, not systematic.** Each weight has a tiny rounding error, but the errors don't all push in the same direction. When you multiply thousands of them together in a single answer, they mostly cancel out. The model's output shifts slightly but doesn't break.
+
+The audio analogy holds tightly here. MP3 isn't "dumber" than FLAC — it's just storing the same music with fewer bits per sample, relying on the fact that your ear can't hear the difference. A 4-bit model does the same to its weights.
+
+---
+
+## Decoding the filenames: Q4_K_M and friends
+
+The names look arbitrary but they follow a grammar. Let me decode `Q4_K_M`:
+
+- **Q** = Quantized
+- **4** = 4 bits per weight on average
+- **K** = uses the newer **K-quant** algorithm (smarter weight grouping, introduced in llama.cpp in 2023 — see [PR #1684](https://github.com/ggml-org/llama.cpp/pull/1684))
+- **M** = Medium variant (there's also **S** for Small and **L** for Large, which trade a tiny bit of size for a tiny bit of quality)
+
+Other common suffixes:
+
+| Name | What it means |
+|------|--------------|
+| `Q8_0` | 8-bit, old-style (no K-grouping). Nearly lossless. |
+| `Q6_K` | 6-bit, K-quant. Very high quality, modest size. |
+| `Q5_K_M` | 5-bit K-quant, medium. Great balance. |
+| `Q4_K_M` | 4-bit K-quant, medium. **The daily driver.** |
+| `Q4_K_S` | 4-bit K-quant, small. Slightly smaller, slightly worse. |
+| `Q3_K_M` | 3-bit K-quant. Noticeably worse. Only if memory is tight. |
+| `Q2_K` | 2-bit. For emergencies. |
+| `FP16` / `BF16` | The original, uncompressed model. |
+| `FP8` | 8-bit floating point. Common for data-center GPUs (not GGUF). |
+| `AWQ`, `GPTQ` | Different quantization methods, more common on GPU serving (not Ollama). |
+
+If you only remember one name, remember **Q4_K_M**. It's what Ollama pulls by default when you type `ollama run qwen3:14b`, and it's the right choice for 90% of use cases.
+
+---
+
+## The quality ladder
+
+Here's what each level actually costs you. The numbers below are based on [llama.cpp's perplexity benchmarks](https://github.com/ggml-org/llama.cpp/pull/1684) (perplexity is a "lower is better" quality score — smaller gap from FP16 means smaller quality loss):
+
+| Level | Size vs FP16 | Quality loss | Plain English |
+|-------|--------------|--------------|---------------|
+| **FP16** | 100% | 0% (baseline) | The original. Huge. |
+| **Q8_0** | ~53% | < 0.1% | Indistinguishable from original. |
+| **Q6_K** | ~41% | ~0.3% | Audiophile-grade. Worth it if you have the memory. |
+| **Q5_K_M** | ~35% | ~0.6% | Excellent. Sweet spot if you have headroom. |
+| **Q4_K_M** | ~30% | ~1.5% | **The daily driver.** Barely noticeable loss. |
+| **Q3_K_M** | ~24% | ~4% | Starting to show. Answers get shakier. |
+| **Q2_K** | ~18% | ~10%+ | Last resort. Visibly dumber. |
+
+Two things stand out:
+
+1. **Between FP16 and Q4_K_M, you lose about 1.5% of quality to save 70% of the file.** That's an insane trade in your favor. This is why Q4_K_M is the default — it's where the curve is most favorable.
+2. **Below Q4, quality drops off a cliff.** Q3 is meaningfully worse than Q4, and Q2 is meaningfully worse than Q3. The compression gains slow down while the quality losses accelerate.
+
+---
+
+## Memory cheat sheet
+
+Here are updated formulas for estimating how much memory each level actually needs. The previous article used `B × 0.6` as a rough rule — that was the Q4 version. Here are all of them:
+
+| Level | Memory formula | 7B example | 14B example | 30B example |
+|-------|---------------|------------|-------------|-------------|
+| FP16 | B × 2.0 | 14 GB | 28 GB | 60 GB |
+| Q8_0 | B × 1.1 | 7.7 GB | 15.4 GB | 33 GB |
+| Q6_K | B × 0.85 | 6.0 GB | 11.9 GB | 25.5 GB |
+| Q5_K_M | B × 0.7 | 4.9 GB | 9.8 GB | 21 GB |
+| **Q4_K_M** | **B × 0.6** | **4.2 GB** | **8.4 GB** | **18 GB** |
+| Q3_K_M | B × 0.45 | 3.2 GB | 6.3 GB | 13.5 GB |
+| Q2_K | B × 0.35 | 2.5 GB | 4.9 GB | 10.5 GB |
+
+**Add about 1-2 GB for working memory** (the model also needs space to actually think while running — technically called the KV cache, but you don't need to know the term).
+
+A concrete read: if you have a 16 GB laptop with ~10 GB usable for AI, Q4_K_M lets you run a 14B model comfortably. Trying to run the same model in FP16 would need a 32 GB machine minimum.
+
+---
+
+## Worked example: same model, six flavors
+
+Let me put it all together with a real case — Alibaba's Qwen3 14B. The file sizes below are taken from the [bartowski/Qwen_Qwen3-14B-GGUF](https://huggingface.co/bartowski/Qwen_Qwen3-14B-GGUF) repository on Hugging Face, which publishes the full quantization ladder:
+
+| File | Size | Fits on | Quality |
+|------|------|---------|---------|
+| `Qwen3-14B-BF16` | 29.54 GB | 32 GB Mac, 48 GB GPU | 100% (original) |
+| `Qwen3-14B-Q8_0` | 15.70 GB | 24 GB GPU, 32 GB Mac | ~99.9% |
+| `Qwen3-14B-Q6_K` | 12.12 GB | 16 GB Mac, 24 GB GPU | ~99.7% |
+| `Qwen3-14B-Q5_K_M` | 10.51 GB | 16 GB Mac | ~99.4% |
+| **`Qwen3-14B-Q4_K_M`** | **9.00 GB** | **16 GB Mac, 12 GB GPU** | **~98.5%** |
+| `Qwen3-14B-Q3_K_M` | 7.32 GB | 12 GB Mac, 8 GB GPU | ~96% |
+
+Notice the jump from Q4_K_M (9.00 GB) down to Q3_K_M (7.32 GB). You save 1.68 GB but lose 2.5% more quality — a bad trade unless you literally can't fit Q4. On the other hand, jumping from Q4_K_M up to Q5_K_M costs 1.51 GB for only 0.9% quality back — also mediocre unless you notice the difference in practice.
+
+**The Q4_K_M cliff is real.** There's a reason it's the default.
+
+**Heads-up on Ollama's official repo**: [`ollama.com/library/qwen3`](https://ollama.com/library/qwen3) only ships three tags for the 14B — `q4_K_M` (default), `q8_0`, and `fp16`. The full ladder above only lives on Hugging Face GGUF repos like bartowski's. This is typical: Ollama curates to the popular levels, and if you want Q5_K_M or Q6_K you fetch the GGUF directly.
+
+---
+
+## Common misconceptions
+
+**"Q4 means the model is 25% as good as FP16."** No. Q4 means the weights use 25% of the bits, not that the model is 25% as smart. Quality loss is typically 1-2%, not 75%.
+
+**"I should always pick the highest quality I can fit."** Not always. A model that barely fits in memory will run slowly because your system is right on the edge of swapping. Leaving 2-3 GB of headroom and picking a lower quantization often feels better in practice.
+
+**"Bigger model at Q4 vs smaller model at Q8 — which is better?"** Almost always the bigger model at Q4. The quality gap between a 14B and a 7B is much larger than the gap between Q8 and Q4 of the same model. If you have to choose, take more parameters over more precision.
+
+**"Different quantization formats (GGUF, AWQ, GPTQ) give the same result."** Not quite. GGUF (used by llama.cpp and Ollama) is the most common on personal hardware. AWQ and GPTQ are more common when serving models on NVIDIA GPUs with vLLM. Quality is broadly similar at the same bit-width, but the file formats are not interchangeable.
+
+---
+
+## Which one should you pick?
+
+Short answers by use case:
+
+- **Daily chat, writing, translation** → `Q4_K_M`. No hesitation. This is what Ollama downloads by default and it's almost always the right call.
+- **Coding, math, reasoning** → `Q5_K_M` or `Q6_K` if you have the memory. Small precision errors hurt code more than they hurt prose.
+- **Plenty of memory (32 GB+)** → `Q6_K` or `Q8_0`. Audiophile mode. You probably won't notice, but you also won't lose.
+- **Very tight memory (8 GB or less)** → `Q4_K_S` (the smaller variant of Q4_K). Or, better, step down to a smaller model at Q4_K_M. A 7B at Q4_K_M beats a 14B at Q2_K every time.
+- **Data-center GPU with vLLM** → Different world. Look at FP8 or AWQ, not GGUF.
+
+In Ollama, when you write `ollama run qwen3:14b`, you get Q4_K_M automatically. The three official tags for 14B are:
+
+```bash
+ollama run qwen3:14b          # Q4_K_M, the default (~9 GB)
+ollama run qwen3:14b-q8_0     # nearly lossless (~16 GB)
+ollama run qwen3:14b-fp16     # original (~30 GB)
+```
+
+If you want Q5_K_M or Q6_K — which Ollama's qwen3 repo doesn't publish — pull them from a Hugging Face GGUF repo directly. Ollama supports this syntax:
+
+```bash
+ollama run hf.co/bartowski/Qwen_Qwen3-14B-GGUF:Q5_K_M
+ollama run hf.co/bartowski/Qwen_Qwen3-14B-GGUF:Q6_K
+```
+
+Try a few at the same question and see if you can feel the difference. Most people can't, which is exactly the point.
+
+---
+
+## One sentence
+
+**Quantization is MP3 for AI models: Q4_K_M shrinks the file by 70% and costs you less than 2% quality, which is why it's the default everywhere.**
+
+Next up: what is a **context window**? Why does AI "forget" things in long conversations? How much can it actually read at once?
+
+*This is Part 4 of the "[LLM 101](/en/blog/llm-101-ollama-vs-vllm)" series. Previous: [So many models — which one should you download?](/en/blog/llm-101-how-to-choose-a-model).*
