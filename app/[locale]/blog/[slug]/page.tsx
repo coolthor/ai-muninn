@@ -50,12 +50,13 @@ export async function generateMetadata({
     description: post.description,
     alternates: {
       canonical: url,
-      ...(otherExists && {
-        languages: {
-          [locale]: url,
+      languages: {
+        'x-default': `${BASE_URL}/en/blog/${slug}`,
+        [locale]: url,
+        ...(otherExists && {
           [otherLocale]: `${BASE_URL}/${otherLocale}/blog/${slug}`,
-        },
-      }),
+        }),
+      },
     },
     openGraph: {
       title: post.title,
