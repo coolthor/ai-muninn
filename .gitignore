@@ -40,3 +40,10 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 public/pagefind
+
+# Unused vendor libraries (vis-network, tom-select) — kept on disk for
+# potential future use but excluded from git. Remove from .gitignore if
+# they end up getting imported from source.
+/lib/bindings/
+/lib/tom-select/
+/lib/vis-9.1.2/
