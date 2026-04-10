@@ -2,7 +2,7 @@
 title: "[Benchmark] TurboQuant on GX10: Is 3-bit KV Cache Compression Actually Lossless?"
 description: "Real benchmark numbers for Google's TurboQuant on a GB10/SM121 (DGX Spark) — actual compression ratios, Qwen2.5-3B accuracy validation, and why Qwen3.5-35B's hybrid attention architecture makes things complicated."
 date: "2026-03-30"
-updatedAt: "2026-03-30"
+updatedAt: "2026-04-11"
 tags: ["TurboQuant", "KV Cache", "Quantization", "vLLM", "Benchmark", "Qwen3.5", "GX10", "SM121"]
 series: "DGX Spark"
 part: 3
@@ -31,6 +31,8 @@ When an AI model has a conversation with you, it needs to remember the entire co
 [TurboQuant](https://research.google/blog/turboquant-redefining-ai-efficiency-with-extreme-compression/), published by Google Research at ICLR 2026, claims to compress this memory by 6x using just 3 bits per value instead of the usual 16, with no loss in answer quality. Think of it like JPEG compression for photos: the file gets much smaller, but you can't tell the difference by looking at it.
 
 This article tests those claims on real hardware — an NVIDIA DGX Spark desktop AI computer. The compression works as advertised for standard AI models. But for newer hybrid models like Qwen3.5-35B (which already use memory-efficient architectures), the savings are much smaller than the headline number suggests. The math works; the benefit depends on what you're running.
+
+**New to quantization basics?** If phrases like "3 bits vs 16 bits" or "Q4_K_M" don't mean much yet, start with [LLM 101 Part 4: What is quantization?](/en/blog/llm-101-what-is-quantization) — it explains weight quantization with MP3 analogies. This article is the KV-cache sequel: same technique family, different target.
 
 ---
 
