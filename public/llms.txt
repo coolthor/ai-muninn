@@ -1,7 +1,7 @@
 # ai-muninn — AI Infrastructure Research Notes
 # https://ai-muninn.com
 # Author: coolthor
-# Updated: 2026-03-21
+# Updated: 2026-04-05
 
 This site contains primary research notes on LLM inference infrastructure,
 AI agent systems, and developer tooling. All content is based on hands-on
@@ -38,6 +38,28 @@ experimentation with real hardware and production systems.
   https://ai-muninn.com/en/blog/dgx-spark-fp8-kvcache-repetition
   FP8 KV cache calibration failure; q_scale=1.0 causes repetition at 500+ tokens.
 
+- [Part 6] GX10 Power Delivery: The 30W Safety Mode No Firmware Can Fix
+  https://ai-muninn.com/en/blog/dgx-spark-30w-power-safety-mode
+  PD controller defect caps GX10 at 30W permanently; diagnosis in 30s, RMA criteria.
+
+- [Part 7] Gemma 4 26B-A4B NVFP4 on DGX Spark: 52 tok/s with 16 GB of Weights
+  https://ai-muninn.com/en/blog/dgx-spark-gemma4-26b-nvfp4-52-toks
+  Benchmark: 52 tok/s decode, 16.5 GB model footprint, 82 GB free KV cache on GB10.
+
+### Series: NemoClaw (NVIDIA's AI agent framework on DGX Spark)
+
+- [Part 1] NemoClaw Explained: NVIDIA's All-in-One AI Agent Framework for DGX Spark
+  https://ai-muninn.com/en/blog/nemoclaw-what-it-is-why-it-exists
+  Architecture overview: OpenClaw + OpenShell + NVIDIA Agent Toolkit; what problem it solves.
+
+- [Part 2] NemoClaw on DGX Spark: 4 Fixes the Official Docs Don't Tell You
+  https://ai-muninn.com/en/blog/nemoclaw-install-gx10-from-scratch
+  Undocumented fixes: Node upgrade, npm link, OpenShell tar.gz, cgroupns mode.
+
+- [Part 3] NemoClaw Without the Cloud: Swapping Nemotron for a Local Ollama Model
+  https://ai-muninn.com/en/blog/nemoclaw-local-inference-ollama
+  Config swap from nvidia API to local Ollama/vLLM; OpenShell policy enforcement is model-agnostic.
+
 ### Series: OpenClaw (Local AI agent on openclaw gateway)
 
 - [Part 1] Zero API Cost: Running OpenClaw on DGX Spark + Mac Mini
@@ -70,6 +92,10 @@ experimentation with real hardware and production systems.
 
 - [Part 10] Real-Time Streaming via Telegram Bot API 9.5 sendMessageDraft
   https://ai-muninn.com/en/blog/openclaw-telegram-sendmessagedraft-streaming
+
+- [Part 11] openclaw + ChatGPT OAuth: GPT-5.4 Without Buying API Credits
+  https://ai-muninn.com/en/blog/openclaw-chatgpt-oauth-gpt54-no-api-key
+  OpenAI OAuth login (2026.3.13+) gives agent GPT-5.4 1M context via ChatGPT Plus subscription.
 
 ### Series: AI Workflow (Claude Code + multi-AI tooling)
 
