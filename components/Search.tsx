@@ -56,16 +56,18 @@ export default function Search({ locale }: { locale: string }) {
 
   return (
     <div className="mb-6">
-      <div className="flex items-center gap-2 text-xs" style={{ color: 'var(--text-dim)' }}>
+      <div
+        className="flex items-center gap-2 text-xs px-3 py-2 rounded-md"
+        style={{ border: '1px solid var(--border)', background: 'var(--bg-surface)' }}
+      >
         <span style={{ color: 'var(--cyan)' }}>❯</span>
-        <span>search</span>
         <input
           type="text"
           value={query}
           onChange={e => setQuery(e.target.value)}
           placeholder={isZh ? '搜尋文章...' : 'search posts...'}
-          className="flex-1 bg-transparent border-b outline-none text-xs py-1"
-          style={{ borderColor: 'var(--border)', color: 'var(--text)' }}
+          className="flex-1 bg-transparent outline-none text-xs"
+          style={{ color: 'var(--text)' }}
           onKeyDown={e => {
             if (e.key === 'Escape') {
               setQuery('')
