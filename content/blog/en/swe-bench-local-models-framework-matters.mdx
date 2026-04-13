@@ -1,6 +1,6 @@
 ---
-title: "[AI Agent] SWE-Bench on a Desktop AI: The Framework Matters More Than the Model"
-description: "Gemma 4 26B went from 40+ errors (OpenHands) to solving a real bug in 9 steps (SWE-agent) — same model, same hardware, completely different results. The agent framework is the biggest variable in local SWE-Bench runs."
+title: "[AI Agent] Gemma 4 Went from 40 Errors to a 9-Step Bug Fix — by Switching One Thing"
+description: "Same model, same GX10 hardware. Gemma 4 26B couldn't complete a single task on OpenHands (40+ function calling errors), then fixed a real bug in 9 steps on SWE-agent. The difference was the action format."
 date: "2026-04-13"
 updatedAt: "2026-04-13"
 tags: ["SWE-Bench", "Gemma 4", "Qwen 3.5", "OpenHands", "SWE-agent", "vLLM", "DGX Spark", "Tool Calling", "AI Agent"]
@@ -27,7 +27,7 @@ Gemma 4 26B went from **40+ tool calling errors** on OpenHands to **solving a re
 
 [SWE-Bench](https://www.swebench.com/) is the standard test for whether an AI can fix real software bugs — it takes actual GitHub issues from popular projects and checks if the AI can produce a working patch. The leaderboard is dominated by Claude and GPT through cloud APIs.
 
-I wanted to know: can you run this on your own hardware with open-source models, for free? I tested Gemma 4 26B and Qwen 3.5 35B on a DGX Spark desktop workstation, using two different agent frameworks: [OpenHands](https://github.com/All-Hands-AI/OpenHands) and [SWE-agent](https://github.com/SWE-agent/SWE-agent). The results were not what I expected — the same model that looked completely broken on one framework worked perfectly on the other. The framework turned out to be the variable that mattered most.
+I wanted to know if you could skip the API bill entirely — run SWE-Bench on your own hardware with open-source models. So I tested Gemma 4 26B and Qwen 3.5 35B on a DGX Spark, first with [OpenHands](https://github.com/All-Hands-AI/OpenHands), then with [SWE-agent](https://github.com/SWE-agent/SWE-agent). I spent four hours convinced Gemma 4 was broken before discovering the problem was OpenHands, not the model.
 
 ---
 
@@ -68,9 +68,9 @@ Missing required parameters for function 'str_replace_editor': {'path', 'command
 
 Gemma 4 called the right functions but dropped the parameters. Every time.
 
-### The misleading curl test
+### But the API works fine?
 
-Here's the confusing part: when I tested the exact same 11 tools + OpenHands system prompt (8,892 characters) via `curl`, Gemma 4's tool calling was **perfect**:
+This is what kept me debugging for hours. The exact same 11 tools + the full OpenHands system prompt (8,892 characters) via `curl`? Perfect:
 
 ```bash
 curl http://<gx10-ip>:8000/v1/chat/completions -d '{
@@ -97,9 +97,9 @@ Qwen 3.5 completed the same task with only **1 error** — missing `security_ris
 
 ---
 
-## Test 2: SWE-agent — Everything Changes
+## Test 2: SWE-agent — Different action format, different story
 
-SWE-agent uses a completely different approach: **text-based actions**. Instead of structured JSON function calls, the model outputs plain text in a specific format:
+SWE-agent doesn't use function calling at all. The model just writes plain text, and the framework parses it:
 
 ```
 💭 THOUGHT
@@ -134,7 +134,7 @@ The patch:
      return a/b
 ```
 
-9 steps. Correct fix. Successful submit. The same model that produced 40+ errors on OpenHands solved a real bug and submitted a patch.
+That's the same model that couldn't write "hello world" on OpenHands without 40 errors.
 
 ### Qwen 3.5 35B on SWE-agent: Fixed but couldn't finish
 
@@ -142,25 +142,22 @@ Qwen 3.5 also found and fixed the bug — it correctly applied the same `str_rep
 
 ---
 
-## The Real Finding
+## So what actually happened
 
 | | OpenHands (function calling) | SWE-agent (text actions) |
 |---|---|---|
-| **Gemma 4 26B** | ❌ 40+ errors, never completed | ✅ **9 steps, patch submitted** |
-| **Qwen 3.5 35B** | ✅ 1 error, completed | ⚠️ Fixed but 96 steps, no submit |
+| **Gemma 4 26B** | ❌ 40+ errors, never completed | ✅ 9 steps, patch produced |
+| **Qwen 3.5 35B** | ✅ 1 error, completed | ⚠️ Fixed the bug but ran 96 steps, never called submit |
 
-The model that "couldn't do tool calling" turned out to be the faster, more effective agent — on a different framework.
+The difference is the action format. OpenHands requires structured JSON function calls with exact parameter names. Gemma 4 keeps dropping parameters when there are 11 tools competing for its attention. SWE-agent just needs plain text — and Gemma 4 writes plain text fine.
 
-**The difference isn't the model. It's the action format.**
-
-- **Function calling** (OpenHands): Model must produce structured JSON with exact parameter names and types. Gemma 4 drops parameters under the pressure of 11 concurrent tool schemas. This is a known limitation of its function calling implementation, not its reasoning ability.
-- **Text-based actions** (SWE-agent): Model outputs plain text that the framework parses. No JSON structure required. Gemma 4 handles this format flawlessly — the same coding intelligence comes through without the function calling bottleneck.
+Gemma 4 can code. It just can't fill out JSON forms reliably.
 
 ---
 
 ## vLLM Configuration That Matters
 
-Three settings that took hours to discover:
+These cost me most of the afternoon:
 
 ### 1. The chat template (most commonly missed)
 
@@ -199,7 +196,7 @@ Gemma 4 E2B, E4B, and 26B all return empty tool calls on Ollama (known bug). Use
 
 Debugging Gemma 4's tool calling on OpenHands. I tested four different `--tool-call-parser` settings, added the official chat template, verified the parser code included the [PR #38847](https://github.com/vllm-project/vllm/pull/38847) fix, and ran curl tests at every level. The curl tests all passed perfectly — 11 tools, 8,892-character system prompt, correct parameters every time. The problem only appeared inside OpenHands' multi-turn conversation loop.
 
-If I had started with SWE-agent instead of OpenHands, the entire investigation would have taken 20 minutes instead of 4 hours.
+I should have tried SWE-agent first.
 
 ### Transferable diagnostics
 
@@ -211,15 +208,13 @@ When a model "can't do tool calling," test it at three levels before concluding 
 
 If level 1-2 pass but level 3 fails, the problem is the framework, not the model. Switching frameworks is faster than debugging function calling compatibility.
 
-### The pattern
+### The thing I'll remember
 
-**If your local model looks broken, try a different agent framework before blaming the model.** The action format (function calling vs text-based) is a bigger compatibility variable than the model's reasoning ability.
+Next time a local model looks broken on an agent framework, I'm switching frameworks before I start debugging the model. Would've saved me four hours this time.
 
 ---
 
-## Reproduction Checklist
-
-For anyone wanting to replicate this on a DGX Spark or similar hardware:
+## How to reproduce
 
 1. **vLLM for Gemma 4:** Use `vllm/vllm-openai:gemma4-cu130` image (not `latest` — it lacks Gemma 4 transformers support)
 2. **Download the chat template:** `curl -sL https://raw.githubusercontent.com/vllm-project/vllm/main/examples/tool_chat_template_gemma4.jinja`
