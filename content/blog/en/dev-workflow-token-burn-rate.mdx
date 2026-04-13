@@ -133,7 +133,24 @@ Before fixing anything, **measure first.** Claude Code has built-in commands tha
 /mcp        — Shows which MCP servers and tools are active
 ```
 
-Run `/context` right now. You might discover that one MCP server is consuming 18K tokens, or that your CLAUDE.md is bigger than you thought. Fix the biggest offender first — that's worth more than all the other tips combined.
+Run `/context` right now. Here's what it looks like on a real session:
+
+```
+Estimated usage by category
+⛁ System prompt:   6k tokens (0.6%)
+⛁ System tools:   11k tokens (1.1%)
+⛁ MCP tools:     934 tokens (0.1%)   ← lazy loading keeps this tiny
+⛁ Custom agents: 1.5k tokens (0.1%)
+⛁ Memory files: 10.5k tokens (1.0%)  ← CLAUDE.md + rules
+⛁ Skills:        2.7k tokens (0.3%)
+⛁ Messages:    196.6k tokens (19.7%) ← the conversation itself
+⛶ Free space:  737.8k (73.8%)
+⛝ Autocompact buffer: 33k tokens (3.3%)
+```
+
+This session is on the 1M context window, so 23% used after a long session. On the default 200K window, the same overhead would be over 100% — compaction territory. Notice the 33K autocompact buffer at the bottom — that's real, it's reserved, you can't use it.
+
+You might discover that one MCP server is consuming 18K tokens, or that your CLAUDE.md is bigger than you thought. Fix the biggest offender first — that's worth more than all the other tips combined.
 
 ### Fix 1: Use the Right Model for the Job
 

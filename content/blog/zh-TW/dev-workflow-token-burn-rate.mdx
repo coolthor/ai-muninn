@@ -133,7 +133,24 @@ Claude Code 的 context 會滿是因為每條訊息都帶隱形開銷 — 規則
 /mcp        — 顯示哪些 MCP server 和 tool 在跑
 ```
 
-現在就跑 `/context`。你可能會發現某個 MCP server 吃了 18K tokens，或你的 CLAUDE.md 比你以為的大。先修最大的那個 — 這比所有其他技巧加起來都值。
+現在就跑 `/context`。這是一個真實 session 的畫面：
+
+```
+Estimated usage by category
+⛁ System prompt:   6k tokens (0.6%)
+⛁ System tools:   11k tokens (1.1%)
+⛁ MCP tools:     934 tokens (0.1%)   ← lazy loading 讓這個很小
+⛁ Custom agents: 1.5k tokens (0.1%)
+⛁ Memory files: 10.5k tokens (1.0%)  ← CLAUDE.md + rules
+⛁ Skills:        2.7k tokens (0.3%)
+⛁ Messages:    196.6k tokens (19.7%) ← 對話本身
+⛶ Free space:  737.8k (73.8%)
+⛝ Autocompact buffer: 33k tokens (3.3%)
+```
+
+這個 session 用的是 1M context window，一個長 session 下來才用 23%。如果用預設的 200K window，同樣的開銷就超過 100% — 直接 compaction。注意底部的 33K autocompact buffer — 這是真的、被 reserve 的、你用不到的。
+
+你可能會發現某個 MCP server 吃了 18K tokens，或你的 CLAUDE.md 比你以為的大。先修最大的那個 — 這比所有其他技巧加起來都值。
 
 ### 修正 1：用對的模型做對的事
 
