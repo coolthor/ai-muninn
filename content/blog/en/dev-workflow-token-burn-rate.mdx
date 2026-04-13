@@ -1,223 +1,231 @@
 ---
-title: "[Dev Workflow] Why Your AI Burns Through Tokens — and What Actually Fixes It"
-description: "A practical breakdown of where AI coding tokens go, what's wasted, and the approaches that actually reduce burn rate — from prompt caching to knowledge graphs."
+title: "[Claude Code] Why Your Context Window Fills Up So Fast — and How to Fix It"
+description: "You just started using Claude Code and the context window keeps filling up. Here's where the tokens actually go, what you can do about it, and how to make Claude remember things without re-reading everything."
 date: "2026-04-13"
-tags: ["tokens", "context window", "Claude Code", "prompt caching", "RAG", "knowledge graph", "musubi", "dev workflow", "AI cost optimization"]
+tags: ["Claude Code", "tokens", "context window", "beginner", "tips", "MCP", "CLAUDE.md", "knowledge graph", "musubi", "AI cost"]
 series: "AI Workflow"
 part: 1
 faq:
-  - q: "Why does Claude Code use so many tokens?"
-    a: "Every message includes the full system prompt, CLAUDE.md rules, MCP tool definitions, and conversation history. A single turn can cost 10-30K tokens before your actual question. With 20 MCP tools loaded, tool schemas alone can consume 50K+ tokens per turn."
-  - q: "What is the biggest waste of tokens in AI coding workflows?"
-    a: "Re-reading the same files repeatedly. Every time an AI agent reads a file to 'check something,' the full file content enters the context window. In a typical debugging session, the same 3-4 files get read 5-10 times each. Prompt caching helps with the cost but not the context window pressure."
-  - q: "How do knowledge graphs reduce token usage?"
-    a: "Instead of embedding entire documents into context for the AI to search through, a knowledge graph pre-computes which documents are related. The AI queries the graph (a few hundred tokens) and only retrieves the 2-3 most relevant documents — instead of dumping 10+ files into context and hoping the AI finds the right one."
-  - q: "What is the difference between RAG and knowledge graph retrieval?"
-    a: "RAG finds documents similar to your query. Knowledge graphs find documents connected to documents similar to your query. RAG answers 'what matches this question?' — knowledge graphs answer 'what else should I know, given what I already found?' This cross-document discovery is what saves the most tokens."
+  - q: "Why does Claude Code run out of context so fast?"
+    a: "Every message you send carries invisible baggage: your CLAUDE.md rules, tool definitions, and the full conversation history. A session can use 50-80K tokens before you even type a question. By turn 20, you're running out of room."
+  - q: "What uses the most tokens in Claude Code?"
+    a: "Three things: (1) MCP tool definitions loaded at startup — each tool adds 500-2000 tokens of overhead every turn, (2) repeated file reads — Claude re-reads the entire file each time, and (3) conversation history that keeps growing."
+  - q: "How do I make my Claude Code sessions last longer?"
+    a: "Three quick fixes: use /compact when switching tasks, tell Claude to read specific line ranges instead of whole files, and disable MCP tools you're not using. For a deeper fix, use a local search tool like QMD so Claude finds notes instantly instead of searching from scratch."
+  - q: "What is a knowledge graph and how does it help with tokens?"
+    a: "A knowledge graph is a map of how your notes connect to each other. Instead of Claude reading 10 files to find an answer, it checks the map first and reads only the 2-3 files that actually matter. Fewer files read = fewer tokens burned."
 ---
 
 <TLDRCard>
-Tokens burn fast because every AI turn carries invisible overhead: system prompts, tool schemas, conversation history, and redundant file reads. Prompt caching cuts cost but not context pressure. RAG helps but misses cross-document connections. Knowledge graphs — pre-computed maps of how your documents relate — let the AI ask targeted questions instead of brute-force searching, cutting retrieval tokens by 40-60%.
+Claude Code's context window fills up because every message carries invisible overhead — rules, tool definitions, conversation history. The biggest waste: Claude re-reading the same files over and over. Quick fixes: /compact between tasks, read specific lines not whole files, trim unused MCP tools. Deeper fix: give Claude a search engine for your notes so it finds answers in 2-3 files instead of 10.
 </TLDRCard>
 
-## Plain-Language Version: Why AI Gets Expensive Fast
+## You Just Started Using Claude Code. It's Amazing. Then It Slows Down.
 
-Every time you ask an AI coding assistant a question, it doesn't just read your question. It re-reads its entire instruction manual, every tool it has access to, and the full history of your conversation. That overhead is invisible to you but very real in cost and capacity.
+You install Claude Code. You ask it to fix a bug. It reads your files, understands the problem, writes a fix. Magic.
 
-This article explains where those tokens go, which ones are wasted, and what approaches actually reduce the burn — from simple fixes anyone can apply today, to a structural approach using knowledge graphs that changes how AI finds information in your notes and code.
+Then by your 15th question, something changes. Claude starts forgetting things you told it earlier. Responses get less precise. Eventually you see the dreaded compaction message — Claude had to summarize and compress your conversation because the context window was full.
+
+What happened? You didn't do anything wrong. The problem is invisible, and this article makes it visible.
 
 ---
 
 ## Preface
 
-A water bill doesn't tell you which tap is leaking. A token bill doesn't tell you which part of your AI workflow is wasteful.
+Imagine a desk. Every time you ask Claude a question, it doesn't just look at your question — it spreads out its entire instruction manual, every tool it might need, and transcripts of everything you've discussed so far. Your actual question sits on whatever space is left.
 
-Most developers notice the symptom — "my context window fills up too fast" or "my API bill is higher than expected" — but don't diagnose the cause. The cause is almost never your prompts being too long. It's the invisible infrastructure that rides along with every single message.
-
-This is a breakdown of where tokens actually go, what you can cut, and what the current state of the art looks like for reducing burn rate without reducing capability.
+The desk is 200K tokens wide. It sounds huge until you realize 40% of it is covered before you even sit down.
 
 ---
 
-## Why Tokens Burn So Fast
+## Part 1: Where Do All the Tokens Go?
 
-### The Invisible Tax Per Turn
+### The Stuff You Don't See
 
-Every message you send to an AI model carries overhead you don't see:
+Every single message you send to Claude carries invisible baggage:
 
-| Component | Typical Size | Frequency |
-|-----------|-------------|-----------|
-| System prompt | 2-8K tokens | Every turn |
-| CLAUDE.md / rules | 3-15K tokens | Every turn |
-| MCP tool definitions | 5-50K tokens | Every turn |
-| Conversation history | Grows per turn | Every turn |
-| File contents from reads | 1-10K per file | On demand |
-| Tool call results | Variable | On demand |
+**Your rules (CLAUDE.md)** — If you've set up a CLAUDE.md file with coding standards, project conventions, and workflow instructions, Claude re-reads the entire thing every turn. A detailed CLAUDE.md can be 3-15K tokens. That's fine — it's what makes Claude useful for your project. But it's not free.
 
-A fresh Claude Code session with 20 MCP tools, a detailed CLAUDE.md, and standard rules can start at **50-80K tokens before you type anything**. That's 25-40% of a 200K context window consumed by infrastructure.
+**Tool definitions** — Every MCP tool (GitHub, Playwright, database connectors, etc.) adds its complete instruction manual to the conversation. One tool = 500-2000 tokens. Got 20 tools installed? That's **10-40K tokens of permanent overhead**, every single turn, even if you never use most of them.
 
-### The Compounding Problem
+**Conversation history** — Everything Claude said, everything you said, every file it read, every command it ran — it's all still there, growing with every turn.
 
-Context windows are not just about cost — they're about capacity. Every token of overhead is a token that can't hold your actual code, your actual question, or the AI's actual reasoning.
+Here's what a typical session looks like in tokens:
 
-At turn 1, you have ~150K tokens of useful capacity. By turn 20 of a debugging session — with conversation history, repeated file reads, and tool results accumulating — you might have 30K left. The AI starts losing track of earlier context. Responses get less accurate. You hit compaction or start a new session.
+| What | How big | When |
+|------|---------|------|
+| System instructions | 2-8K | Always there |
+| Your CLAUDE.md | 3-15K | Always there |
+| Tool definitions | 5-50K | Always there |
+| Your conversation so far | Grows every turn | Always there |
+| Files Claude reads | 1-10K each | When it reads |
 
-The token burn isn't linear. It compounds.
+**Add it up:** A fresh session with a solid CLAUDE.md and 15-20 MCP tools starts at 50-80K tokens. That's 25-40% of your 200K context window gone before you ask your first question.
 
----
+### Why It Gets Worse Over Time
 
-## What's Actually Wasted
+Turn 1: you have ~150K tokens of room for actual work.
 
-### 1. Repeated File Reads
+Turn 10: conversation history has grown, Claude has read a bunch of files, made some edits, run some commands. Maybe 80K left.
 
-This is the single largest waste in AI coding workflows.
+Turn 20: you're debugging something complex, Claude keeps re-reading files to check its work, tool results are piling up. Down to 30K. Claude starts losing track of what you discussed in turn 3.
 
-A typical debugging session looks like this:
-1. AI reads `server.ts` to understand the structure (4K tokens)
-2. AI reads `handler.ts` to check the bug (3K tokens)
-3. You ask a follow-up → AI reads `server.ts` again (4K tokens)
-4. AI makes an edit → reads `handler.ts` to verify (3K tokens)
-5. Build fails → AI reads both files again (7K tokens)
+Turn 25: compaction. Claude summarizes the conversation to free up space, but in the process, it loses details. That fix you discussed in turn 7? Gone.
 
-That's **21K tokens** to read two files, when the content only changed by a few lines between reads. The AI doesn't have a "diff since last read" mechanism — it re-ingests the full file every time.
-
-### 2. MCP Tool Schema Bloat
-
-Every MCP tool loaded in your session adds its full JSON schema to the system prompt. A well-defined tool with descriptions and parameter docs can be 500-2000 tokens. Load 20 tools and you've added **10-40K tokens of permanent overhead** that rides along with every single message.
-
-Most sessions only use 3-5 of those tools. The other 15 are pure waste.
-
-### 3. Conversation History That's No Longer Relevant
-
-By turn 15 of a session, turns 1-8 are usually irrelevant — exploratory questions, wrong approaches, superseded decisions. But they're still in context, consuming tokens and potentially confusing the AI with outdated information.
-
-### 4. Verbose Tool Results
-
-When a search tool returns 50 results but only 3 are relevant, the AI still processes all 50 in context. When a `git diff` returns a 200-line diff but only 10 lines matter, the full diff enters the window.
+This isn't a bug. It's just how context windows work. The key is knowing what fills them up — so you can control it.
 
 ---
 
-## What Actually Works
+## Part 2: The Three Biggest Wastes
 
-### Tier 1: Free Wins (Do These First)
+### Waste #1: Reading the Same File Over and Over
 
-**Lazy MCP Loading**
+This is the single biggest token waste, and most people don't notice it.
 
-Don't load all MCP tools at startup. Use deferred tool loading — tools are listed by name but their schemas aren't loaded until actually needed. This can recover 30-50K tokens of context.
+Watch what happens in a typical bug fix:
 
-In Claude Code, this is already the default behavior for many tools. If you're configuring MCP servers manually, check if your setup supports lazy loading.
+1. Claude reads `server.ts` to understand the code (4,000 tokens)
+2. Claude reads `handler.ts` to find the bug (3,000 tokens)
+3. You ask "what about the error handling?" → Claude reads `server.ts` **again** (4,000 tokens)
+4. Claude makes an edit → reads `handler.ts` to double-check (3,000 tokens)
+5. Build fails → Claude reads **both files again** (7,000 tokens)
 
-**Selective File Reads**
+That's **21,000 tokens** spent reading two files. The files barely changed between reads. But Claude doesn't have a "just show me what changed" option — it re-reads the entire file every time.
 
-Instead of reading entire files, read specific line ranges when you know what you're looking for:
+### Waste #2: Tools You Never Use
 
-```
-Read file.ts lines 45-80
-```
+You installed a cool MCP server with 15 tools. You use 2 of them. The other 13 sit there, doing nothing, except consuming 500-2000 tokens each on every single turn.
 
-This seems obvious but AI agents default to reading full files. A 400-line file costs 3-4K tokens. The 35 lines you actually need cost 300 tokens.
+It's like carrying a toolbox with 30 tools to fix a leaky faucet. You need a wrench. The other 29 tools just make the toolbox heavier.
 
-**Strategic Compaction**
+### Waste #3: Old Conversation That Doesn't Matter Anymore
 
-Don't let auto-compaction surprise you at random points. Compact manually at logical boundaries — after finishing a feature, before starting a new task, when switching from exploration to implementation. This preserves the context that matters and drops what doesn't.
+By turn 15, the first 8 turns are usually irrelevant — you asked some exploratory questions, tried a wrong approach, changed direction. But those old turns are still in context, taking up space and sometimes confusing Claude with outdated information.
 
-### Tier 2: Infrastructure (Requires Setup)
-
-**Prompt Caching**
-
-Anthropic's prompt caching stores the prefix of your conversation (system prompt, tool definitions, CLAUDE.md) on the server side. Subsequent turns that share the same prefix get a **90% cost reduction** on the cached portion and faster TTFT.
-
-This is the single biggest cost reduction available. It doesn't reduce context window pressure (the cached tokens still count toward your 200K limit), but it cuts the bill dramatically.
-
-**RAG (Retrieval-Augmented Generation)**
-
-Instead of putting all relevant documents into context, use a retrieval system to find and inject only the most relevant ones per query.
-
-A basic RAG setup:
-1. Index your documents (embeddings or keyword index)
-2. When a question comes in, search the index
-3. Inject only the top 2-3 results into context
-4. AI answers based on those specific documents
-
-This works well for direct questions: "How did I fix the FP8 KV cache bug?" → RAG finds the exact experience file → AI reads just that one document (2K tokens instead of searching through 20 files at 40K tokens).
-
-**The RAG Limitation**
-
-RAG finds documents similar to your query. That's useful but incomplete.
-
-Consider this scenario: you're debugging a vLLM memory issue on DGX Spark. RAG finds your experience file about "vLLM OOM on startup." Good. But it doesn't find your separate note about "Ollama KEEP_ALIVE holds models in shared memory" — because that document doesn't mention vLLM at all. The connection between those two documents is **implicit**: they share the concept of "unified memory contention" without sharing vocabulary.
-
-This is where RAG breaks down. It answers "what documents match this query?" but not "what documents are connected to the documents that match this query?"
-
-### Tier 3: Knowledge Graphs (The Structural Fix)
-
-A knowledge graph pre-computes the relationships between your documents. Instead of relying on keyword overlap or embedding similarity at query time, it builds a persistent map of which documents share concepts, even when they use different words.
-
-**How it works:**
-
-1. **Build phase** (offline, once): scan all documents, extract concepts (keywords, entities, domain terms), create edges between documents that share concepts. Weight edges by concept specificity — rare concepts create stronger connections than common ones.
-
-2. **Query phase** (per-question): find the document that matches the query (keyword or vector search), then traverse the graph to find its neighbors — documents that are conceptually related but might use entirely different vocabulary.
-
-**The token savings come from precision:**
-
-| Approach | Documents Retrieved | Tokens Used | Relevant Docs Found |
-|----------|-------------------|-------------|-------------------|
-| Dump everything | 20 files | ~40K | 2-3 |
-| RAG (top-5) | 5 files | ~10K | 2-3 |
-| Graph-aware retrieval | 2-3 files | ~4-6K | 2-3 |
-
-The graph doesn't retrieve more relevant documents — it retrieves **fewer irrelevant ones**. Same recall, lower cost.
-
-**The cross-document discovery bonus:**
-
-The real value isn't just token savings. It's finding documents you wouldn't have searched for.
-
-Back to the vLLM memory example: graph-aware retrieval finds the OOM experience file (direct hit) AND surfaces the Ollama KEEP_ALIVE note (graph neighbor — they share the "unified memory" concept). RAG would never find that second document because it doesn't mention vLLM.
-
-This is what "knowledge graph" means in practice: **your notes learn to cross-reference themselves.**
+"Wait, didn't you say we should use approach X?" — No, that was turn 3. We abandoned that in turn 6. But Claude still sees both.
 
 ---
 
-## Building This: Musubi
+## Part 3: What You Can Do About It
 
-[Musubi](https://github.com/coolthor/musubi) is an open-source tool that builds a knowledge graph over your markdown notes. No LLM required — it uses concept co-occurrence and IDF weighting to create edges between documents.
+### Fix 1: Use /compact at the Right Time
+
+Claude Code has a `/compact` command that summarizes your conversation and frees up context. Most people either never use it (and hit auto-compaction at random, bad times) or don't know when to use it.
+
+**Use /compact when:**
+- You just finished a task and are about to start a different one
+- You've been exploring and are ready to start implementing
+- Claude starts referencing things from early in the conversation incorrectly
+
+**Don't use /compact when:**
+- You're in the middle of debugging something — you'll lose the details
+- Claude just read a bunch of files you'll need again soon
+
+Think of it like clearing your desk between tasks. You don't throw away papers mid-task, but you clean up before starting a new one.
+
+### Fix 2: Tell Claude What Lines to Read
+
+Instead of:
+> "Read server.ts"
+
+Try:
+> "Read server.ts lines 45-80"
+
+A 400-line file costs 3-4K tokens. The 35 lines you actually care about cost 300 tokens. That's a 10x difference.
+
+You don't always know the exact lines, and that's fine — let Claude read the full file the first time. But when you're asking follow-up questions about a specific function, tell Claude which part to look at.
+
+### Fix 3: Trim Your MCP Tools
+
+Check what MCP tools are loaded in your session. If you have 20 tools but only use 5 regularly, you're burning 15-30K tokens of context every turn on tools that sit idle.
+
+Claude Code already uses lazy loading for many tools (it loads the full definition only when needed). But if you've added custom MCP servers, check if they support lazy loading. If not, consider only enabling them in sessions where you actually need them.
+
+### Fix 4: Give Claude a Search Engine for Your Notes
+
+This is the deeper fix that changes everything.
+
+The pattern without a search engine:
+1. You ask Claude about a bug you've seen before
+2. Claude doesn't remember (different session)
+3. Claude reads 5-10 files trying to find the answer
+4. 30,000 tokens later, it finds the relevant note
+
+The pattern with a search engine:
+1. You ask Claude about a bug you've seen before
+2. Claude searches your notes (200 tokens)
+3. Finds the exact file (2,000 tokens to read)
+4. **2,200 tokens total** instead of 30,000
+
+[QMD](https://github.com/tobilu/qmd) is one such tool — a local search engine for markdown files. It indexes your notes and lets Claude find answers in milliseconds instead of reading files one by one. 732 documents searched in 30ms.
+
+But keyword search has a limitation: it only finds notes that use the **same words** as your question. If you wrote about "memory conflicts between Ollama and vLLM" but search for "GPU out of memory error," keyword search won't connect them.
+
+---
+
+## Part 4: When Your Notes Learn to Cross-Reference Themselves
+
+This is where knowledge graphs come in. Don't let the fancy name intimidate you — the concept is simple.
+
+**A knowledge graph is a map of how your notes relate to each other.**
+
+Imagine you have 400 notes about different topics. Some of them are related, but they use different words. A note about "Ollama keeping models in memory" and a note about "vLLM crashing on startup" are deeply related — both are about the same 128GB memory pool. But a keyword search for "vLLM crash" would never find the Ollama note.
+
+A knowledge graph pre-computes these connections. It scans all your notes, finds shared concepts, and draws lines between related documents — even when they use completely different vocabulary.
+
+**The result:**
+
+| How Claude finds information | Files it reads | Tokens spent |
+|------------------------------|---------------|-------------|
+| Reads everything that might be relevant | 10-20 files | ~40,000 |
+| Keyword search (QMD) | 3-5 files | ~10,000 |
+| Knowledge graph search | 2-3 files | ~4,000 |
+
+Same answer. 10x fewer tokens.
+
+The knowledge graph doesn't just save tokens — it finds notes you wouldn't have searched for. That's the real magic: **connections you didn't know existed in your own notes.**
+
+### Musubi: A Knowledge Graph for Your Notes
+
+[Musubi](https://github.com/coolthor/musubi) (Japanese for "to tie together") builds this map over your markdown notes. No AI service needed — it runs locally, reads your files, and figures out how they connect.
 
 ```bash
-# Install
+# Set it up (one time)
 uvx --from "git+https://github.com/coolthor/musubi" musubi init
 
-# Build the graph
+# Build the map
 musubi build
 
-# Find related documents
+# Ask: what's related to this topic?
 musubi neighbors "vLLM memory issue"
-# → ★ experience-vllm-oom-startup.md (direct)
-# → + experience-ollama-keep-alive.md (graph neighbor)
-# → + experience-unified-memory-conflict.md (graph neighbor)
-
-# Search with graph expansion
-musubi search "fp8 kv cache"
-# → keyword hits + their graph neighbors
+# → ★ vllm-oom-startup.md (directly about this)
+# → + ollama-keep-alive.md (related — same memory pool)
+# → + unified-memory-conflict.md (related — same root cause)
 ```
 
-The integration with Claude Code is a [PreToolUse hook](/en/blog/...) — before the AI runs a web search or reads files, it checks the knowledge graph first. If a relevant note already exists, the AI reads that instead of searching from scratch.
+The second and third results are notes that keyword search would **never** find — they don't mention "vLLM" at all. But the knowledge graph knows they're connected through the concept of shared memory.
 
-**Current scale:** 400 nodes, 14K edges across 700+ markdown documents spanning 11 knowledge domains. Zero isolated nodes. Average query adds 2-3 graph-expanded results that keyword search alone would miss.
+Musubi itself uses **zero LLM tokens** — the graph is built with deterministic concept matching, not an AI service. The README is honest about this: [they don't claim "saves 40% tokens" without data](https://github.com/coolthor/musubi#measure-your-token-savings). The tool includes a built-in benchmark (`musubi benchmark`) so you can measure your actual savings on your own notes.
 
-The token saving benchmark scaffold exists (`musubi benchmark`) but hasn't run yet — results will be published when available. The estimated saving from graph-aware retrieval vs. brute-force search is **40-60% fewer retrieval tokens** with equal or better recall, based on the precision improvement of retrieving 2-3 targeted documents instead of 5-10 broad matches.
-
----
-
-## What Was Gained
-
-**The diagnosis:** Token burn comes from invisible overhead (system prompts, tool schemas, history) and redundant operations (repeated file reads, broad searches). Your prompts are probably fine. Your infrastructure is the problem.
-
-**The quick fixes:** Lazy MCP loading, selective file reads, and strategic compaction are free and immediate. Prompt caching is the single biggest cost reduction.
-
-**The structural fix:** RAG reduces retrieval tokens but misses cross-document connections. Knowledge graphs pre-compute those connections, enabling precise retrieval that finds fewer documents but the right ones.
-
-**The principle:** The best way to save tokens isn't compression — it's precision. Don't make context smaller. Make it more targeted.
+When integrated with Claude Code, Musubi runs automatically before Claude searches the web or reads files. If the answer already exists in your notes, Claude reads that instead of starting from scratch. Fewer files read, fewer tokens burned, better answers.
 
 ---
 
-*[Musubi](https://github.com/coolthor/musubi) is open source (MIT). It works with any collection of markdown files — no vendor lock-in, no LLM dependency, no cloud service.*
+## The Takeaway
+
+Your context window fills up fast because of invisible overhead — not because your questions are too long.
+
+**Do these today (free, immediate):**
+- `/compact` when switching tasks
+- Tell Claude to read specific line ranges, not whole files
+- Disable MCP tools you're not using
+
+**Do this when ready (requires setup):**
+- Give Claude a search engine for your notes ([QMD](https://github.com/tobilu/qmd))
+- Add a knowledge graph so related notes find each other ([Musubi](https://github.com/coolthor/musubi))
+
+**The principle:** The best way to save tokens isn't making conversations shorter — it's making Claude's search more precise. Don't compress. Target.
+
+---
+
+*Both [QMD](https://github.com/tobilu/qmd) and [Musubi](https://github.com/coolthor/musubi) are open source. They work with any markdown files, run locally, and don't need an AI service or cloud account.*
