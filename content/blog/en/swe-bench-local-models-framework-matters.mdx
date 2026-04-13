@@ -1,0 +1,237 @@
+---
+title: "[AI Agent] SWE-Bench on a Desktop AI: The Framework Matters More Than the Model"
+description: "Gemma 4 26B went from 40+ errors (OpenHands) to solving a real bug in 9 steps (SWE-agent) — same model, same hardware, completely different results. The agent framework is the biggest variable in local SWE-Bench runs."
+date: "2026-04-13"
+updatedAt: "2026-04-13"
+tags: ["SWE-Bench", "Gemma 4", "Qwen 3.5", "OpenHands", "SWE-agent", "vLLM", "DGX Spark", "Tool Calling", "AI Agent"]
+series: "DGX Spark"
+part: 15
+faq:
+  - q: "Can you run SWE-Bench with local open-source models instead of Claude or GPT?"
+    a: "Yes. We ran SWE-agent with Gemma 4 26B on a DGX Spark (GB10) via vLLM, and it successfully found, fixed, and submitted a patch for a real bug in 9 steps — completely free. However, the choice of agent framework matters enormously: the same model failed completely on OpenHands due to function calling incompatibility."
+  - q: "Which is better for SWE-Bench — Gemma 4 or Qwen 3.5?"
+    a: "It depends on the framework. With SWE-agent (text-based actions), Gemma 4 26B solved the task in 9 steps and submitted a patch. Qwen 3.5 35B fixed the bug too but took 96 steps and never submitted. With OpenHands (function calling), Qwen 3.5 worked (1 error) while Gemma 4 produced 40+ errors. Pick the model that matches your framework's action format."
+  - q: "Why does Gemma 4 fail on OpenHands but work on SWE-agent?"
+    a: "OpenHands uses OpenAI-style function calling (structured JSON tool calls). Gemma 4's function calling is unreliable with 11 concurrent tools — it drops required parameters. SWE-agent uses text-based actions (plain text commands parsed by the framework), which Gemma 4 handles perfectly. The model's coding ability is fine; it's the function calling format that breaks."
+  - q: "What vLLM settings are needed for Gemma 4 tool calling?"
+    a: "Three critical settings: --enable-auto-tool-choice, --tool-call-parser gemma4, and --chat-template tool_chat_template_gemma4.jinja (download from vLLM GitHub). The chat template is the most commonly missed one — without it, Gemma 4's tool calls lose their parameters even though the model generates them correctly."
+---
+
+<VideoEmbed src="/videos/swe-bench-local-models-framework-matters.mp4" />
+
+<TLDRCard>
+Gemma 4 26B went from **40+ tool calling errors** on OpenHands to **solving a real bug in 9 steps** on SWE-agent — same model, same GX10 hardware. The agent framework is a bigger variable than the model itself when running SWE-Bench locally.
+</TLDRCard>
+
+## Plain-Language Version: Can a desktop AI fix real bugs?
+
+[SWE-Bench](https://www.swebench.com/) is the standard test for whether an AI can fix real software bugs — it takes actual GitHub issues from popular projects and checks if the AI can produce a working patch. The leaderboard is dominated by Claude and GPT through cloud APIs.
+
+I wanted to know: can you run this on your own hardware with open-source models, for free? I tested Gemma 4 26B and Qwen 3.5 35B on a DGX Spark desktop workstation, using two different agent frameworks: [OpenHands](https://github.com/All-Hands-AI/OpenHands) and [SWE-agent](https://github.com/SWE-agent/SWE-agent). The results were not what I expected — the same model that looked completely broken on one framework worked perfectly on the other. The framework turned out to be the variable that mattered most.
+
+---
+
+## The Setup
+
+**Hardware:** NVIDIA DGX Spark (GB10, 128 GB unified memory, SM121)
+**Models:** Gemma 4 26B-A4B NVFP4 via vLLM, Qwen 3.5 35B-A3B FP8 via vLLM
+**Frameworks:** [OpenHands](https://github.com/All-Hands-AI/OpenHands) v0.59.0, [SWE-agent](https://github.com/SWE-agent/SWE-agent) v1.1.0
+**Architecture:** Agent framework runs on a separate Mac (OrbStack Docker), connects to GX10 vLLM via Tailscale
+
+```
+Mac (openclaw)                          DGX Spark (GX10)
+┌─────────────────┐                    ┌──────────────────┐
+│  OpenHands /     │ ──── API call ──── │  vLLM            │
+│  SWE-agent       │   Tailscale        │  Gemma 4 / Qwen  │
+│  Docker sandbox  │                    │  port 8000        │
+└─────────────────┘                    └──────────────────┘
+```
+
+---
+
+## Test 1: OpenHands — Function Calling Hell
+
+OpenHands uses [OpenAI-style function calling](https://platform.openai.com/docs/guides/function-calling) — the model receives tool schemas as JSON and must respond with structured `tool_calls` objects. It exposes 11 tools: `execute_bash`, `str_replace_editor`, `think`, `finish`, `browser`, `execute_ipython_cell`, `task_tracker`, `fetch`, `create_pr`, `create_mr`, `create_bitbucket_pr`.
+
+**Task:** "Write a Python function that checks if a number is prime. Include a test."
+
+### Gemma 4 26B on OpenHands: 40+ errors
+
+Every parser configuration failed:
+
+| `--tool-call-parser` | Errors before first success | Result |
+|---|---|---|
+| `pythonic` | 5 | Only produced `task_tracker:plan` |
+| `hermes` | 4 | Same |
+| None | 7 | Same |
+| `gemma4` + official chat template | 40+ | Never completed task |
+
+The errors were always the same pattern:
+
+```
+Missing required parameters for function 'execute_bash': {'command', 'security_risk'}
+Missing required parameters for function 'str_replace_editor': {'path', 'command', 'security_risk'}
+```
+
+Gemma 4 called the right functions but dropped the parameters. Every time.
+
+### The misleading curl test
+
+Here's the confusing part: when I tested the exact same 11 tools + OpenHands system prompt (8,892 characters) via `curl`, Gemma 4's tool calling was **perfect**:
+
+```bash
+curl http://<gx10-ip>:8000/v1/chat/completions -d '{
+  "model": "gemma-4-26b",
+  "messages": [{"role": "system", "content": "<8892-char OpenHands prompt>"},
+               {"role": "user", "content": "Create hello.py"}],
+  "tools": [<all 11 tools>]
+}'
+```
+
+Response: correct `str_replace_editor` call with all parameters. So the API worked. The framework somehow broke it.
+
+### Qwen 3.5 35B on OpenHands: Success (with caveats)
+
+Qwen 3.5 completed the same task with only **1 error** — missing `security_risk` parameter once, then recovered:
+
+```
+✅ Created prime_check.py with is_prime() function
+✅ Ran python3 prime_check.py — all tests passed
+✅ Task completed
+```
+
+**Critical setup detail:** Qwen 3.5's `--reasoning-parser qwen3` must be removed. With it enabled, all output gets consumed as "thinking tokens" and the response comes back empty. Use `--tool-call-parser qwen3_xml` without the reasoning parser.
+
+---
+
+## Test 2: SWE-agent — Everything Changes
+
+SWE-agent uses a completely different approach: **text-based actions**. Instead of structured JSON function calls, the model outputs plain text in a specific format:
+
+```
+💭 THOUGHT
+I need to look at the file with the syntax error.
+
+🎬 ACTION
+str_replace_editor view /repo/tests/missing_colon.py
+```
+
+The framework parses the text. No OpenAI function calling involved.
+
+**Task:** Fix a real bug from [SWE-agent/test-repo#1](https://github.com/SWE-agent/test-repo/issues/1) — a missing colon in a Python function definition causing `SyntaxError`.
+
+### Gemma 4 26B on SWE-agent: 9 steps, patch submitted
+
+```
+Step 1: find . -maxdepth 2 -not -path '*/.*'     → Found repo structure
+Step 2: cat tests/missing_colon.py                → Read the broken file
+Step 3: python3 tests/missing_colon.py            → Reproduced the error
+Step 4: cat tests/missing_colon.py                → Confirmed the issue
+Step 5: str_replace_editor (wrong path)           → Path error, self-corrected
+Step 6: str_replace_editor str_replace             → Fixed the bug ✅
+Step 7: python3 tests/missing_colon.py            → Verified the fix ✅
+Step 8-9: submit                                   → Patch submitted ✅
+```
+
+The patch:
+
+```diff
+-def division(a: float, b: float) -> float
++def division(a: float, b: float) -> float:
+     return a/b
+```
+
+9 steps. Correct fix. Successful submit. The same model that produced 40+ errors on OpenHands solved a real bug and submitted a patch.
+
+### Qwen 3.5 35B on SWE-agent: Fixed but couldn't finish
+
+Qwen 3.5 also found and fixed the bug — it correctly applied the same `str_replace` edit. But it ran for **96 steps** doing excessive git archaeology and never called `submit`. The fix was correct; the model just couldn't figure out how to end the session.
+
+---
+
+## The Real Finding
+
+| | OpenHands (function calling) | SWE-agent (text actions) |
+|---|---|---|
+| **Gemma 4 26B** | ❌ 40+ errors, never completed | ✅ **9 steps, patch submitted** |
+| **Qwen 3.5 35B** | ✅ 1 error, completed | ⚠️ Fixed but 96 steps, no submit |
+
+The model that "couldn't do tool calling" turned out to be the faster, more effective agent — on a different framework.
+
+**The difference isn't the model. It's the action format.**
+
+- **Function calling** (OpenHands): Model must produce structured JSON with exact parameter names and types. Gemma 4 drops parameters under the pressure of 11 concurrent tool schemas. This is a known limitation of its function calling implementation, not its reasoning ability.
+- **Text-based actions** (SWE-agent): Model outputs plain text that the framework parses. No JSON structure required. Gemma 4 handles this format flawlessly — the same coding intelligence comes through without the function calling bottleneck.
+
+---
+
+## vLLM Configuration That Matters
+
+Three settings that took hours to discover:
+
+### 1. The chat template (most commonly missed)
+
+```bash
+# Download from vLLM GitHub
+curl -sL https://raw.githubusercontent.com/vllm-project/vllm/main/examples/tool_chat_template_gemma4.jinja \
+  -o tool_chat_template_gemma4.jinja
+
+# Mount into container
+-v /path/to/tool_chat_template_gemma4.jinja:/app/tool_chat_template_gemma4.jinja
+--chat-template /app/tool_chat_template_gemma4.jinja
+```
+
+Without this, Gemma 4's tool calls lose their parameters even when the model generates them correctly. The [official vLLM recipe](https://docs.vllm.ai/projects/recipes/en/latest/Google/Gemma4.html) documents this but it's easy to miss.
+
+### 2. Qwen 3.5's thinking mode must be disabled
+
+```bash
+# WRONG — all output gets consumed as thinking tokens
+--reasoning-parser qwen3 --tool-call-parser qwen3_xml
+
+# RIGHT — tool calling works
+--tool-call-parser qwen3_xml
+# (no --reasoning-parser)
+```
+
+### 3. Gemma 4 on Ollama: broken
+
+Gemma 4 E2B, E4B, and 26B all return empty tool calls on Ollama (known bug). Use vLLM with `--tool-call-parser gemma4`.
+
+---
+
+## What Was Gained
+
+### What cost the most time
+
+Debugging Gemma 4's tool calling on OpenHands. I tested four different `--tool-call-parser` settings, added the official chat template, verified the parser code included the [PR #38847](https://github.com/vllm-project/vllm/pull/38847) fix, and ran curl tests at every level. The curl tests all passed perfectly — 11 tools, 8,892-character system prompt, correct parameters every time. The problem only appeared inside OpenHands' multi-turn conversation loop.
+
+If I had started with SWE-agent instead of OpenHands, the entire investigation would have taken 20 minutes instead of 4 hours.
+
+### Transferable diagnostics
+
+When a model "can't do tool calling," test it at three levels before concluding it's broken:
+
+1. **Single API call** (curl with 2 tools) — tests basic format
+2. **Full schema** (curl with all tools + system prompt) — tests scale
+3. **Framework integration** (actual agent loop) — tests multi-turn interaction
+
+If level 1-2 pass but level 3 fails, the problem is the framework, not the model. Switching frameworks is faster than debugging function calling compatibility.
+
+### The pattern
+
+**If your local model looks broken, try a different agent framework before blaming the model.** The action format (function calling vs text-based) is a bigger compatibility variable than the model's reasoning ability.
+
+---
+
+## Reproduction Checklist
+
+For anyone wanting to replicate this on a DGX Spark or similar hardware:
+
+1. **vLLM for Gemma 4:** Use `vllm/vllm-openai:gemma4-cu130` image (not `latest` — it lacks Gemma 4 transformers support)
+2. **Download the chat template:** `curl -sL https://raw.githubusercontent.com/vllm-project/vllm/main/examples/tool_chat_template_gemma4.jinja`
+3. **SWE-agent install:** `uv python install 3.12 && git clone SWE-agent && uv pip install -e .`
+4. **Run:** `sweagent run --agent.model.name openai/gemma-4-26b --agent.model.api_base http://<your-gx10-ip>:8000/v1 --agent.model.api_key dummy --agent.model.per_instance_cost_limit 0`
+5. **For Qwen 3.5:** Remove `--reasoning-parser qwen3`, use `--tool-call-parser qwen3_xml`
+
+*This is Part 15 of the "[DGX Spark](/en/blog/dgx-spark-gemma4-26b-nvfp4-52-toks)" series.*
