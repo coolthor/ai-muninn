@@ -3,7 +3,7 @@ title: "[Benchmark] Gemma 4 全家桶 on DGX Spark — 哪個版本適合你？"
 description: "Gemma 4 E2B / E4B / 26B MoE / 31B Dense 在 DGX Spark、RTX 5090、MacBook Pro 上的完整對照表。一張表看完速度、記憶體、量化格式。附選擇建議。"
 date: "2026-04-13"
 updatedAt: "2026-04-13"
-tags: ["Gemma 4", "DGX Spark", "GB10", "benchmark", "MoE", "NVFP4", "vLLM", "Ollama"]
+tags: ["Gemma 4", "DGX Spark", "GB10", "benchmark", "MoE", "NVFP4", "vLLM", "Ollama", "DGX Spark 值得買嗎", "DGX Spark vs RTX 5090", "DGX Spark 最佳模型 2026"]
 series: "DGX Spark"
 part: 14
 faq:
@@ -15,6 +15,10 @@ faq:
     a: "可以跑到 26B MoE（47 tok/s），但 31B Dense 會因為 KV cache 超過記憶體而掉到 1.5 tok/s（swap）。降 context window 到 2048 可以救到 9 tok/s，用 oMLX 可以到 12.8 tok/s。建議用 E4B 或 26B MoE。"
   - q: "哪種量化格式最好？"
     a: "在 DGX Spark 上用 vLLM：NVFP4 最快（E4B 從 19 → 50 tok/s，提升 2.6 倍）。在 Mac/消費級 GPU 上用 Ollama：Q4_K_M 是唯一選項。FP8 是中間值（E4B 36 tok/s）但不值得——NVFP4 更快。"
+  - q: "2026 年 DGX Spark $4,699 值得嗎？"
+    a: "以 Gemma 4 來說：26B MoE NVFP4 跑 52 tok/s，只佔 128 GB 中的 16 GB — 如果你打算同時跑多個模型或 100B+ 模型，值得。如果只跑一個 32 GB 以內的模型，RTX 5090 跑同一個 26B MoE 有 186 tok/s（快 3.6 倍）。DGX Spark 贏在容量和能跑別的地方裝不下的模型。"
+  - q: "跑 Gemma 4 該選 DGX Spark 還是 RTX 5090？"
+    a: "RTX 5090 在每個 Gemma 4 版本都更快（E2B 310 vs 53、26B MoE 186 vs 52 tok/s）。但 RTX 5090 跑不了超過 32 GB 的模型。在 RTX 5090 上，31B Dense 62 tok/s 是最聰明的舒適選擇。在 DGX Spark 上，26B MoE NVFP4 52 tok/s 是最佳平衡，因為 31B Dense 只有 7 tok/s（頻寬瓶頸）。"
 ---
 
 <VideoEmbed src="/videos/gemma4-4-machines-4-models.mp4" />

@@ -3,7 +3,7 @@ title: "[Benchmark] Gemma 4 Complete Guide on DGX Spark — Which Model Should Y
 description: "Gemma 4 E2B / E4B / 26B MoE / 31B Dense benchmarked on DGX Spark, RTX 5090, and MacBook Pro. One table with speed, memory, quantization format. Selection guide included."
 date: "2026-04-13"
 updatedAt: "2026-04-13"
-tags: ["Gemma 4", "DGX Spark", "GB10", "benchmark", "MoE", "NVFP4", "vLLM", "Ollama"]
+tags: ["Gemma 4", "DGX Spark", "GB10", "benchmark", "MoE", "NVFP4", "vLLM", "Ollama", "DGX Spark worth it", "DGX Spark vs RTX 5090", "best model DGX Spark 2026"]
 series: "DGX Spark"
 part: 14
 faq:
@@ -15,6 +15,10 @@ faq:
     a: "Up to 26B MoE (47 tok/s). 31B Dense will drop to 1.5 tok/s because KV cache exceeds memory and triggers swap. Reducing context window to 2048 gets 9 tok/s, oMLX gets 12.8 tok/s. Recommend E4B or 26B MoE."
   - q: "Which quantization format is best?"
     a: "On DGX Spark with vLLM: NVFP4 is fastest (E4B goes from 19 to 50 tok/s, 2.6x improvement). On Mac/consumer GPUs with Ollama: Q4_K_M is the only option. FP8 is a middle ground (E4B 36 tok/s) but not worth it over NVFP4."
+  - q: "Is the DGX Spark worth $4,699 in 2026?"
+    a: "For Gemma 4 specifically: 26B MoE NVFP4 at 52 tok/s using only 16 GB of the 128 GB available — yes, if you plan to run multiple models or 100B+ models. For a single model under 32 GB, an RTX 5090 runs the same 26B MoE at 186 tok/s (3.6x faster). The DGX Spark wins on capacity and the ability to run models that don't fit anywhere else."
+  - q: "DGX Spark vs RTX 5090 for Gemma 4 — which is better?"
+    a: "RTX 5090 is faster on every Gemma 4 variant (E2B 310 vs 53, 26B MoE 186 vs 52 tok/s). But RTX 5090 can't run models over 32 GB. On RTX 5090, 31B Dense at 62 tok/s is the smartest comfortable choice. On DGX Spark, 26B MoE NVFP4 at 52 tok/s is the best balance because 31B Dense hits only 7 tok/s (bandwidth-limited)."
 ---
 
 <VideoEmbed src="/videos/gemma4-4-machines-4-models.mp4" />
