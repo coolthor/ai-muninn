@@ -1,7 +1,7 @@
 export default function TLDRCard({ children }: { children: React.ReactNode }) {
   return (
     <div
-      className="my-8 p-4 rounded-lg text-sm"
+      className="tldr-card my-8 p-4 rounded-lg text-sm"
       style={{
         background: 'rgba(0, 255, 200, 0.04)',
         border: '1px solid rgba(0, 255, 200, 0.15)',

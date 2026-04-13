@@ -89,8 +89,8 @@ function JsonLd({ post, url, locale, slug }: {
 }) {
   const isZh = locale === 'zh-TW'
   const articleSchema: Record<string, unknown> = {
-    '@context': 'https://schema.org',
     '@type': 'TechArticle',
+    '@id': `${url}#article`,
     headline: post.title,
     description: post.description,
     datePublished: post.date,
@@ -109,6 +109,10 @@ function JsonLd({ post, url, locale, slug }: {
     },
     keywords: post.tags.join(', '),
     mainEntityOfPage: { '@type': 'WebPage', '@id': url },
+    speakable: {
+      '@type': 'SpeakableSpecification',
+      cssSelector: ['.tldr-card', 'article h2:first-of-type + p'],
+    },
     ...(post.series && {
       isPartOf: {
         '@type': 'CreativeWorkSeries',
@@ -120,8 +124,8 @@ function JsonLd({ post, url, locale, slug }: {
   }
 
   const breadcrumbSchema = {
-    '@context': 'https://schema.org',
     '@type': 'BreadcrumbList',
+    '@id': `${url}#breadcrumb`,
     itemListElement: [
       {
         '@type': 'ListItem',
@@ -145,8 +149,8 @@ function JsonLd({ post, url, locale, slug }: {
   }
 
   const faqSchema = post.faq?.length ? {
-    '@context': 'https://schema.org',
     '@type': 'FAQPage',
+    '@id': `${url}#faq`,
     mainEntity: post.faq.map(({ q, a }) => ({
       '@type': 'Question',
       name: q,
@@ -154,23 +158,13 @@ function JsonLd({ post, url, locale, slug }: {
     })),
   } : null
 
+  const graph = [articleSchema, breadcrumbSchema, ...(faqSchema ? [faqSchema] : [])]
+
   return (
-    <>
-      <script
-        type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(articleSchema) }}
-      />
-      <script
-        type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(breadcrumbSchema) }}
-      />
-      {faqSchema && (
-        <script
-          type="application/ld+json"
-          dangerouslySetInnerHTML={{ __html: JSON.stringify(faqSchema) }}
-        />
-      )}
-    </>
+    <script
+      type="application/ld+json"
+      dangerouslySetInnerHTML={{ __html: JSON.stringify({ '@context': 'https://schema.org', '@graph': graph }) }}
+    />
   )
 }
 
