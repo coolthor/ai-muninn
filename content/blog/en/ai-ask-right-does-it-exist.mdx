@@ -1,0 +1,188 @@
+---
+title: "[Ask AI Right] Before You Build It, Ask: Does This Already Exist?"
+description: "Your first question to AI shouldn't be 'help me do X.' It should be 'is there something that already does X?' This article teaches you how to use AI as a research assistant — finding tools, comparing alternatives, and verifying they're still alive."
+date: "2026-04-13"
+updatedAt: "2026-04-13"
+tags: ["AI", "Tools", "Research", "Beginner", "Productivity"]
+series: "Ask AI Right"
+part: 5
+faq:
+  - q: "How do I use AI to find existing tools instead of building my own?"
+    a: "Ask AI three questions in order: (1) 'Does a tool that does X already exist?' to get a list, (2) 'Compare the top 3 options — pricing, features, limitations' to narrow down, (3) 'Is [tool name] still actively maintained? When was the last update?' to verify. This takes 2 minutes and can save you hours of reinventing something that already exists."
+  - q: "Can I trust AI's tool recommendations?"
+    a: "Not blindly. AI sometimes recommends tools that no longer exist, have been acquired, or changed pricing. Always verify: visit the tool's website yourself, check the last update date, and look for recent user reviews. The verification step is non-negotiable."
+  - q: "When should I build something myself instead of using an existing tool?"
+    a: "Build only when: (1) no tool exists for your specific need, (2) existing tools are too expensive for your budget, (3) you need deep customization that no tool supports, or (4) the tool handles sensitive data you can't trust to a third party. In most cases, an existing tool is faster, cheaper, and more reliable."
+  - q: "What if AI recommends a tool I've never heard of?"
+    a: "That's actually the best outcome — it means AI found something your own research missed. But verify before committing: search for the tool name, check its website, read recent reviews, and try the free tier if available. AI is great at discovery but not at guaranteeing quality."
+---
+
+<VideoEmbed src="/videos/ai-ask-right-does-it-exist.mp4" />
+
+<TLDRCard>
+Your first question to AI shouldn't be "help me do X." It should be **"does something that already does X exist?"** Three follow-ups: (1) list options, (2) compare top 3, (3) verify they're still alive. This 2-minute research habit saves hours of reinventing things that already exist.
+</TLDRCard>
+
+## Plain-Language Version: Why most people skip the most important step
+
+When you realize you need something — a way to schedule social media posts, a tool to convert PDFs, a system to track invoices — your first instinct is to open AI and say "help me build this." That instinct skips the single most important question: **does this already exist?**
+
+According to a [Harvard Business Review analysis](https://hbr.org/2021/06/do-you-really-need-to-build-that-app), companies routinely spend months building tools that already exist as mature products — often with free tiers. The same thing happens to individuals every day. Someone spends an afternoon getting AI to write a custom script for batch-renaming files, when a free app has done this with drag-and-drop for a decade.
+
+This article teaches you one habit: before asking AI to make something, ask it to *find* something first.
+
+---
+
+## Preface
+
+You want a bookshelf. You could go to the hardware store, buy wood, screws, sandpaper, and spend the weekend measuring, cutting, assembling, and painting. Or you could check IKEA first — they probably have one for $30 that fits perfectly.
+
+Most people check IKEA. Nobody thinks that's lazy. It's just smart.
+
+But when it comes to digital tools, people skip the "check IKEA" step entirely. They go straight to "AI, build me a bookshelf." And AI happily obliges — it'll spend 20 minutes building you a custom solution that's worse than the free app you didn't know existed.
+
+Last article, we talked about the [mindset shift from answer machine to collaboration tool](/en/blog/ai-ask-right-why-ai-feels-useless). This one teaches you what the very first collaboration should be: **research.**
+
+---
+
+## The mistake I see constantly
+
+Here's a real pattern. Someone has a need:
+
+> "I need to send the same email to 50 people but with their names personalized."
+
+They open ChatGPT and say:
+
+> "Write me a Python script that reads a CSV file and sends personalized emails."
+
+ChatGPT writes the script. It works — mostly. But now they need to figure out SMTP settings, app passwords, rate limits, and why Gmail flagged them as spam after the 15th email.
+
+Three hours later, they have a fragile script that does what [Mailchimp's free tier](https://mailchimp.com/) does in 10 minutes — with templates, analytics, unsubscribe handling, and no spam flags.
+
+The problem isn't the AI. The AI did exactly what was asked. The problem is what was asked: **"build me X"** instead of **"does X already exist?"**
+
+---
+
+## The three-question research framework
+
+When you have a need, open your AI assistant and ask these three questions, in order. Don't skip to the third one.
+
+### Question 1: "Does this already exist?"
+
+> "I need to [describe your need]. Is there an existing tool, app, or service that does this? List the main options."
+
+![ChatGPT listing social media scheduling tools — Buffer, Hootsuite, Sprout Social, Later, and more](/images/ai-ask-right/demo-research-list-en.png)
+
+This is the discovery step. AI is excellent at this because it's seen descriptions of thousands of tools during training. It'll usually list 3-7 options you've never heard of.
+
+**What to watch for:** AI sometimes lists tools that sound perfect but don't actually exist, or have been discontinued. That's why Question 3 exists.
+
+### Question 2: "Compare the top options"
+
+> "Compare the top 3 options you listed. For each one, tell me: pricing (is there a free tier?), main features, limitations, and who it's best for."
+
+![ChatGPT comparing Buffer vs Later — pricing, free tier, limitations, and recommendation](/images/ai-ask-right/demo-research-compare-en.png)
+
+This turns a vague list into a decision table. You're not asking AI to pick for you — you're asking it to organize the information so *you* can pick.
+
+**Pro tip:** Add your constraints. "I need something free," "It has to work on Mac," "I need it in Chinese." The more specific, the better the comparison.
+
+### Question 3: "Is this still alive?"
+
+> "For [tool name], when was the last major update? Is the company still active? Are there any recent reports of the service shutting down or being acquired?"
+
+This is the verification step, and it's **non-negotiable**. AI's training data has a cutoff — it might recommend a tool that was great in 2024 but shut down six months ago.
+
+**Always do this yourself too:** visit the tool's actual website. If the blog hasn't been updated in a year, or the pricing page returns a 404, move on.
+
+---
+
+## What this looks like in practice
+
+### A marketer who needs to schedule posts
+
+**Without research:**
+> "Write me a script that posts to Instagram at scheduled times."
+→ Gets a complex API integration that takes days to set up and breaks every time Instagram changes their API.
+
+**With research:**
+> "I need to schedule social media posts across Instagram, Facebook, and LinkedIn. What tools already do this?"
+→ AI lists Buffer, Hootsuite, Later, Sprout Social.
+> "Compare Buffer and Later for a one-person business. Free tier?"
+→ Gets a clear comparison. Picks Buffer's free plan. Done in 5 minutes.
+
+### A small business owner who needs invoices
+
+**Without research:**
+> "Create me an invoice template in Excel with formulas."
+→ Gets a spreadsheet that kind of works but doesn't handle tax calculation, payment tracking, or multi-currency.
+
+**With research:**
+> "I run a small business and need to send invoices. Is there a free tool for this?"
+→ AI lists Wave, Zoho Invoice, Invoice Ninja.
+> "Compare Wave and Zoho Invoice for a freelancer with under 10 clients per month."
+→ Picks Wave (completely free, no client limit). Sends first invoice in 15 minutes.
+
+### A teacher who needs quizzes
+
+**Without research:**
+> "Generate 20 multiple-choice questions about photosynthesis."
+→ Gets questions but has to manually format them, no auto-grading, no student analytics.
+
+**With research:**
+> "I need to create and share quizzes with my students, with auto-grading. What tools exist?"
+→ AI lists Google Forms, Kahoot, Quizlet, Socrative.
+> "Which one is free for teachers and supports auto-grading?"
+→ Picks Google Forms (free, auto-grades, exports to spreadsheet). Uses AI to generate the questions, then pastes them into Forms.
+
+Notice the last example — the teacher still uses AI, just not to *build* the quiz system. AI generates the content; an existing tool handles the delivery. That's the sweet spot.
+
+---
+
+## When you *should* ask AI to build something
+
+Research-first doesn't mean never build. There are four good reasons to build instead of buy:
+
+1. **Nothing exists.** You searched, AI listed options, you checked — nothing fits. Now it makes sense to build.
+2. **Existing tools are too expensive.** The tool exists but costs $200/month and you need it for one project. AI can help you build a simpler version.
+3. **You need deep customization.** The tool exists but can't do the one thing you specifically need. A custom solution is justified.
+4. **Data sensitivity.** The tool requires uploading sensitive data to a third party. Building a local solution keeps control with you.
+
+If none of these apply, use the existing tool. It'll be more reliable, better maintained, and cheaper than anything AI builds for you in an afternoon.
+
+---
+
+## The verification habit
+
+AI is a great research assistant but a terrible fact-checker. Every tool recommendation needs one extra step: **you verify it yourself.**
+
+Here's a 30-second verification checklist:
+
+- [ ] Visit the tool's website — does it load? Does it look maintained?
+- [ ] Check the pricing page — does a free tier still exist?
+- [ ] Look for a "last updated" or "changelog" — activity in the last 6 months?
+- [ ] Search "[tool name] review 2026" — are people still using it?
+
+If it passes all four, try it. If any fail, go to the next option on your list.
+
+This matters because AI confidently recommends tools that have been [discontinued](https://killedbygoogle.com/), acquired and gutted, or changed from free to paid. The recommendation was correct *when the AI learned about it* — it just might not be correct today.
+
+---
+
+## Try this next time
+
+Next time you catch yourself typing "AI, help me build X" — pause. Replace it with:
+
+> "I need to [your need]. Before I build anything, is there an existing tool, app, or service that already does this? List the main options, then compare the top 3 on pricing, features, and limitations."
+
+Two minutes of research. Hours of building saved.
+
+---
+
+## One sentence
+
+**Before asking AI to build something, ask it if something already exists — the best tool for the job is usually the one someone else already built and tested.**
+
+Next up: you asked AI a question and got an answer, but it's too shallow. How do you dig deeper without starting over? The art of follow-up questions.
+
+*This is Part 5 of the "[Ask AI Right](/en/blog/ai-ask-right-which-ai-to-use-2026)" series. Previous: [Why AI feels useless — answer machine vs collaboration tool](/en/blog/ai-ask-right-why-ai-feels-useless).*
