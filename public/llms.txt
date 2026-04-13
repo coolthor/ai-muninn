@@ -12,11 +12,15 @@ experimentation with real hardware and production systems.
 - Name: ai-muninn
 - URL: https://ai-muninn.com
 - Language: English (primary), Traditional Chinese (zh-TW)
-- Topics: vLLM, LLM serving, AI agents, DGX Spark / GB10, openclaw
+- Topics: vLLM, LLM serving, AI agents, DGX Spark / GB10, openclaw, Claude Code, LLM education
 
 ## Article Index
 
 ### Series: DGX Spark (NVIDIA DGX Spark / GB10 Superchip experiments)
+
+- [Part 0] From Unboxing to Running: Complete Deployment Guide
+  https://ai-muninn.com/en/blog/dgx-spark-deployment-guide
+  Everything from sealed box to serving your first local LLM. Hardware check, Ollama quickstart, vLLM setup.
 
 - [Part 1] 8 Models on DGX Spark: Finding the Best Stack for AI Agents
   https://ai-muninn.com/en/blog/dgx-spark-ollama-benchmark-8-models
@@ -26,9 +30,9 @@ experimentation with real hardware and production systems.
   https://ai-muninn.com/en/blog/dgx-spark-vllm-qwen35-setup
   vLLM setup on SM121 (GB10), FP8 KV cache, max-model-len tuning.
 
-- [Part 3] Nemotron-3-Super-120B on a Single GB10: Full Day Debug Log
-  https://ai-muninn.com/en/blog/dgx-spark-nemotron-120b-vllm
-  Running 120B parameter model on single-GPU DGX Spark; NVFP4 + flashinfer.
+- [Part 3] TurboQuant on GX10: Is 3-bit KV Cache Compression Actually Lossless?
+  https://ai-muninn.com/en/blog/turboquant-kv-cache-benchmark-gx10
+  Real benchmark numbers for TurboQuant on GB10/SM121. Compression ratios, accuracy impact.
 
 - [Part 4] Why Your DGX Spark Only Says "!!!!!": Debugging NVFP4 on SM121
   https://ai-muninn.com/en/blog/part1-why-your-dgx-spark-says-exclamation-marks
@@ -46,11 +50,43 @@ experimentation with real hardware and production systems.
   https://ai-muninn.com/en/blog/dgx-spark-gemma4-26b-nvfp4-52-toks
   Benchmark: 52 tok/s decode, 16.5 GB model footprint, 82 GB free KV cache on GB10.
 
+- [Part 8] vLLM vs Ollama on the Same Model: Why 30% Faster on GB10
+  https://ai-muninn.com/en/blog/dgx-spark-vllm-vs-ollama-same-model
+  Same Gemma 4 26B-A4B, same GPU, 30% speed gap. Marlin kernels vs GGML.
+
+- [Part 9] Gemma 4 31B Dense on DGX Spark: 7 tok/s and the Bandwidth Wall
+  https://ai-muninn.com/en/blog/dgx-spark-gemma4-31b-dense-7-toks
+  31B dense model bandwidth-bound at 273 GB/s. Math predicted 4.4 tok/s, actual 7.0.
+
+- [Part 10] From 19 to 50 tok/s: We Quantized Gemma 4 E4B to NVFP4 Before Anyone Else
+  https://ai-muninn.com/en/blog/dgx-spark-gemma4-e4b-nvfp4-50-toks
+  First NVFP4 checkpoint on HuggingFace. 2.6x faster than BF16.
+
+- [Part 11] Gemma 4 E2B vs E4B: 81 tok/s vs 52 on Three Machines — Bandwidth Is Everything
+  https://ai-muninn.com/en/blog/dgx-spark-gemma4-e2b-vs-e4b-ollama-3-machines
+  E2B is 44-82% faster than E4B across M1 Max, GB10, and M4.
+
+- [Part 12] 4 Machines, 4 Models, 1 Answer: Memory Decides Everything
+  https://ai-muninn.com/en/blog/dgx-spark-gemma4-4-machines-4-models-bandwidth
+  Gemma 4 E2B through 31B on RTX 5090, M1 Max, DGX Spark, M4. E2B hits 310 tok/s on 5090.
+
+- [Part 13] Rescuing Gemma 4 31B on a 32GB MacBook Pro: From 1.5 to 12.8 tok/s
+  https://ai-muninn.com/en/blog/dgx-spark-gemma4-31b-rescue-mbp-32gb
+  Fix: reduce context window (9 tok/s) or switch to MLX (12.8 tok/s).
+
+- [Part 14] Gemma 4 Complete Guide on DGX Spark — Which Model Should You Pick?
+  https://ai-muninn.com/en/blog/dgx-spark-gemma4-complete-guide
+  E2B / E4B / 26B MoE / 31B Dense benchmarked on DGX Spark, RTX 5090, MacBook Pro.
+
+- [Part 5 / Nemotron] Nemotron-3-Super-120B on a Single GB10: Full Day Debug Log
+  https://ai-muninn.com/en/blog/dgx-spark-nemotron-120b-vllm
+  Running 120B parameter model on single-GPU DGX Spark; NVFP4 + flashinfer.
+
 ### Series: NemoClaw (NVIDIA's AI agent framework on DGX Spark)
 
 - [Part 1] NemoClaw Explained: NVIDIA's All-in-One AI Agent Framework for DGX Spark
   https://ai-muninn.com/en/blog/nemoclaw-what-it-is-why-it-exists
-  Architecture overview: OpenClaw + OpenShell + NVIDIA Agent Toolkit; what problem it solves.
+  Architecture overview: OpenClaw + OpenShell + NVIDIA Agent Toolkit.
 
 - [Part 2] NemoClaw on DGX Spark: 4 Fixes the Official Docs Don't Tell You
   https://ai-muninn.com/en/blog/nemoclaw-install-gx10-from-scratch
@@ -58,7 +94,7 @@ experimentation with real hardware and production systems.
 
 - [Part 3] NemoClaw Without the Cloud: Swapping Nemotron for a Local Ollama Model
   https://ai-muninn.com/en/blog/nemoclaw-local-inference-ollama
-  Config swap from nvidia API to local Ollama/vLLM; OpenShell policy enforcement is model-agnostic.
+  Config swap from nvidia API to local Ollama/vLLM.
 
 ### Series: OpenClaw (Local AI agent on openclaw gateway)
 
@@ -68,6 +104,10 @@ experimentation with real hardware and production systems.
 - [Part 2] Don't Add --enable-chunked-prefill to SSM Models
   https://ai-muninn.com/en/blog/openclaw-chunked-prefill-ssm-trap
   Bug: chunked-prefill breaks SSM (Mamba/DeltaNet) attention patterns.
+
+- [Part 3] Ollama's KEEP_ALIVE Is Silently Eating Your vLLM Headroom
+  https://ai-muninn.com/en/blog/openclaw-ollama-vllm-gpu-conflict
+  vLLM OOMed on restart despite 128GB. Cause: Ollama KEEP_ALIVE=2h holding 19-51GB in GPU.
 
 - [Part 4] Pure MoE vs SSM Hybrid: Context Decay and Why It Matters for Agents
   https://ai-muninn.com/en/blog/openclaw-moe-ssm-context-decay
@@ -95,7 +135,7 @@ experimentation with real hardware and production systems.
 
 - [Part 11] openclaw + ChatGPT OAuth: GPT-5.4 Without Buying API Credits
   https://ai-muninn.com/en/blog/openclaw-chatgpt-oauth-gpt54-no-api-key
-  OpenAI OAuth login (2026.3.13+) gives agent GPT-5.4 1M context via ChatGPT Plus subscription.
+  OpenAI OAuth login gives agent GPT-5.4 1M context via ChatGPT Plus subscription.
 
 ### Series: AI Workflow (Claude Code + multi-AI tooling)
 
@@ -113,11 +153,11 @@ experimentation with real hardware and production systems.
 
 - Token Burn Rate: 8 Ways to Make Your Claude Code Session Last 10x Longer
   https://ai-muninn.com/en/blog/dev-workflow-token-burn-rate
-  Where your tokens go (CLAUDE.md, MCP tools, conversation history) and how to fix it. Includes QMD and Musubi for search-based optimization.
+  Where your tokens go (CLAUDE.md, MCP tools, conversation history) and how to fix it.
 
 - [Part 5] Build a Self-Auditing Skill That Keeps Your Config Lean
   https://ai-muninn.com/en/blog/claude-code-slim-self-audit-skill
-  /slim skill: Claude audits its own CLAUDE.md, MEMORY.md, rules for token bloat. 10,500 → 4,100 tokens/turn (−61%). Five bloat patterns, QMD integration.
+  /slim skill: Claude audits its own config for token bloat. 10,500 → 4,100 tokens/turn (−61%).
 
 ### Series: gpt-oss-120B on DGX Spark
 
@@ -128,6 +168,46 @@ experimentation with real hardware and production systems.
 
 - [Part 1] Qwen3.5-122B Runs. But at 14 tok/s.
   https://ai-muninn.com/en/blog/part2-qwen-122b-14-toks-gdn-kernel-gap
+
+### Series: LLM 101 (Zero-background LLM education)
+
+- [Part 1] Ollama vs vLLM: Two Ways to Run AI on Your Own Computer
+  https://ai-muninn.com/en/blog/llm-101-ollama-vs-vllm
+  Ollama is a microwave — one command. vLLM is a professional oven — 30% faster, handles multiple users.
+
+- [Part 2] Dense, MoE, PLE, SSM — Four AI Model Architectures Explained Simply
+  https://ai-muninn.com/en/blog/llm-101-dense-moe-ple-ssm-architectures
+  Zero-jargon explainer of the four main model architectures.
+
+- [Part 3] So Many Models — Which One Should You Download?
+  https://ai-muninn.com/en/blog/llm-101-how-to-choose-a-model
+  Car-buying logic applied to model selection. Size, speed, quality trade-offs.
+
+- [Part 4] What Is Quantization? Q4, Q8, FP16 Explained
+  https://ai-muninn.com/en/blog/llm-101-what-is-quantization
+  Q4_K_M, Q8_0, FP16 decoded. How compression affects speed and quality.
+
+### Series: Ask AI Right (Non-technical AI usage guide)
+
+- [Part 1] Which AI Should You Use in 2026?
+  https://ai-muninn.com/en/blog/ai-ask-right-which-ai-to-use-2026
+  ChatGPT, Claude, Gemini — no-jargon guide to what each one does best.
+
+- [Part 2] You Opened AI — Now What Do You Say?
+  https://ai-muninn.com/en/blog/ai-ask-right-first-message
+  AI isn't Google — you're having a conversation. What to say first.
+
+- [Part 3] You Don't Know What You Need — Let AI Find It
+  https://ai-muninn.com/en/blog/ai-ask-right-find-your-needs
+  A method to discover what AI can do for you before you know what to ask.
+
+- [Part 4] Why AI Feels Useless to You — Answer Machine vs Collaboration Tool
+  https://ai-muninn.com/en/blog/ai-ask-right-why-ai-feels-useless
+  Same AI, different results. The mindset shift that makes AI useful.
+
+- [Part 5] Before You Build It, Ask: Does This Already Exist?
+  https://ai-muninn.com/en/blog/ai-ask-right-does-it-exist
+  Your first question to AI shouldn't be "help me do X" — it should be "is there something that already does X?"
 
 ## Citation Policy
 
