@@ -1,6 +1,6 @@
 ---
 title: "[DGX Spark] From Unboxing to Running: Complete Deployment Guide"
-description: "Everything you need to go from a sealed DGX Spark box to serving your first local LLM. Hardware check, Ollama quickstart, vLLM production setup, model selection, budget comparison with RTX 5090 and MacBook Pro."
+description: "Everything you need to go from a sealed DGX Spark box to serving your first local LLM. Hardware check, Ollama quickstart, vLLM production setup, model selection, and the 5 gotchas that cost hours."
 date: "2026-04-13"
 tags: ["DGX Spark", "GB10", "GX10", "vLLM", "Ollama", "deployment", "Blackwell", "SM121"]
 series: "DGX Spark"
@@ -10,14 +10,12 @@ faq:
     a: "The DGX Spark is NVIDIA's desktop AI workstation with a GB10 Grace Blackwell Superchip — 128 GB unified memory, 273 GB/s bandwidth, SM121 compute. Base price ~$3,000. The ASUS Ascent GX10 is the same hardware in an ASUS chassis at a similar price point."
   - q: "How long does it take to go from unboxing to running an LLM on DGX Spark?"
     a: "About 15 minutes with Ollama (download + one command). About 30-45 minutes with vLLM (Docker setup + model download + configuration). The hardware check takes 2 minutes."
-  - q: "Should I buy a DGX Spark or an RTX 5090 for local AI?"
-    a: "DGX Spark if you need to run 100B+ models or long context (128 GB memory). RTX 5090 if you want raw speed on models under 32 GB (1792 GB/s bandwidth, 6.6x faster than DGX Spark). Both are in the $3,000-4,000 range for a complete system."
   - q: "Should I use Ollama or vLLM on DGX Spark?"
     a: "Start with Ollama (works in 5 minutes, great for experimentation). Move to vLLM when you need prefix caching (0.12s vs 2-4s TTFT), production stability, or NVFP4 quantization. Both can coexist on the same machine — just don't run them simultaneously."
 ---
 
 <TLDRCard>
-From sealed box to serving LLMs in under an hour. Ollama for day one (5 minutes), vLLM for production (30 minutes). Budget comparison: DGX Spark ($3K) for 128 GB capacity, RTX 5090 system ($3-4K) for 6.6x bandwidth. Check power delivery before anything else — some units ship defective.
+From sealed box to serving LLMs in under an hour. Ollama for day one (5 minutes), vLLM for production (30 minutes). Check power delivery before anything else — some units ship defective.
 </TLDRCard>
 
 ## Plain-Language Version: Setting Up Your Personal AI Server
@@ -35,44 +33,6 @@ If you came here from a specific problem (overheating, slow inference, crashes),
 A new machine without a deployment guide is a box of potential energy sitting on your desk doing nothing. The gap between "it powers on" and "it's serving useful inference" is where most people's weekends disappear.
 
 This is the article I wish existed when my [ASUS Ascent GX10](https://www.asus.com/servers-workstations/mini-pc/ascent-gx10/) arrived. Not a benchmark (that's [Part 1](/en/blog/dgx-spark-ollama-benchmark-8-models)), not a deep dive into a specific model (that's [Parts 2-14](/en/blog/dgx-spark-vllm-qwen35-setup)), but the straight line from sealed box to working inference endpoint.
-
----
-
-## Should You Buy This Machine?
-
-Before deployment comes the purchase decision. Three machines in the same $3,000-4,000 budget range serve very different use cases.
-
-### Budget Comparison (as of April 2026)
-
-| | DGX Spark / GX10 | RTX 5090 System | MacBook Pro M4 Max |
-|---|---|---|---|
-| **Budget** | ~$3,000 | ~$3,000-4,000 (GPU + build) | ~$3,500-4,500 |
-| **Memory** | 128 GB unified | 32 GB GDDR7 | 36-128 GB unified |
-| **Bandwidth** | 273 GB/s | 1,792 GB/s | 400-546 GB/s |
-| **Largest Model** | 120B+ (fits in memory) | ~30B (32 GB limit) | 30-120B (depends on config) |
-| **Best Speed** | 52 tok/s (26B MoE NVFP4) | 310 tok/s (E2B Q4) | 81 tok/s (E2B Q4) |
-| **Form Factor** | Desktop, silent | Desktop, needs cooling | Laptop |
-| **Power** | 240W USB-C | 450W+ PSU | Battery / 140W |
-| **OS** | Ubuntu (preinstalled) | Windows/Linux (your choice) | macOS |
-
-### The Decision
-
-**Choose DGX Spark if:**
-- You need to run models larger than 32 GB (70B, 100B+, long context)
-- You want a silent, low-power always-on inference server
-- You value memory capacity over raw speed
-
-**Choose RTX 5090 if:**
-- Speed matters most and your models fit in 32 GB
-- You want the smartest model at comfortable speed (31B Dense at 62 tok/s — [see why](/en/blog/dgx-spark-gemma4-complete-guide))
-- You also game or do other GPU work
-
-**Choose MacBook Pro if:**
-- You need portability
-- 26B MoE at 47 tok/s is enough for your workload
-- You want the simplest setup (Ollama just works on Apple Silicon)
-
-The DGX Spark's superpower is capacity, not speed. 128 GB means models that require multi-GPU setups elsewhere run on a single quiet desktop. The tradeoff: at 273 GB/s, it will always be slower per-token than a 5090 on the same model.
 
 ---
 
@@ -306,8 +266,6 @@ Adding `--kv-cache-dtype fp8` looks like a free memory optimization. On GB10, it
 **The shortest path**: Ollama installed → `ollama run qwen3-coder-next` → inference in 5 minutes. No Docker, no flags, no config.
 
 **The production path**: vLLM with `cu130-nightly` → prefix caching drops TTFT from 2-4s to 0.12s → agent workloads become responsive.
-
-**The purchase decision**: DGX Spark is a capacity machine ($3K for 128 GB). RTX 5090 is a speed machine ($3-4K for 1792 GB/s). MacBook Pro is a portable machine ($3.5-4.5K for convenience). Pick based on your largest model, not your smallest benchmark.
 
 **The diagnostic**: one `nvidia-smi` command before anything else. If power draw shows 5W under load, stop troubleshooting software.
 
