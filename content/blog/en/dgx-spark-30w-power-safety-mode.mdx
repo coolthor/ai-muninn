@@ -1,9 +1,9 @@
 ---
-title: "[vLLM] GX10 Power Delivery: The 30W Safety Mode No Firmware Can Fix"
-description: "Some GX10 units ship with a PD controller defect that caps the whole system at 30W permanently. How to diagnose it in 30 seconds, and when to stop troubleshooting and just RMA."
+title: "[DGX Spark] Overheating, 100W Power Cap, 30W Safety Mode — Complete Diagnostic Guide"
+description: "DGX Spark power and thermal issues blew up after Carmack's criticism. This guide covers three distinct symptoms: 30W PD controller defect (needs RMA), 100W thermal throttling, and 5W driver bug (fixable). One command, 30 seconds to diagnose."
 date: "2026-04-02"
-updatedAt: "2026-04-02"
-tags: ["GX10", "GB10", "DGX Spark", "power delivery", "vLLM", "hardware"]
+updatedAt: "2026-04-13"
+tags: ["GX10", "GB10", "DGX Spark", "power delivery", "vLLM", "hardware", "overheating", "100W", "Carmack"]
 series: "DGX Spark"
 part: 6
 faq:
@@ -15,9 +15,15 @@ faq:
     a: "No. ASUS recommends a 'double flash' of PD controller firmware, but affected users report the throttling persists. NVIDIA support's conclusion is that this is a hardware defect requiring RMA. Update to BIOS v0103 (PD 0x507) to rule it out, but expect to RMA if the issue remains."
   - q: "My GX10 GPU shows 5W and 0% utilization — is it the 30W safety mode?"
     a: "Not necessarily. There is a separate software bug where outdated drivers (550.54.15 + CUDA 12.4) cause the GPU to appear stuck at 5W/0%. Upgrading to Driver 580.x + CUDA 13.0 fixes this. Check driver versions first. If the issue persists after upgrading, then it may be the hardware PD controller defect."
+  - q: "Is the DGX Spark overheating issue real? What about Carmack's 100W complaint?"
+    a: "Carmack and multiple developers reported DGX Spark capping at 100W under sustained load (less than half the 240W rating), with overheating and unexpected shutdowns. There are actually three distinct problems: (1) 30W PD controller defect (hardware, needs RMA), (2) 100W thermal throttling (normal protection but limits performance), (3) 5W driver bug (software, fixable). The nvidia-smi diagnostic in this article identifies which one you have in 30 seconds."
+  - q: "Is the DGX Spark worth buying with all these issues?"
+    a: "The power and thermal problems affect some batches, not all. Units that work properly run Gemma 4 26B MoE at 52 tok/s with 128GB unified memory fitting most models. Confirm the return policy before purchasing, and run the nvidia-smi diagnostic as soon as you receive it."
 ---
 
 A power supply problem that looks like a software problem is the worst kind. You spend a day tuning vLLM flags, switching quantization formats, reading kernel logs — and the whole time the machine was just starving for power.
+
+> **2026-04-13 update:** John Carmack [publicly criticized DGX Spark](https://www.tomshardware.com/tech-industry/semiconductors/users-question-dgx-spark-performance) for failing to meet advertised specs, overheating, and capping at 100W. The [NVIDIA developer forums](https://forums.developer.nvidia.com/c/accelerated-computing/dgx-spark-gb10/719) are now flooded with crash and shutdown reports. If you arrived here because of that news, this article helps you **distinguish three different symptoms in 30 seconds**: 30W hardware defect (needs RMA), 100W thermal throttling (environmental), and 5W driver bug (fixable).
 
 This picks up from the series so far ([Part 5](/en/blog/dgx-spark-fp8-kvcache-repetition)). This one is not about model behavior or CUDA errors. It is about the hardware beneath all of that.
 
@@ -120,6 +126,30 @@ PD  / 0x507
 ```
 
 My unit is currently on PD `0x500`. Updating is worth doing, but if you are not seeing 30W symptoms, it is not urgent. If you are in safety mode, updating PD firmware is unlikely to help — but do it before initiating RMA to rule it out.
+
+## 2026 Community Controversy: Carmack + the 100W Problem
+
+In April 2026, [John Carmack publicly criticized](https://www.tomshardware.com/tech-industry/semiconductors/users-question-dgx-spark-performance) the DGX Spark for falling far short of the advertised 1 PFLOPS sparse FP4 performance. The [NVIDIA developer forums](https://forums.developer.nvidia.com/c/accelerated-computing/dgx-spark-gb10/719) were subsequently flooded with reports of three categories of failure:
+
+| Symptom | Cause | Severity | Fixable? |
+|---------|-------|----------|----------|
+| Power capped at ~30W, 0% GPU utilization | PD controller hardware defect | Critical | No — RMA required |
+| Power capped at ~100W (less than half of 240W rating) | Insufficient cooling → thermal throttling | High | Partially — improve airflow |
+| GPU shows 5W / 0%, but dmesg is clean | Driver 550.x bug | Low | Yes — upgrade driver |
+
+**The 100W issue is distinct from the 30W issue.** 30W is a PD controller manufacturing defect (permanent). 100W is thermal throttling (environmental). If your machine's power draw plateaus around 100W under load and GPU temperature is near the limit:
+
+```bash
+nvidia-smi --query-gpu=power.draw,temperature.gpu,clocks.throttle_reasons.sw_thermal_slowdown --format=csv,noheader
+```
+
+`Active` in the thermal slowdown column confirms throttling. Mitigations:
+- Ensure intake vents are unobstructed
+- Keep ambient temperature below 25C
+- Consider an external fan aimed at the chassis underside
+- Vertical orientation improves convection vs. horizontal
+
+**Note:** NVIDIA's CES 2026 software update claims 2.5x performance improvements. If you are on an older DGX OS version, update before judging.
 
 ## What Was Gained
 

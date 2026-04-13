@@ -1,9 +1,9 @@
 ---
-title: "[vLLM] GX10 供電問題：那個 30W 安全模式，韌體救不了你"
-description: "部分 GX10 出廠就帶有 PD controller 缺陷，整台機器被永久鎖在 30W。一個指令診斷你有沒有中招，以及什麼時候應該放棄刷韌體直接申請 RMA。"
+title: "[DGX Spark] 過熱、100W 功耗上限、30W 安全模式 — 完整診斷指南"
+description: "DGX Spark 的供電和過熱問題在 Carmack 批評後引爆社群。這篇整理三種不同症狀的診斷方法：30W PD controller 缺陷（需 RMA）、100W 功耗上限（散熱降頻）、5W driver bug（可修）。一個指令 30 秒確認。"
 date: "2026-04-02"
-updatedAt: "2026-04-02"
-tags: ["GX10", "GB10", "DGX Spark", "power delivery", "vLLM", "hardware"]
+updatedAt: "2026-04-13"
+tags: ["GX10", "GB10", "DGX Spark", "power delivery", "vLLM", "hardware", "overheating", "100W", "Carmack"]
 series: "DGX Spark"
 part: 6
 faq:
@@ -15,9 +15,15 @@ faq:
     a: "不行。ASUS 建議做 PD firmware 的 double flash，但受影響的用戶回報 throttling 沒解。NVIDIA support 的結論是硬體缺陷，需要 RMA。可以先更新到 BIOS v0103（PD 0x507）排除看看，但如果問題還在就準備 RMA。"
   - q: "我的 GX10 GPU 顯示 5W 和 0% 利用率，是 30W 安全模式嗎？"
     a: "不一定。有另一個軟體 bug：舊版 driver（550.54.15 + CUDA 12.4）會讓 GPU 卡在 5W/0%。升到 Driver 580.x + CUDA 13.0 就修了。先查 driver 版本。升級後問題還在的話，才可能是硬體 PD controller 缺陷。"
+  - q: "DGX Spark 過熱怎麼辦？John Carmack 說的 100W 問題是真的嗎？"
+    a: "Carmack 和多位開發者反映 DGX Spark 在持續負載下功耗被限制在 100W（額定 240W 的不到一半），伴隨過熱和不預期關機。這可能是三種不同問題：(1) 30W PD controller 缺陷（硬體，需 RMA）、(2) 100W 散熱降頻（thermal throttling，正常保護機制但限制效能）、(3) 5W driver bug（軟體，可升級修復）。用本文的 nvidia-smi 診斷指令可以在 30 秒內區分。"
+  - q: "DGX Spark 值得買嗎？這麼多問題。"
+    a: "供電和散熱問題影響部分批次，不是全部。能正常運作的機器跑 Gemma 4 26B MoE 可達 52 tok/s、128GB 統一記憶體能放下大部分模型。買之前先確認退換貨政策，收到後第一件事跑 nvidia-smi 診斷。"
 ---
 
 一個看起來像軟體問題的硬體問題是最浪費時間的那種。你花了一天調 vLLM 的參數、換量化格式、翻 kernel log——結果機器從頭到尾就是在餓死狀態。
+
+> **2026-04-13 更新：** John Carmack [公開批評 DGX Spark](https://www.tomshardware.com/tech-industry/semiconductors/users-question-dgx-spark-performance) 效能不符預期、過熱、功耗上限問題。NVIDIA 開發者論壇湧入大量 crash 和 shutdown 報告。如果你是因為這波消息來的，這篇可以幫你在 **30 秒內區分三種不同的症狀**：30W 硬體缺陷（要 RMA）、100W 散熱降頻（正常保護但影響效能）、5W driver bug（可修）。
 
 這篇接在系列前幾篇之後（[Part 5](/zh-TW/blog/dgx-spark-fp8-kvcache-repetition)），不討論模型行為或 CUDA 錯誤，只談底層硬體。
 
@@ -120,6 +126,30 @@ PD  / 0x507
 ```
 
 我這台目前是 PD `0x500`，有空再更新。沒有 30W 症狀的話不急。如果已經在安全模式，更新 PD firmware 大概也救不了，但 RMA 之前還是做一次排除看看。
+
+## 2026 年社群爭議：Carmack 批評 + 100W 問題
+
+2026 年 4 月，[John Carmack 公開批評](https://www.tomshardware.com/tech-industry/semiconductors/users-question-dgx-spark-performance) DGX Spark 效能遠低於宣稱的 1 PFLOPS sparse FP4。[NVIDIA 開發者論壇](https://forums.developer.nvidia.com/c/accelerated-computing/dgx-spark-gb10/719)隨後湧入大量用戶反映三類問題：
+
+| 症狀 | 原因 | 嚴重度 | 能修嗎 |
+|------|------|--------|--------|
+| 功耗鎖在 ~30W，利用率 0% | PD controller 硬體缺陷 | 致命 | ❌ 需 RMA |
+| 功耗上限 ~100W（額定 240W 的不到一半） | 散熱不足 → thermal throttling | 高 | ⚠️ 改善散熱可緩解 |
+| GPU 顯示 5W / 0%，但 dmesg 正常 | Driver 550.x bug | 低 | ✅ 升級 driver |
+
+**100W 問題和 30W 問題是不同的。** 30W 是 PD controller 出廠缺陷（永久性的），100W 是 thermal throttling（環境相關的）。如果你的機器在負載下功耗穩定在 100W 左右且 GPU 溫度接近上限：
+
+```bash
+nvidia-smi --query-gpu=power.draw,temperature.gpu,clocks.throttle_reasons.sw_thermal_slowdown --format=csv,noheader
+```
+
+看到 `Active` 表示是散熱降頻。改善方法：
+- 確保進風口沒有被遮擋
+- 室溫控制在 25°C 以下
+- 考慮外接風扇對準機身底部
+- 垂直擺放比水平好（對流）
+
+**注意：** NVIDIA 官方 CES 2026 軟體更新宣稱效能提升 2.5 倍。如果你在用舊版 DGX OS，先更新再判斷。
 
 ## 這次的收穫
 
