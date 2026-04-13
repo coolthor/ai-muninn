@@ -36,16 +36,9 @@ Gemma 4 26B 在 OpenHands 上產生 **40+ 次 tool calling 錯誤**，但換到 
 **硬體：** NVIDIA DGX Spark（GB10，128 GB unified memory，SM121）
 **模型：** Gemma 4 26B-A4B NVFP4 via vLLM、Qwen 3.5 35B-A3B FP8 via vLLM
 **框架：** [OpenHands](https://github.com/All-Hands-AI/OpenHands) v0.59.0、[SWE-agent](https://github.com/SWE-agent/SWE-agent) v1.1.0
-**架構：** Agent 框架跑在另一台 Mac（OrbStack Docker），透過 Tailscale 連 GX10 vLLM
+**Agent 主機：** Mac mini M4（16 GB，OrbStack Docker），透過 Tailscale 連 GX10 vLLM
 
-```
-Mac (openclaw)                          DGX Spark (GX10)
-┌─────────────────┐                    ┌──────────────────┐
-│  OpenHands /     │ ──── API call ──── │  vLLM            │
-│  SWE-agent       │   Tailscale        │  Gemma 4 / Qwen  │
-│  Docker sandbox  │                    │  port 8000        │
-└─────────────────┘                    └──────────────────┘
-```
+**Mac mini M4（16 GB）** 跑 agent 框架 + Docker sandbox。**DGX Spark** 跑 vLLM 模型推論。透過 Tailscale 連線。
 
 ---
 
