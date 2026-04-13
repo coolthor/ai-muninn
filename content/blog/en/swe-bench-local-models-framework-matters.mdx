@@ -1,6 +1,6 @@
 ---
 title: "[AI Agent] Gemma 4 Went from 40 Errors to a 9-Step Bug Fix — by Switching One Thing"
-description: "Same model, same GX10 hardware. Gemma 4 26B couldn't complete a single task on OpenHands (40+ function calling errors), then fixed a real bug in 9 steps on SWE-agent. The difference was the action format."
+description: "A feasibility test: can open-source models run SWE-Bench locally for free? Gemma 4 26B failed on OpenHands (40+ errors) but fixed a test bug in 9 steps on SWE-agent. Same model — the action format was the difference."
 date: "2026-04-13"
 updatedAt: "2026-04-13"
 tags: ["SWE-Bench", "Gemma 4", "Qwen 3.5", "OpenHands", "SWE-agent", "vLLM", "DGX Spark", "Tool Calling", "AI Agent"]
@@ -8,7 +8,7 @@ series: "DGX Spark"
 part: 15
 faq:
   - q: "Can you run SWE-Bench with local open-source models instead of Claude or GPT?"
-    a: "Yes. We ran SWE-agent with Gemma 4 26B on a DGX Spark (GB10) via vLLM, and it successfully found and fixed a real bug in 9 steps, producing a correct patch inside SWE-agent's sandbox — completely free. However, the choice of agent framework matters enormously: the same model failed completely on OpenHands due to function calling incompatibility."
+    a: "The pipeline works. We got Gemma 4 26B to fix a test bug in 9 steps via SWE-agent on a DGX Spark — no API costs. But this was a feasibility test on a simple bug (missing colon), not a full SWE-Bench Lite run. We haven't measured resolve rates on the real 300-task benchmark yet."
   - q: "Which is better for SWE-Bench — Gemma 4 or Qwen 3.5?"
     a: "It depends on the framework. With SWE-agent (text-based actions), Gemma 4 26B solved the task in 9 steps and submitted a patch. Qwen 3.5 35B fixed the bug too but took 96 steps and never submitted. With OpenHands (function calling), Qwen 3.5 worked (1 error) while Gemma 4 produced 40+ errors. Pick the model that matches your framework's action format."
   - q: "Why does Gemma 4 fail on OpenHands but work on SWE-agent?"
@@ -20,7 +20,7 @@ faq:
 <VideoEmbed src="/videos/swe-bench-local-models-framework-matters.mp4" />
 
 <TLDRCard>
-Gemma 4 26B went from **40+ tool calling errors** on OpenHands to **solving a real bug in 9 steps** on SWE-agent — same model, same GX10 hardware. The agent framework is a bigger variable than the model itself when running SWE-Bench locally.
+**Feasibility test, not a full benchmark.** Gemma 4 26B went from 40+ tool calling errors on OpenHands to fixing a test bug in 9 steps on SWE-agent — same model, same GX10 hardware. The pipeline works; a full SWE-Bench Lite run (300 tasks) is next.
 </TLDRCard>
 
 ## Plain-Language Version: Can a desktop AI fix real bugs?
@@ -109,7 +109,7 @@ str_replace_editor view /repo/tests/missing_colon.py
 
 The framework parses the text. No OpenAI function calling involved.
 
-**Task:** Fix a real bug from [SWE-agent/test-repo#1](https://github.com/SWE-agent/test-repo/issues/1) — a missing colon in a Python function definition causing `SyntaxError`.
+**Task:** Fix a bug from [SWE-agent/test-repo#1](https://github.com/SWE-agent/test-repo/issues/1) — a missing colon in a Python function definition causing `SyntaxError`. This is SWE-agent's own test repo, not a real SWE-Bench task — deliberately simple to validate the pipeline.
 
 ### Gemma 4 26B on SWE-agent: 9 steps, patch submitted
 
