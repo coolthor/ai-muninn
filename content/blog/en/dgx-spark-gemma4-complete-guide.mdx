@@ -20,7 +20,7 @@ faq:
 <VideoEmbed src="/videos/gemma4-4-machines-4-models.mp4" />
 
 <TLDRCard>
-Complete benchmark of all four Gemma 4 variants across three machines. **26B MoE NVFP4 on DGX Spark: 52 tok/s** is the best bang for buck. 31B Dense is only 7 tok/s — skip it. MacBook Pro 32GB maxes out at 26B MoE (47 tok/s). RTX 5090 crushes everything (E2B at 310 tok/s).
+Complete benchmark of all four Gemma 4 variants across three machines. **26B MoE NVFP4 on DGX Spark: 52 tok/s** is the best bang for buck. 31B Dense is only 7 tok/s — skip it. MacBook Pro 32GB maxes out at 26B MoE (47 tok/s). RTX 5090 is the only hardware where 31B Dense is the right pick (62 tok/s — fast enough to keep full intelligence).
 </TLDRCard>
 
 ## Plain-Language Version: Four AI Models, One Table
@@ -46,12 +46,14 @@ This article puts all four variants on three machines into one table so you can 
 
 ### RTX 5090 — 32 GB GDDR7, 1792 GB/s
 
-| Model | Quant | Runtime | tok/s | Rating |
-|-------|-------|---------|-------|--------|
-| **E2B** | Q4_K_M | Ollama | **310** | ⭐⭐⭐⭐⭐ |
-| E4B | Q4_K_M | Ollama | 202 | ⭐⭐⭐⭐ |
-| 26B MoE | Q4_K_M | Ollama | 186 | ⭐⭐⭐⭐ |
-| 31B Dense | Q4_K_M | Ollama | 62 | ⭐⭐⭐ |
+Rated by capability first — speed is a threshold, not a ranking. All four models clear the usability floor (~20 tok/s) on this hardware.
+
+| Model | Quant | Runtime | tok/s | Active Params | Rating |
+|-------|-------|---------|-------|---------------|--------|
+| **31B Dense** | Q4_K_M | Ollama | 62 | 31B | ⭐⭐⭐⭐⭐ |
+| **26B MoE** | Q4_K_M | Ollama | 186 | 4B | ⭐⭐⭐⭐⭐ |
+| E4B | Q4_K_M | Ollama | 202 | 4B | ⭐⭐⭐⭐ |
+| E2B | Q4_K_M | Ollama | 310 | 2B | ⭐⭐⭐ |
 
 ### MacBook Pro M1 Max — 32 GB, 400 GB/s
 
@@ -75,7 +77,11 @@ Full deployment guide: [26B NVFP4 Complete Guide](/en/blog/dgx-spark-gemma4-26b-
 
 ### You have an RTX 5090
 
-→ Want **speed**: E2B (310 tok/s). Want **capability**: 26B MoE (186 tok/s). 31B Dense runs too (62 tok/s) but 26B MoE is faster and smarter.
+→ Default pick: **31B Dense** (62 tok/s). On 5090's 1792 GB/s bus, the Dense model that's unusable elsewhere becomes the smartest option at a perfectly comfortable speed. No reason to sacrifice intelligence when the hardware can handle it.
+
+→ Need more speed: **26B MoE** (186 tok/s) — still very capable, 3x faster. Good for high-throughput agent workloads where latency matters more than reasoning depth.
+
+→ Need raw throughput: E2B (310 tok/s) — least capable but fastest. Only pick this for edge-like workloads or batch processing where speed dominates.
 
 ### You have a MacBook Pro 32GB
 
@@ -91,7 +97,7 @@ If you want to try 31B anyway: [Rescuing 31B on 32GB MBP](/en/blog/dgx-spark-gem
 
 Dense models read **all 31B parameters** per token (62 GB at BF16). MoE activates only 4B per token (8 GB). On a 273 GB/s memory bus, that difference is the ceiling.
 
-**Unless you have an RTX 5090's 1792 GB/s** (31B Dense gets 62 tok/s there), choose MoE on any other hardware.
+**If you have an RTX 5090** (1792 GB/s), 31B Dense at 62 tok/s is the top recommendation — smart enough to justify the speed, fast enough to be comfortable. On anything else, choose MoE.
 
 Detailed math: [31B Dense Bandwidth Wall](/en/blog/dgx-spark-gemma4-31b-dense-7-toks)
 

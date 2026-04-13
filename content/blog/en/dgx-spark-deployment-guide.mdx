@@ -1,0 +1,328 @@
+---
+title: "[DGX Spark] From Unboxing to Running: Complete Deployment Guide"
+description: "Everything you need to go from a sealed DGX Spark box to serving your first local LLM. Hardware check, Ollama quickstart, vLLM production setup, model selection, budget comparison with RTX 5090 and MacBook Pro."
+date: "2026-04-13"
+tags: ["DGX Spark", "GB10", "GX10", "vLLM", "Ollama", "deployment", "Blackwell", "SM121"]
+series: "DGX Spark"
+part: 0
+faq:
+  - q: "What is the DGX Spark and how much does it cost?"
+    a: "The DGX Spark is NVIDIA's desktop AI workstation with a GB10 Grace Blackwell Superchip — 128 GB unified memory, 273 GB/s bandwidth, SM121 compute. Base price ~$3,000. The ASUS Ascent GX10 is the same hardware in an ASUS chassis at a similar price point."
+  - q: "How long does it take to go from unboxing to running an LLM on DGX Spark?"
+    a: "About 15 minutes with Ollama (download + one command). About 30-45 minutes with vLLM (Docker setup + model download + configuration). The hardware check takes 2 minutes."
+  - q: "Should I buy a DGX Spark or an RTX 5090 for local AI?"
+    a: "DGX Spark if you need to run 100B+ models or long context (128 GB memory). RTX 5090 if you want raw speed on models under 32 GB (1792 GB/s bandwidth, 6.6x faster than DGX Spark). Both are in the $3,000-4,000 range for a complete system."
+  - q: "Should I use Ollama or vLLM on DGX Spark?"
+    a: "Start with Ollama (works in 5 minutes, great for experimentation). Move to vLLM when you need prefix caching (0.12s vs 2-4s TTFT), production stability, or NVFP4 quantization. Both can coexist on the same machine — just don't run them simultaneously."
+---
+
+<TLDRCard>
+From sealed box to serving LLMs in under an hour. Ollama for day one (5 minutes), vLLM for production (30 minutes). Budget comparison: DGX Spark ($3K) for 128 GB capacity, RTX 5090 system ($3-4K) for 6.6x bandwidth. Check power delivery before anything else — some units ship defective.
+</TLDRCard>
+
+## Plain-Language Version: Setting Up Your Personal AI Server
+
+You bought a desktop computer that can run AI models locally — the same kind of models that power ChatGPT, but on your desk, with no cloud fees and no data leaving your network. The problem is that "AI workstation" documentation assumes you already know what you're doing.
+
+This guide assumes you don't. It covers everything from plugging in the power cable to choosing which AI model to run and why, with two paths: a 5-minute quickstart for experimentation, and a production setup for always-on AI agents. Every command is real, tested on this specific hardware, and includes the non-obvious traps that official docs skip.
+
+If you came here from a specific problem (overheating, slow inference, crashes), the [series index](#deep-dive-links) at the bottom points to the right article.
+
+---
+
+## Preface
+
+A new machine without a deployment guide is a box of potential energy sitting on your desk doing nothing. The gap between "it powers on" and "it's serving useful inference" is where most people's weekends disappear.
+
+This is the article I wish existed when my [ASUS Ascent GX10](https://www.asus.com/servers-workstations/mini-pc/ascent-gx10/) arrived. Not a benchmark (that's [Part 1](/en/blog/dgx-spark-ollama-benchmark-8-models)), not a deep dive into a specific model (that's [Parts 2-14](/en/blog/dgx-spark-vllm-qwen35-setup)), but the straight line from sealed box to working inference endpoint.
+
+---
+
+## Should You Buy This Machine?
+
+Before deployment comes the purchase decision. Three machines in the same $3,000-4,000 budget range serve very different use cases.
+
+### Budget Comparison (as of April 2026)
+
+| | DGX Spark / GX10 | RTX 5090 System | MacBook Pro M4 Max |
+|---|---|---|---|
+| **Budget** | ~$3,000 | ~$3,000-4,000 (GPU + build) | ~$3,500-4,500 |
+| **Memory** | 128 GB unified | 32 GB GDDR7 | 36-128 GB unified |
+| **Bandwidth** | 273 GB/s | 1,792 GB/s | 400-546 GB/s |
+| **Largest Model** | 120B+ (fits in memory) | ~30B (32 GB limit) | 30-120B (depends on config) |
+| **Best Speed** | 52 tok/s (26B MoE NVFP4) | 310 tok/s (E2B Q4) | 81 tok/s (E2B Q4) |
+| **Form Factor** | Desktop, silent | Desktop, needs cooling | Laptop |
+| **Power** | 240W USB-C | 450W+ PSU | Battery / 140W |
+| **OS** | Ubuntu (preinstalled) | Windows/Linux (your choice) | macOS |
+
+### The Decision
+
+**Choose DGX Spark if:**
+- You need to run models larger than 32 GB (70B, 100B+, long context)
+- You want a silent, low-power always-on inference server
+- You value memory capacity over raw speed
+
+**Choose RTX 5090 if:**
+- Speed matters most and your models fit in 32 GB
+- You want the smartest model at comfortable speed (31B Dense at 62 tok/s — [see why](/en/blog/dgx-spark-gemma4-complete-guide))
+- You also game or do other GPU work
+
+**Choose MacBook Pro if:**
+- You need portability
+- 26B MoE at 47 tok/s is enough for your workload
+- You want the simplest setup (Ollama just works on Apple Silicon)
+
+The DGX Spark's superpower is capacity, not speed. 128 GB means models that require multi-GPU setups elsewhere run on a single quiet desktop. The tradeoff: at 273 GB/s, it will always be slower per-token than a 5090 on the same model.
+
+---
+
+## Day 1: Hardware Check (Do This First)
+
+### Step 1: Power Delivery Verification
+
+Some DGX Spark units ship with a [defective PD controller](/en/blog/dgx-spark-30w-power-safety-mode) that silently caps power at 30W. The machine boots, runs, and looks normal — just painfully slow. Check this before anything else.
+
+Boot the machine, open a terminal, and run:
+
+```bash
+# Start any GPU workload first (a simple matrix multiply works)
+python3 -c "import torch; x = torch.randn(4096, 4096, device='cuda'); y = x @ x; print('GPU works')"
+
+# Then check power draw
+nvidia-smi --query-gpu=power.draw,utilization.gpu,clocks.sm --format=csv,noheader
+```
+
+**Healthy output:**
+```
+35.65 W, 96 %, 2522 MHz
+```
+
+**Defective unit (30W safety mode):**
+```
+4.80 W, 2 %, 2411 MHz
+```
+
+If you see the second output, stop here. This is a hardware defect requiring RMA — no amount of software configuration will fix it. See the [full diagnostic guide](/en/blog/dgx-spark-30w-power-safety-mode).
+
+### Step 2: Driver and CUDA Version
+
+```bash
+nvidia-smi
+```
+
+You need:
+- **Driver**: 580.x or later
+- **CUDA**: 13.0 or later
+
+Older drivers (550.x + CUDA 12.4) have a [separate bug](/en/blog/dgx-spark-30w-power-safety-mode) that makes the GPU appear stuck at 5W/0% utilization. This one is fixable with a driver upgrade.
+
+### Step 3: Confirm GPU Identity
+
+```bash
+nvidia-smi --query-gpu=name,compute_cap,memory.total --format=csv,noheader
+```
+
+Expected:
+```
+NVIDIA GB10, 12.1, 128 GB
+```
+
+The compute capability `12.1` is SM121 — this is not the same as SM100 (GB200) or SM89 (RTX 4090). Many CUDA kernels don't support SM121 yet. This matters when choosing software (Ollama handles it; vLLM needs `cu130-nightly`).
+
+---
+
+## Path A: Ollama (5 Minutes to First Inference)
+
+[Ollama](https://ollama.com) is the fastest path to running a model. One install, one command.
+
+### Install
+
+```bash
+curl -fsSL https://ollama.com/install.sh | sh
+```
+
+### Run Your First Model
+
+```bash
+ollama run qwen3-coder-next
+```
+
+This downloads a ~20 GB model and starts an interactive chat. First run takes a few minutes for the download; subsequent runs start in seconds.
+
+### Why Ollama First?
+
+- Works out of the box on GB10 (SM121 support built in)
+- No Docker, no configuration files, no flags
+- Good for experimenting with different models quickly
+- The `/api/chat` endpoint is OpenAI-compatible enough for most tools
+
+### Ollama Limitations (Why You'll Eventually Want vLLM)
+
+- **No prefix caching**: every request re-processes the full system prompt. TTFT is 2-4 seconds on long prompts.
+- **No NVFP4**: Ollama uses GGUF quantization (Q4_K_M, Q8_0). vLLM's NVFP4 is [30% faster on the same model](/en/blog/dgx-spark-vllm-vs-ollama-same-model).
+- **KEEP_ALIVE trap**: Ollama holds models in memory for 2 hours by default. On shared unified memory, this blocks vLLM from starting.
+
+For experimentation and quick testing, Ollama is perfect. For production agent workloads, move to vLLM.
+
+---
+
+## Path B: vLLM (Production Deployment)
+
+[vLLM](https://github.com/vllm-project/vllm) is the production serving engine. More setup, but prefix caching alone justifies the migration for always-on agents.
+
+### Prerequisites
+
+```bash
+# Install Docker if not present
+sudo apt-get update && sudo apt-get install -y docker.io nvidia-container-toolkit
+sudo systemctl restart docker
+
+# Verify GPU access in Docker
+docker run --rm --gpus all nvidia/cuda:13.0-base nvidia-smi
+```
+
+### Download a Model
+
+```bash
+pip install "huggingface_hub[cli,hf_transfer]"
+
+# Qwen3.5-35B — the workhorse for agents
+HF_HUB_ENABLE_HF_TRANSFER=1 hf download Qwen/Qwen3.5-35B-A3B-FP8 \
+  --local-dir ~/models/qwen35-35b-hf
+```
+
+`HF_HUB_ENABLE_HF_TRANSFER=1` enables the Rust-based transfer backend — meaningfully faster for multi-GB downloads.
+
+### Before Starting vLLM: Unload Ollama
+
+If Ollama is installed, it may be holding a model in the shared 128 GB memory pool. vLLM will OOM on startup if Ollama is occupying memory.
+
+```bash
+# Check what Ollama has loaded
+curl -s http://localhost:11434/api/ps
+
+# Unload everything
+curl -s -X POST http://localhost:11434/api/generate \
+  -d '{"model": "MODEL_NAME", "keep_alive": 0}'
+```
+
+### The Working Docker Command
+
+```bash
+docker run -d --name qwen35 --restart unless-stopped \
+  --gpus all --ipc host --shm-size 64gb -p 8000:8000 \
+  -v ~/models/qwen35-35b-hf:/models/qwen35 \
+  vllm/vllm-openai:cu130-nightly \
+  --model /models/qwen35 \
+  --served-model-name qwen3.5-35b \
+  --max-model-len 200000 \
+  --gpu-memory-utilization 0.90 \
+  --max-num-batched-tokens 4096 \
+  --enable-prefix-caching \
+  --reasoning-parser qwen3 \
+  --enable-auto-tool-choice \
+  --tool-call-parser qwen3_coder
+```
+
+**Critical notes:**
+- Use `cu130-nightly`, not the stable image. Stable doesn't support GB10/SM121.
+- Do NOT add `--enable-chunked-prefill` — it causes a [9x throughput regression](/en/blog/dgx-spark-vllm-qwen35-setup) on SSM+MoE models.
+- Do NOT add `--kv-cache-dtype fp8` — it causes [output repetition loops](/en/blog/dgx-spark-fp8-kvcache-repetition) on GB10.
+
+Cold start takes 2-3 minutes (model loading + torch.compile + FlashInfer autotuning). Watch the logs:
+
+```bash
+docker logs -f qwen35
+```
+
+Ready when you see `vLLM engine started`.
+
+### Verify
+
+```bash
+# Health check
+curl -s http://localhost:8000/health
+
+# Test inference
+curl -s http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "qwen3.5-35b",
+    "messages": [{"role": "user", "content": "Hello, what hardware am I running on?"}],
+    "chat_template_kwargs": {"enable_thinking": false}
+  }'
+```
+
+The `chat_template_kwargs` is required per-request for Qwen3.5 to suppress thinking mode. Cannot be set server-side.
+
+---
+
+## Which Model Should You Run?
+
+This depends on your use case and hardware. Here's the decision tree:
+
+### On DGX Spark (128 GB, 273 GB/s)
+
+| Use Case | Model | Runtime | Speed | Why |
+|----------|-------|---------|-------|-----|
+| **Agent workloads** | Qwen3.5-35B-A3B FP8 | vLLM | 47 tok/s | Best tool calling, SSM hybrid for stable long-context |
+| **Vision tasks** | Gemma 4 26B-A4B NVFP4 | vLLM | 52 tok/s | Multimodal, only 16 GB — leaves room for other models |
+| **Quick experimentation** | Any model | Ollama | varies | One command, no config |
+| **Maximum capability** | gpt-oss-120B MXFP4 | vLLM | ~40 tok/s | 120B parameters, fits in 128 GB |
+
+### Speed Floor Principle
+
+Intelligence matters more than speed — but only above a usability threshold. The floor is roughly **~15-20 tok/s** for interactive use. Below that, you're waiting long enough that the intelligence advantage evaporates into frustration.
+
+On DGX Spark, 31B Dense models hit 7 tok/s — below the floor. Choose MoE variants instead. On RTX 5090, the same 31B Dense runs at 62 tok/s — well above the floor, making it the [smartest comfortable choice](/en/blog/dgx-spark-gemma4-complete-guide).
+
+Full model comparison with all four Gemma 4 variants across three machines: [Complete Guide](/en/blog/dgx-spark-gemma4-complete-guide)
+
+---
+
+## The 5 Gotchas Nobody Warns You About
+
+These are the traps that cost hours. Each links to the full article.
+
+### 1. Power Delivery Defect
+Some units are permanently power-capped at 30W. Looks like a software problem. It's hardware. [Full diagnostic →](/en/blog/dgx-spark-30w-power-safety-mode)
+
+### 2. Unified Memory Is Shared
+Ollama and vLLM compete for the same 128 GB pool. `nvidia-smi` shows `N/A` for memory — use vLLM's `/metrics` endpoint instead. [Details →](/en/blog/dgx-spark-vllm-qwen35-setup)
+
+### 3. SM121 Is Not SM100
+The GB10's compute capability (SM121) is different from GB200 (SM100). Many CUDA kernels don't support it. This is why you need `cu130-nightly` for vLLM and why `llama.cpp` crashes on this hardware.
+
+### 4. FP8 KV Cache Causes Repetition
+Adding `--kv-cache-dtype fp8` looks like a free memory optimization. On GB10, it causes outputs to degrade into repetition loops after ~500 tokens due to missing calibration data. [Root cause →](/en/blog/dgx-spark-fp8-kvcache-repetition)
+
+### 5. Chunked Prefill Kills SSM Models
+`--enable-chunked-prefill` is a standard vLLM optimization for Transformers. On SSM+MoE hybrids (Qwen3.5, Mamba-based models), it causes a 9x throughput regression. [Analysis →](/en/blog/dgx-spark-vllm-qwen35-setup)
+
+---
+
+## What Was Gained
+
+**The shortest path**: Ollama installed → `ollama run qwen3-coder-next` → inference in 5 minutes. No Docker, no flags, no config.
+
+**The production path**: vLLM with `cu130-nightly` → prefix caching drops TTFT from 2-4s to 0.12s → agent workloads become responsive.
+
+**The purchase decision**: DGX Spark is a capacity machine ($3K for 128 GB). RTX 5090 is a speed machine ($3-4K for 1792 GB/s). MacBook Pro is a portable machine ($3.5-4.5K for convenience). Pick based on your largest model, not your smallest benchmark.
+
+**The diagnostic**: one `nvidia-smi` command before anything else. If power draw shows 5W under load, stop troubleshooting software.
+
+---
+
+## Deep Dive Links
+
+Every section above has a full article behind it:
+
+| Topic | Article |
+|-------|---------|
+| Model benchmark (8 models) | [Part 1: Finding the Best Stack](/en/blog/dgx-spark-ollama-benchmark-8-models) |
+| Ollama → vLLM migration | [Part 2: Qwen3.5 at 47 tok/s](/en/blog/dgx-spark-vllm-qwen35-setup) |
+| 120B model deployment | [Part 3: Nemotron-120B Debug Log](/en/blog/dgx-spark-nemotron-120b-vllm) |
+| FP8 KV cache bug | [Part 5: Repetition Loops](/en/blog/dgx-spark-fp8-kvcache-repetition) |
+| Power/thermal diagnostic | [Part 6: 30W Safety Mode](/en/blog/dgx-spark-30w-power-safety-mode) |
+| Gemma 4 model selection | [Part 14: Complete Guide](/en/blog/dgx-spark-gemma4-complete-guide) |
+| vLLM vs Ollama speed gap | [Part 8: Why 30% Faster](/en/blog/dgx-spark-vllm-vs-ollama-same-model) |

@@ -1,0 +1,328 @@
+---
+title: "[DGX Spark] 從開箱到跑起來：完整部署指南"
+description: "從密封箱到跑出第一個 LLM 的所有步驟。硬體檢查、Ollama 快速上手、vLLM 正式部署、模型選擇、預算比較（RTX 5090 / MacBook Pro）。"
+date: "2026-04-13"
+tags: ["DGX Spark", "GB10", "GX10", "vLLM", "Ollama", "deployment", "Blackwell", "SM121"]
+series: "DGX Spark"
+part: 0
+faq:
+  - q: "DGX Spark 是什麼？多少錢？"
+    a: "NVIDIA 的桌上型 AI 工作站，搭載 GB10 Grace Blackwell Superchip — 128 GB 統一記憶體、273 GB/s 頻寬、SM121 運算能力。基本售價約 $3,000 美金。ASUS Ascent GX10 是同晶片不同機殼，價位接近。"
+  - q: "從開箱到跑 LLM 要多久？"
+    a: "用 Ollama 大約 15 分鐘（安裝 + 一行指令）。用 vLLM 大約 30-45 分鐘（Docker 設定 + 模型下載 + 參數配置）。硬體檢查 2 分鐘。"
+  - q: "該買 DGX Spark 還是 RTX 5090？"
+    a: "DGX Spark 適合跑 100B+ 模型或長 context（128 GB 記憶體）。RTX 5090 適合 32 GB 以下模型要極速（1792 GB/s 頻寬，比 DGX Spark 快 6.6 倍）。兩者整機都在 $3,000-4,000 美金。"
+  - q: "DGX Spark 上該用 Ollama 還是 vLLM？"
+    a: "先用 Ollama（5 分鐘搞定，適合實驗）。需要 prefix caching（TTFT 從 2-4s 降到 0.12s）、production 穩定性或 NVFP4 量化時再搬到 vLLM。兩者可以裝在同一台 — 不要同時跑就好。"
+---
+
+<TLDRCard>
+從密封箱到 LLM 推論，一小時內搞定。Ollama 第一天用（5 分鐘），vLLM 正式上線用（30 分鐘）。預算比較：DGX Spark（$3K）128 GB 容量王 vs RTX 5090 整機（$3-4K）6.6 倍頻寬。收到機器第一件事：檢查供電 — 有些批次出廠就有問題。
+</TLDRCard>
+
+## 白話版：架一台自己的 AI 伺服器
+
+你買了一台可以在本地跑 AI 模型的桌上型電腦 — 跟 ChatGPT 背後用的是同類模型，但跑在你桌上、不需要雲端費用、資料不會離開你的網路。問題是「AI 工作站」的文件預設你已經知道自己在幹嘛。
+
+這篇假設你不知道。從插電源線到選哪個 AI 模型、為什麼選它，兩條路線：5 分鐘快速上手（實驗用），以及正式的 production 部署（always-on agent 用）。每個指令都是在這台硬體上實測過的，包含官方文件不會告訴你的坑。
+
+如果你是帶著特定問題來的（過熱、推論很慢、崩潰），底部的[系列索引](#深入閱讀)會指向對的文章。
+
+---
+
+## 前言
+
+新機器沒有部署指南，就是一箱放在桌上的位能，什麼都不做。從「開得了機」到「能跑有用的推論」之間，就是大部分人週末消失的地方。
+
+這是我收到 [ASUS Ascent GX10](https://www.asus.com/servers-workstations/mini-pc/ascent-gx10/) 時希望存在的文章。不是 benchmark（那是 [Part 1](/zh-TW/blog/dgx-spark-ollama-benchmark-8-models)），不是某個模型的深入分析（那是 [Part 2-14](/zh-TW/blog/dgx-spark-vllm-qwen35-setup)），而是從密封箱到能用的推論端點之間的直線。
+
+---
+
+## 該買這台嗎？
+
+部署之前先看採購決策。三台機器在同一個 $3,000-4,000 美金預算區間，但用途完全不同。
+
+### 預算比較（2026 年 4 月）
+
+| | DGX Spark / GX10 | RTX 5090 整機 | MacBook Pro M4 Max |
+|---|---|---|---|
+| **預算** | ~$3,000 | ~$3,000-4,000（顯卡 + 組裝） | ~$3,500-4,500 |
+| **記憶體** | 128 GB 統一記憶體 | 32 GB GDDR7 | 36-128 GB 統一記憶體 |
+| **頻寬** | 273 GB/s | 1,792 GB/s | 400-546 GB/s |
+| **最大模型** | 120B+（裝得下） | ~30B（32 GB 限制） | 30-120B（看配置） |
+| **最佳速度** | 52 tok/s（26B MoE NVFP4） | 310 tok/s（E2B Q4） | 81 tok/s（E2B Q4） |
+| **外型** | 桌上型，安靜 | 桌上型，需要散熱 | 筆電 |
+| **功耗** | 240W USB-C | 450W+ PSU | 電池 / 140W |
+| **系統** | Ubuntu（預裝） | Windows/Linux（自選） | macOS |
+
+### 怎麼選
+
+**選 DGX Spark：**
+- 要跑 32 GB 以上的模型（70B、100B+、長 context）
+- 要一台安靜、低功耗的 always-on 推論伺服器
+- 記憶體容量比純速度更重要
+
+**選 RTX 5090：**
+- 速度最重要，模型在 32 GB 內
+- 要在舒適的速度下跑最聰明的模型（31B Dense 62 tok/s — [看為什麼](/zh-TW/blog/dgx-spark-gemma4-complete-guide)）
+- 也要打遊戲或其他 GPU 工作
+
+**選 MacBook Pro：**
+- 要便攜
+- 26B MoE 47 tok/s 夠用
+- 要最簡單的設定（Ollama 在 Apple Silicon 上開箱即用）
+
+DGX Spark 的超能力是容量，不是速度。128 GB 代表在別的地方需要多卡才能跑的模型，在這裡一台安靜的桌機就搞定。代價：在 273 GB/s 頻寬下，跑相同模型的每 token 速度永遠不如 5090。
+
+---
+
+## Day 1：硬體檢查（第一步就做這個）
+
+### Step 1：供電驗證
+
+有些 DGX Spark 出廠就帶 [PD 控制器缺陷](/zh-TW/blog/dgx-spark-30w-power-safety-mode)，會把功率鎖在 30W。機器正常開機、正常跑，只是慢到不行。先查這個。
+
+開機，開終端機：
+
+```bash
+# 先跑任何 GPU 運算（簡單的矩陣相乘就行）
+python3 -c "import torch; x = torch.randn(4096, 4096, device='cuda'); y = x @ x; print('GPU works')"
+
+# 然後看功耗
+nvidia-smi --query-gpu=power.draw,utilization.gpu,clocks.sm --format=csv,noheader
+```
+
+**正常：**
+```
+35.65 W, 96 %, 2522 MHz
+```
+
+**有問題（30W 安全模式）：**
+```
+4.80 W, 2 %, 2411 MHz
+```
+
+如果看到第二種，停在這裡。這是硬體缺陷，要 RMA — 再怎麼改軟體都沒用。詳見[完整診斷指南](/zh-TW/blog/dgx-spark-30w-power-safety-mode)。
+
+### Step 2：驅動和 CUDA 版本
+
+```bash
+nvidia-smi
+```
+
+需要：
+- **Driver**: 580.x 或更新
+- **CUDA**: 13.0 或更新
+
+舊驅動（550.x + CUDA 12.4）有[另一個 bug](/zh-TW/blog/dgx-spark-30w-power-safety-mode)，會讓 GPU 顯示 5W/0% 利用率。這個可以升級驅動修好。
+
+### Step 3：確認 GPU 身分
+
+```bash
+nvidia-smi --query-gpu=name,compute_cap,memory.total --format=csv,noheader
+```
+
+預期：
+```
+NVIDIA GB10, 12.1, 128 GB
+```
+
+Compute capability `12.1` 就是 SM121 — 跟 SM100（GB200）和 SM89（RTX 4090）不一樣。很多 CUDA kernel 還不支援 SM121。這在選軟體時很重要（Ollama 內建支援；vLLM 要用 `cu130-nightly`）。
+
+---
+
+## 路線 A：Ollama（5 分鐘到第一次推論）
+
+[Ollama](https://ollama.com) 是最快跑起來的路。一個安裝，一行指令。
+
+### 安裝
+
+```bash
+curl -fsSL https://ollama.com/install.sh | sh
+```
+
+### 跑第一個模型
+
+```bash
+ollama run qwen3-coder-next
+```
+
+會下載一個 ~20 GB 的模型然後開互動聊天。第一次跑要等幾分鐘下載；之後幾秒就啟動。
+
+### 為什麼先 Ollama？
+
+- 在 GB10（SM121）上開箱即用
+- 不需要 Docker、設定檔、flags
+- 適合快速試不同模型
+- `/api/chat` endpoint 跟 OpenAI API 夠相容，大部分工具能用
+
+### Ollama 的限制（為什麼最終要搬到 vLLM）
+
+- **沒有 prefix caching**：每次 request 都重新處理整個 system prompt。長 prompt 的 TTFT 要 2-4 秒。
+- **沒有 NVFP4**：Ollama 用 GGUF 量化（Q4_K_M、Q8_0）。vLLM 的 NVFP4 在[同模型上快 30%](/zh-TW/blog/dgx-spark-vllm-vs-ollama-same-model)。
+- **KEEP_ALIVE 陷阱**：Ollama 預設保留模型在記憶體 2 小時。在統一記憶體上，這會擋住 vLLM 啟動。
+
+實驗和快速測試用 Ollama 完美。Production agent 工作用 vLLM。
+
+---
+
+## 路線 B：vLLM（正式部署）
+
+[vLLM](https://github.com/vllm-project/vllm) 是 production 推論引擎。設定多一點，但光 prefix caching 就足以讓 always-on agent 值得搬過來。
+
+### 前置作業
+
+```bash
+# 安裝 Docker（如果沒有）
+sudo apt-get update && sudo apt-get install -y docker.io nvidia-container-toolkit
+sudo systemctl restart docker
+
+# 驗證 Docker 能看到 GPU
+docker run --rm --gpus all nvidia/cuda:13.0-base nvidia-smi
+```
+
+### 下載模型
+
+```bash
+pip install "huggingface_hub[cli,hf_transfer]"
+
+# Qwen3.5-35B — agent 的主力馬
+HF_HUB_ENABLE_HF_TRANSFER=1 hf download Qwen/Qwen3.5-35B-A3B-FP8 \
+  --local-dir ~/models/qwen35-35b-hf
+```
+
+`HF_HUB_ENABLE_HF_TRANSFER=1` 啟用 Rust 傳輸後端 — 下載大檔案明顯更快。
+
+### 啟動 vLLM 之前：先卸載 Ollama
+
+Ollama 可能還把模型留在 128 GB 共用記憶體裡。vLLM 啟動時會 OOM。
+
+```bash
+# 看 Ollama 載了什麼
+curl -s http://localhost:11434/api/ps
+
+# 卸載
+curl -s -X POST http://localhost:11434/api/generate \
+  -d '{"model": "MODEL_NAME", "keep_alive": 0}'
+```
+
+### 能用的 Docker 指令
+
+```bash
+docker run -d --name qwen35 --restart unless-stopped \
+  --gpus all --ipc host --shm-size 64gb -p 8000:8000 \
+  -v ~/models/qwen35-35b-hf:/models/qwen35 \
+  vllm/vllm-openai:cu130-nightly \
+  --model /models/qwen35 \
+  --served-model-name qwen3.5-35b \
+  --max-model-len 200000 \
+  --gpu-memory-utilization 0.90 \
+  --max-num-batched-tokens 4096 \
+  --enable-prefix-caching \
+  --reasoning-parser qwen3 \
+  --enable-auto-tool-choice \
+  --tool-call-parser qwen3_coder
+```
+
+**關鍵注意事項：**
+- 用 `cu130-nightly`，不是 stable。Stable 不支援 GB10/SM121。
+- **不要**加 `--enable-chunked-prefill` — 在 SSM+MoE 模型上會造成 [9 倍效能衰退](/zh-TW/blog/dgx-spark-vllm-qwen35-setup)。
+- **不要**加 `--kv-cache-dtype fp8` — 在 GB10 上會造成[輸出重複迴圈](/zh-TW/blog/dgx-spark-fp8-kvcache-repetition)。
+
+冷啟動要 2-3 分鐘（模型載入 + torch.compile + FlashInfer 自動調校）。看 log：
+
+```bash
+docker logs -f qwen35
+```
+
+看到 `vLLM engine started` 就代表可以用了。
+
+### 驗證
+
+```bash
+# 健康檢查
+curl -s http://localhost:8000/health
+
+# 測試推論
+curl -s http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "qwen3.5-35b",
+    "messages": [{"role": "user", "content": "你好，我在什麼硬體上？"}],
+    "chat_template_kwargs": {"enable_thinking": false}
+  }'
+```
+
+`chat_template_kwargs` 是 Qwen3.5 必要的 per-request 設定，用來關閉 thinking mode。無法在 server 端設定。
+
+---
+
+## 該跑哪個模型？
+
+取決於用途和硬體。決策樹：
+
+### 在 DGX Spark 上（128 GB, 273 GB/s）
+
+| 用途 | 模型 | Runtime | 速度 | 為什麼 |
+|------|------|---------|------|--------|
+| **Agent 工作** | Qwen3.5-35B-A3B FP8 | vLLM | 47 tok/s | Tool calling 最強，SSM hybrid 長 context 穩定 |
+| **視覺任務** | Gemma 4 26B-A4B NVFP4 | vLLM | 52 tok/s | 多模態，只佔 16 GB — 有空間跑其他模型 |
+| **快速實驗** | 任何模型 | Ollama | 看模型 | 一行指令，不需要設定 |
+| **最大能力** | gpt-oss-120B MXFP4 | vLLM | ~40 tok/s | 120B 參數，128 GB 裝得下 |
+
+### 速度門檻原則
+
+聰明比速度重要 — 但有一個可用門檻。大約 **~15-20 tok/s** 是互動使用的底線。低於這個，再聰明也會被等待的挫折感抵消。
+
+在 DGX Spark 上，31B Dense 只有 7 tok/s — 低於門檻。選 MoE 版本。在 RTX 5090 上，同一個 31B Dense 跑 62 tok/s — 遠超門檻，讓它成為[最聰明的舒適選擇](/zh-TW/blog/dgx-spark-gemma4-complete-guide)。
+
+四個 Gemma 4 版本在三台機器上的完整比較：[全家桶指南](/zh-TW/blog/dgx-spark-gemma4-complete-guide)
+
+---
+
+## 5 個沒人預先告訴你的坑
+
+這些是會讓你浪費整天的陷阱。每個都有連結到完整文章。
+
+### 1. 供電缺陷
+有些批次的機器永久鎖在 30W。看起來像軟體問題。其實是硬體。[完整診斷 →](/zh-TW/blog/dgx-spark-30w-power-safety-mode)
+
+### 2. 統一記憶體是共用的
+Ollama 和 vLLM 搶同一個 128 GB 池子。`nvidia-smi` 顯示記憶體 `N/A` — 要用 vLLM 的 `/metrics` endpoint 查。[詳情 →](/zh-TW/blog/dgx-spark-vllm-qwen35-setup)
+
+### 3. SM121 不是 SM100
+GB10 的 compute capability（SM121）跟 GB200（SM100）不同。很多 CUDA kernel 不支援。這就是為什麼 vLLM 要用 `cu130-nightly`，也是為什麼 `llama.cpp` 在這台機器上會 crash。
+
+### 4. FP8 KV Cache 會造成重複
+加 `--kv-cache-dtype fp8` 看起來是免費的記憶體優化。在 GB10 上，會因為缺少 calibration data 導致輸出在 ~500 token 後退化成重複迴圈。[根因 →](/zh-TW/blog/dgx-spark-fp8-kvcache-repetition)
+
+### 5. Chunked Prefill 會殺掉 SSM 模型
+`--enable-chunked-prefill` 是 Transformer 模型的標準 vLLM 優化。在 SSM+MoE 混合模型（Qwen3.5、Mamba 架構）上，會造成 9 倍效能衰退。[分析 →](/zh-TW/blog/dgx-spark-vllm-qwen35-setup)
+
+---
+
+## 這次的收穫
+
+**最短路線**：安裝 Ollama → `ollama run qwen3-coder-next` → 5 分鐘內出推論。不需要 Docker、不需要 flags、不需要設定。
+
+**Production 路線**：vLLM 用 `cu130-nightly` → prefix caching 讓 TTFT 從 2-4s 降到 0.12s → agent 工作變得有反應。
+
+**採購決策**：DGX Spark 是容量機器（$3K 買 128 GB）。RTX 5090 是速度機器（$3-4K 買 1792 GB/s）。MacBook Pro 是便攜機器（$3.5-4.5K 買方便）。看你最大的模型選，不是看最小的 benchmark 選。
+
+**診斷**：所有事情之前先跑一次 `nvidia-smi`。如果負載下功耗顯示 5W，就不要再查軟體了。
+
+---
+
+## 深入閱讀
+
+上面每個段落背後都有完整文章：
+
+| 主題 | 文章 |
+|------|------|
+| 模型 benchmark（8 個模型） | [Part 1: 找最佳組合](/zh-TW/blog/dgx-spark-ollama-benchmark-8-models) |
+| Ollama → vLLM 搬家 | [Part 2: Qwen3.5 跑 47 tok/s](/zh-TW/blog/dgx-spark-vllm-qwen35-setup) |
+| 120B 模型部署 | [Part 3: Nemotron-120B 踩坑日誌](/zh-TW/blog/dgx-spark-nemotron-120b-vllm) |
+| FP8 KV cache bug | [Part 5: 重複迴圈](/zh-TW/blog/dgx-spark-fp8-kvcache-repetition) |
+| 供電/散熱診斷 | [Part 6: 30W 安全模式](/zh-TW/blog/dgx-spark-30w-power-safety-mode) |
+| Gemma 4 選型 | [Part 14: 全家桶指南](/zh-TW/blog/dgx-spark-gemma4-complete-guide) |
+| vLLM vs Ollama 速度差 | [Part 8: 為什麼快 30%](/zh-TW/blog/dgx-spark-vllm-vs-ollama-same-model) |
