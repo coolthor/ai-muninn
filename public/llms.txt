@@ -1,7 +1,7 @@
 # ai-muninn — AI Infrastructure Research Notes
 # https://ai-muninn.com
 # Author: coolthor
-# Updated: 2026-04-05
+# Updated: 2026-04-13
 
 This site contains primary research notes on LLM inference infrastructure,
 AI agent systems, and developer tooling. All content is based on hands-on
@@ -110,6 +110,14 @@ experimentation with real hardware and production systems.
 
 - [Part 4] claude-agent-sdk vs subprocess: Why Intermediate Turns Disappear
   https://ai-muninn.com/en/blog/claude-code-agent-sdk-orchestrator
+
+- Token Burn Rate: 8 Ways to Make Your Claude Code Session Last 10x Longer
+  https://ai-muninn.com/en/blog/dev-workflow-token-burn-rate
+  Where your tokens go (CLAUDE.md, MCP tools, conversation history) and how to fix it. Includes QMD and Musubi for search-based optimization.
+
+- [Part 5] Build a Self-Auditing Skill That Keeps Your Config Lean
+  https://ai-muninn.com/en/blog/claude-code-slim-self-audit-skill
+  /slim skill: Claude audits its own CLAUDE.md, MEMORY.md, rules for token bloat. 10,500 → 4,100 tokens/turn (−61%). Five bloat patterns, QMD integration.
 
 ### Series: gpt-oss-120B on DGX Spark
 
