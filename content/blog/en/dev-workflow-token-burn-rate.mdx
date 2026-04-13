@@ -193,6 +193,9 @@ Everything else — detailed style guides, architecture docs, debugging playbook
 - Use TypeScript strict mode
 - Immutable patterns only
 - Tests before implementation
+- When reading files, prefer specific line ranges over full files.
+  Never re-read a file you already read this session unless it was edited.
+  Use subagents for exploratory research.
 
 ## Architecture
 See docs/ARCHITECTURE.md for details.
@@ -201,7 +204,15 @@ See docs/ARCHITECTURE.md for details.
 See docs/CONVENTIONS.md for full guide.
 ```
 
+That one rule about file reads and subagents encodes three of the biggest token savings directly into Claude's behavior — it applies them automatically without you having to remind it every turn.
+
 Claude can always read `ARCHITECTURE.md` when it needs it. But it doesn't need to carry it on every single turn.
+
+**Pro tip: Ask Claude to audit its own CLAUDE.md.** Just say:
+
+> "Read your CLAUDE.md. Check what's outdated or unnecessary. Suggest a trimmed version under 2000 tokens."
+
+Claude will review the file, flag what's stale, and propose a leaner version. It's a 2-minute exercise that can save thousands of tokens per session going forward.
 
 ### Fix 6: Use Subagents for Exploration
 

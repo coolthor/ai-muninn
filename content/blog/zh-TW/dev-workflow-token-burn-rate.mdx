@@ -193,6 +193,9 @@ Claude Code 有兩個管理 context 的指令：
 - TypeScript strict mode
 - 不可變模式
 - 先寫測試再實作
+- When reading files, prefer specific line ranges over full files.
+  Never re-read a file you already read this session unless it was edited.
+  Use subagents for exploratory research.
 
 ## 架構
 詳見 docs/ARCHITECTURE.md
@@ -201,7 +204,15 @@ Claude Code 有兩個管理 context 的指令：
 詳見 docs/CONVENTIONS.md
 ```
 
+最後那條關於讀檔和 subagent 的規則，把三個最大的 token 節省直接寫進 Claude 的行為裡 — 不用你每次提醒，它會自動照做。
+
 Claude 需要時隨時可以讀 `ARCHITECTURE.md`。但不需要每個 turn 都帶著。
+
+**小技巧：叫 Claude 自己審查 CLAUDE.md。** 直接說：
+
+> 「讀你的 CLAUDE.md，看什麼過時或不需要的，建議一個 2000 token 以內的精簡版。」
+
+Claude 會檢查檔案、標出過時的部分、提出精簡版。2 分鐘的事，之後每個 session 都能省幾千 tokens。
 
 ### 修正 6：用 Subagent 做探索性工作
 
