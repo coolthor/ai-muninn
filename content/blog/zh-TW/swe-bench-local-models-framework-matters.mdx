@@ -1,6 +1,6 @@
 ---
-title: "[AI Agent] 在桌上型 AI 電腦跑 SWE-Bench：框架比模型更重要"
-description: "Gemma 4 26B 在 OpenHands 上 40+ 次 tool calling 失敗，換到 SWE-agent 後 9 步解完真實 bug 並 submit patch。同一個模型、同一台機器，框架是最大的變因。"
+title: "[AI Agent] Gemma 4 從 40 次失敗到 9 步修好 Bug — 只換了一個東西"
+description: "同一個模型、同一台 GX10。Gemma 4 26B 在 OpenHands 上連 hello world 都寫不出來（40+ 次 function calling 錯誤），換到 SWE-agent 後 9 步修好真實 bug。差別在 action 格式。"
 date: "2026-04-13"
 updatedAt: "2026-04-13"
 tags: ["SWE-Bench", "Gemma 4", "Qwen 3.5", "OpenHands", "SWE-agent", "vLLM", "DGX Spark", "Tool Calling", "AI Agent"]
@@ -27,7 +27,7 @@ Gemma 4 26B 在 OpenHands 上產生 **40+ 次 tool calling 錯誤**，但換到 
 
 [SWE-Bench](https://www.swebench.com/) 是測試 AI 能不能修真實軟體 bug 的標準測驗 — 它從知名開源專案拿真實的 GitHub issue，看 AI 能不能產出能用的修復 patch。排行榜上幾乎全是 Claude 和 GPT 透過雲端 API 跑的。
 
-我想知道：能不能在自己的硬體上用開源模型免費跑？我在 DGX Spark 桌上型 AI 電腦上測了 Gemma 4 26B 和 Qwen 3.5 35B，用兩個不同的 agent 框架：[OpenHands](https://github.com/All-Hands-AI/OpenHands) 和 [SWE-agent](https://github.com/SWE-agent/SWE-agent)。結果完全出乎意料 — 在一個框架上看起來「完全壞掉」的模型，換到另一個框架上就完美運作。框架比模型更重要。
+我想知道能不能完全跳過 API 帳單 — 在自己的硬體上用開源模型跑。所以在 DGX Spark 上測了 Gemma 4 26B 和 Qwen 3.5 35B，先試 [OpenHands](https://github.com/All-Hands-AI/OpenHands)，再試 [SWE-agent](https://github.com/SWE-agent/SWE-agent)。花了四個小時以為 Gemma 4 壞了，最後才發現問題出在 OpenHands 不在模型。
 
 ---
 
@@ -68,9 +68,9 @@ Missing required parameters for function 'str_replace_editor': {'path', 'command
 
 Gemma 4 呼叫了正確的 function 但參數通通漏掉。每一次都是。
 
-### 令人困惑的 curl 測試
+### 但 API 明明是通的？
 
-最讓人頭痛的地方：用 curl 直接打同樣的 11 tools + OpenHands system prompt（8,892 字），Gemma 4 的 tool calling 是**完美的**：
+這是讓我 debug 了好幾個小時的原因。同樣 11 tools + 完整 OpenHands system prompt（8,892 字）用 curl 打？完美：
 
 ```bash
 curl http://<gx10-ip>:8000/v1/chat/completions -d '{
@@ -97,9 +97,9 @@ Qwen 3.5 用 **1 個 error** 就完成了同樣的任務 — 漏了一次 `secur
 
 ---
 
-## 測試二：SWE-agent — 一切都不同了
+## 測試二：SWE-agent — 換個 action 格式，換個世界
 
-SWE-agent 的做法完全不同：**文字指令格式**。模型不需要產出結構化 JSON，而是輸出純文字：
+SWE-agent 根本不用 function calling。模型就寫純文字，框架自己解析：
 
 ```
 💭 THOUGHT
@@ -134,7 +134,7 @@ Patch 內容：
      return a/b
 ```
 
-9 步。正確修復。成功 submit。在 OpenHands 上產生 40+ error 的那個模型，在 SWE-agent 上解完了一個真實 bug 並提交了 patch。
+就是那個在 OpenHands 上連 hello world 都寫不出來、40 次 error 的同一個模型。
 
 ### Qwen 3.5 35B on SWE-agent：修好了但無法結束
 
@@ -142,25 +142,22 @@ Qwen 3.5 也找到並修好了 bug — 它正確地執行了同樣的 `str_repla
 
 ---
 
-## 真正的發現
+## 所以到底怎麼回事
 
 | | OpenHands（function calling）| SWE-agent（文字指令）|
 |---|---|---|
-| **Gemma 4 26B** | ❌ 40+ errors，從未完成 | ✅ **9 步完成，patch 已提交** |
-| **Qwen 3.5 35B** | ✅ 1 error，完成任務 | ⚠️ 修好了但 96 步不會 submit |
+| **Gemma 4 26B** | ❌ 40+ errors，從未完成 | ✅ 9 步完成，產出正確 patch |
+| **Qwen 3.5 35B** | ✅ 1 error，完成任務 | ⚠️ 修好了但跑 96 步，沒呼叫 submit |
 
-在一個框架上「不會 tool calling」的模型，換到另一個框架變成最快、最有效的 agent。
+差別在 action 格式。OpenHands 要求結構化 JSON function call，參數名稱和型別都要對。Gemma 4 在 11 個 tools 同時擠的時候就會漏參數。SWE-agent 只需要純文字 — 而 Gemma 4 寫純文字沒問題。
 
-**差別不在模型。在 action 格式。**
-
-- **Function calling**（OpenHands）：模型必須產出結構化 JSON，帶正確的參數名和型別。Gemma 4 在 11 個同時的 tool schema 壓力下會漏掉參數。這是它 function calling 實作的限制，不是推理能力的問題。
-- **文字指令**（SWE-agent）：模型輸出純文字，框架負責解析。不需要 JSON 結構。Gemma 4 完美處理這個格式 — 同樣的 coding 智慧不被 function calling 瓶頸限制。
+Gemma 4 會寫 code。它只是不會穩定地填 JSON 表格。
 
 ---
 
 ## 重要的 vLLM 設定
 
-花了好幾個小時才搞清楚的三個設定：
+這幾個設定花掉了我大半個下午：
 
 ### 1. Chat template（最容易漏）
 
@@ -199,7 +196,7 @@ Gemma 4 E2B、E4B、26B 在 Ollama 上的 tool call 全部回傳空的（已知 
 
 在 OpenHands 上 debug Gemma 4 的 tool calling。測了四種 `--tool-call-parser`、加了官方 chat template、確認 parser 程式碼包含 [PR #38847](https://github.com/vllm-project/vllm/pull/38847) 的修復、在每個層級跑 curl 測試。curl 測試全部通過 — 11 tools、8,892 字 system prompt、參數完整。問題只在 OpenHands 的多輪對話裡出現。
 
-如果一開始就用 SWE-agent 而不是 OpenHands，整個調查 20 分鐘就結束，不需要 4 小時。
+早知道一開始就用 SWE-agent。
 
 ### 可轉移的診斷方法
 
@@ -211,15 +208,13 @@ Gemma 4 E2B、E4B、26B 在 Ollama 上的 tool call 全部回傳空的（已知 
 
 如果 1-2 通過但 3 失敗，問題在框架不在模型。換框架比 debug function calling 相容性快。
 
-### 通用 pattern
+### 以後會記得的事
 
-**如果你的本地模型看起來壞掉了，先換一個 agent 框架再怪模型。** Action 格式（function calling vs 文字指令）是比模型推理能力更大的相容性變因。
+下次本地模型在某個 agent 框架上看起來壞掉，我會先換框架再 debug 模型。這次能省四個小時。
 
 ---
 
-## 重現步驟
-
-給任何想在 DGX Spark 或類似硬體上重現的人：
+## 怎麼重現
 
 1. **vLLM 跑 Gemma 4：** 用 `vllm/vllm-openai:gemma4-cu130` image（不要用 `latest` — 缺 Gemma 4 的 transformers 支援）
 2. **下載 chat template：** `curl -sL https://raw.githubusercontent.com/vllm-project/vllm/main/examples/tool_chat_template_gemma4.jinja`
