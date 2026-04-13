@@ -2,7 +2,7 @@
 title: "[LLM 101] So Many Models — Which One Should You Download?"
 description: "Gemma, Llama, Qwen, Mistral — the model list is overwhelming. This guide uses car-buying logic to help you pick the right AI model based on size, speed, and quality."
 date: "2026-04-10"
-updatedAt: "2026-04-10"
+updatedAt: "2026-04-14"
 tags: ["LLM", "Model Selection", "Ollama", "Beginner", "Gemma", "Llama", "Qwen"]
 series: "LLM 101"
 part: 3
@@ -117,6 +117,45 @@ I benchmarked different model sizes on my own machines to give you a feel:
 | MacBook Pro (32GB) | 31B (default settings) | 1.5 | Unusable |
 
 Notice the last two rows — same computer, same model, but different software settings caused an 8x speed difference. Settings matter, but that's an advanced topic ([details here](/en/blog/dgx-spark-gemma4-31b-rescue-mbp-32gb) if you're curious).
+
+### Want to estimate speed yourself? Two formulas
+
+> Thanks to reader marqd114 for suggesting this addition.
+
+AI runs models in two phases, each with a different bottleneck:
+
+- **Generating** (outputting the answer, word by word) — bottlenecked by "how fast stuff moves," i.e. memory bandwidth
+- **Reading your prompt** (processing the input) — bottlenecked by "how fast it can think," i.e. compute power
+
+What you're usually waiting for is generation, so start here:
+
+**Generation speed (decode):**
+
+> **words/sec ≈ memory bandwidth (GB/s) ÷ model size (GB)**
+
+| Hardware | Bandwidth | Running 14B Q4 (~9 GB) | Running 31B Q4 (~19 GB) |
+|----------|----------|----------------------|----------------------|
+| MacBook Pro M1 Max | 400 GB/s | ~44 words/sec | ~21 words/sec |
+| RTX 5090 | 1,792 GB/s | ~199 words/sec | ~94 words/sec |
+| DGX Spark (GB10) | 273 GB/s | ~30 words/sec | ~14 words/sec |
+
+These are theoretical ceilings — real-world speed is typically 60-80% of this. But it's already useful for comparing "roughly how fast will this model run on my machine."
+
+**Prompt processing speed (prefill):**
+
+> **words/sec ≈ compute (TFLOPS) × utilization ÷ parameters (B) × 500**
+
+This means: stronger GPU and smaller model = faster prompt reading. Utilization is typically 40-60%.
+
+| Hardware | Compute (FP16) | Utilization | Reading 14B | Reading 70B |
+|----------|---------------|-------------|------------|------------|
+| MacBook Pro M1 Max | 10.4 TFLOPS | ~50% | ~185 words/sec | ~37 words/sec |
+| RTX 5090 | 209 TFLOPS | ~50% | ~3,732 words/sec | ~746 words/sec |
+| 10× A100 | 3,120 TFLOPS | ~46% | ~51,171 words/sec | ~10,234 words/sec |
+
+Prompt processing is usually much faster than generation, so the "waiting" you feel is mostly the generation phase.
+
+**Note**: If the model is a MoE architecture (names containing A4B, A3B, etc.), it only activates a fraction of its parameters per token, so actual speed will be faster than the formula suggests. For example, [Qwen3.5-35B MoE hits 47 words/sec](/en/blog/dgx-spark-vllm-qwen35-setup) on DGX Spark because only 3B of active parameters are used per token.
 
 **Key takeaway: when choosing a model, don't just look at size — look at how fast your computer can run it. A medium model at 40 words/sec feels much better than a large model at 5 words/sec.**
 
