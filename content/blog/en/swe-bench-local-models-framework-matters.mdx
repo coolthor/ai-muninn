@@ -33,12 +33,10 @@ I wanted to know if you could skip the API bill entirely — run SWE-Bench on yo
 
 ## The Setup
 
-**Hardware:** NVIDIA DGX Spark (GB10, 128 GB unified memory, SM121)
-**Models:** Gemma 4 26B-A4B NVFP4 via vLLM, Qwen 3.5 35B-A3B FP8 via vLLM
-**Frameworks:** [OpenHands](https://github.com/All-Hands-AI/OpenHands) v0.59.0, [SWE-agent](https://github.com/SWE-agent/SWE-agent) v1.1.0
-**Agent host:** Mac mini M4 (16 GB, OrbStack Docker), connects to GX10 vLLM via Tailscale
-
-**Mac mini M4 (16 GB)** runs the agent framework + Docker sandbox. **DGX Spark** runs vLLM model inference. Connected via Tailscale.
+- **Hardware:** NVIDIA DGX Spark (GB10, 128 GB unified memory, SM121)
+- **Models:** Gemma 4 26B-A4B NVFP4, Qwen 3.5 35B-A3B FP8 — both served via vLLM
+- **Frameworks:** [OpenHands](https://github.com/All-Hands-AI/OpenHands) v0.59.0, [SWE-agent](https://github.com/SWE-agent/SWE-agent) v1.1.0
+- **Agent host:** Mac mini M4 (16 GB, OrbStack Docker) — runs the agent + sandbox, connects to GX10 vLLM via Tailscale
 
 ---
 
