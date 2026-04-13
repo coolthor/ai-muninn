@@ -1,0 +1,237 @@
+---
+title: "[AI Agent] 在桌上型 AI 電腦跑 SWE-Bench：框架比模型更重要"
+description: "Gemma 4 26B 在 OpenHands 上 40+ 次 tool calling 失敗，換到 SWE-agent 後 9 步解完真實 bug 並 submit patch。同一個模型、同一台機器，框架是最大的變因。"
+date: "2026-04-13"
+updatedAt: "2026-04-13"
+tags: ["SWE-Bench", "Gemma 4", "Qwen 3.5", "OpenHands", "SWE-agent", "vLLM", "DGX Spark", "Tool Calling", "AI Agent"]
+series: "DGX Spark"
+part: 15
+faq:
+  - q: "可以用本地開源模型跑 SWE-Bench 嗎？不用 Claude 或 GPT？"
+    a: "可以。我們用 SWE-agent + Gemma 4 26B 在 DGX Spark（GB10）上透過 vLLM 服務，成功在 9 步內找到並修復了一個真實 bug，在 SWE-agent 的 sandbox 裡產出了正確的 patch 檔 — 完全免費。但 agent 框架的選擇非常關鍵：同一個模型在 OpenHands 上因為 function calling 相容性問題完全失敗。"
+  - q: "SWE-Bench 該用 Gemma 4 還是 Qwen 3.5？"
+    a: "看框架。在 SWE-agent（文字指令格式）上，Gemma 4 26B 用 9 步解完並提交 patch。Qwen 3.5 35B 也修好了 bug 但跑了 96 步而且沒 submit。在 OpenHands（function calling 格式）上，Qwen 3.5 能用（1 個 error）但 Gemma 4 產生 40+ 個 error。選跟你框架 action 格式合的模型。"
+  - q: "為什麼 Gemma 4 在 OpenHands 上失敗但在 SWE-agent 上成功？"
+    a: "OpenHands 用 OpenAI 格式的 function calling（結構化 JSON tool calls）。Gemma 4 在 11 個同時的 tools 下 function calling 不穩定 — 會漏掉必要參數。SWE-agent 用文字格式的 action（純文字指令由框架解析），Gemma 4 處理得很好。模型的 coding 能力沒問題，壞掉的是 function calling 格式。"
+  - q: "vLLM 跑 Gemma 4 tool calling 需要什麼設定？"
+    a: "三個關鍵設定：--enable-auto-tool-choice、--tool-call-parser gemma4、以及 --chat-template tool_chat_template_gemma4.jinja（從 vLLM GitHub 下載）。Chat template 最容易漏 — 沒設的話 Gemma 4 的 tool call 會丟失參數，即使模型有正確生成。"
+---
+
+<VideoEmbed src="/videos/swe-bench-local-models-framework-matters.mp4" />
+
+<TLDRCard>
+Gemma 4 26B 在 OpenHands 上產生 **40+ 次 tool calling 錯誤**，但換到 SWE-agent 後 **9 步解完真實 bug 並成功 submit patch**。同一個模型、同一台 GX10。agent 框架是比模型更大的變因。
+</TLDRCard>
+
+## 白話版：桌上型 AI 電腦能修真正的 bug 嗎？
+
+[SWE-Bench](https://www.swebench.com/) 是測試 AI 能不能修真實軟體 bug 的標準測驗 — 它從知名開源專案拿真實的 GitHub issue，看 AI 能不能產出能用的修復 patch。排行榜上幾乎全是 Claude 和 GPT 透過雲端 API 跑的。
+
+我想知道：能不能在自己的硬體上用開源模型免費跑？我在 DGX Spark 桌上型 AI 電腦上測了 Gemma 4 26B 和 Qwen 3.5 35B，用兩個不同的 agent 框架：[OpenHands](https://github.com/All-Hands-AI/OpenHands) 和 [SWE-agent](https://github.com/SWE-agent/SWE-agent)。結果完全出乎意料 — 在一個框架上看起來「完全壞掉」的模型，換到另一個框架上就完美運作。框架比模型更重要。
+
+---
+
+## 環境
+
+**硬體：** NVIDIA DGX Spark（GB10，128 GB unified memory，SM121）
+**模型：** Gemma 4 26B-A4B NVFP4 via vLLM、Qwen 3.5 35B-A3B FP8 via vLLM
+**框架：** [OpenHands](https://github.com/All-Hands-AI/OpenHands) v0.59.0、[SWE-agent](https://github.com/SWE-agent/SWE-agent) v1.1.0
+**架構：** Agent 框架跑在另一台 Mac（OrbStack Docker），透過 Tailscale 連 GX10 vLLM
+
+```
+Mac (openclaw)                          DGX Spark (GX10)
+┌─────────────────┐                    ┌──────────────────┐
+│  OpenHands /     │ ──── API call ──── │  vLLM            │
+│  SWE-agent       │   Tailscale        │  Gemma 4 / Qwen  │
+│  Docker sandbox  │                    │  port 8000        │
+└─────────────────┘                    └──────────────────┘
+```
+
+---
+
+## 測試一：OpenHands — Function Calling 地獄
+
+OpenHands 用 [OpenAI 格式的 function calling](https://platform.openai.com/docs/guides/function-calling) — 模型收到 JSON 格式的 tool schema，必須回傳結構化的 `tool_calls` 物件。它對外暴露 11 個 tools：`execute_bash`、`str_replace_editor`、`think`、`finish`、`browser`、`execute_ipython_cell`、`task_tracker`、`fetch`、`create_pr`、`create_mr`、`create_bitbucket_pr`。
+
+**任務：**「寫一個檢查質數的 Python 函式，包含測試。」
+
+### Gemma 4 26B on OpenHands：40+ 次 error
+
+每種 parser 設定都失敗：
+
+| `--tool-call-parser` | 成功前的 error 次數 | 結果 |
+|---|---|---|
+| `pythonic` | 5 | 只出了 `task_tracker:plan` |
+| `hermes` | 4 | 同上 |
+| 無 | 7 | 同上 |
+| `gemma4` + 官方 chat template | 40+ | 從未完成任務 |
+
+Error 都是同一個 pattern：
+
+```
+Missing required parameters for function 'execute_bash': {'command', 'security_risk'}
+Missing required parameters for function 'str_replace_editor': {'path', 'command', 'security_risk'}
+```
+
+Gemma 4 呼叫了正確的 function 但參數通通漏掉。每一次都是。
+
+### 令人困惑的 curl 測試
+
+最讓人頭痛的地方：用 curl 直接打同樣的 11 tools + OpenHands system prompt（8,892 字），Gemma 4 的 tool calling 是**完美的**：
+
+```bash
+curl http://<gx10-ip>:8000/v1/chat/completions -d '{
+  "model": "gemma-4-26b",
+  "messages": [{"role": "system", "content": "<8892 字的 OpenHands prompt>"},
+               {"role": "user", "content": "Create hello.py"}],
+  "tools": [<全部 11 個 tools>]
+}'
+```
+
+回應：正確的 `str_replace_editor` 呼叫，所有參數都帶了。API 層面沒問題。框架的多輪對話不知為何把它搞壞了。
+
+### Qwen 3.5 35B on OpenHands：成功（有條件）
+
+Qwen 3.5 用 **1 個 error** 就完成了同樣的任務 — 漏了一次 `security_risk` 參數，然後自己修正了：
+
+```
+✅ 建了 prime_check.py，裡面有 is_prime() 函式
+✅ 跑了 python3 prime_check.py — 所有測試通過
+✅ 任務完成
+```
+
+**關鍵設定：** Qwen 3.5 的 `--reasoning-parser qwen3` 必須拿掉。開著的話所有 output 都被當 thinking token 消化掉，回傳內容是空的。用 `--tool-call-parser qwen3_xml`，不要加 reasoning parser。
+
+---
+
+## 測試二：SWE-agent — 一切都不同了
+
+SWE-agent 的做法完全不同：**文字指令格式**。模型不需要產出結構化 JSON，而是輸出純文字：
+
+```
+💭 THOUGHT
+我需要看一下有語法錯誤的那個檔案。
+
+🎬 ACTION
+str_replace_editor view /repo/tests/missing_colon.py
+```
+
+框架負責解析文字。完全不涉及 OpenAI function calling。
+
+**任務：** 修復 [SWE-agent/test-repo#1](https://github.com/SWE-agent/test-repo/issues/1) 的真實 bug — Python function 定義少了一個冒號，造成 `SyntaxError`。
+
+### Gemma 4 26B on SWE-agent：9 步完成，patch 已提交
+
+```
+Step 1: find . -maxdepth 2 -not -path '*/.*'     → 看 repo 結構
+Step 2: cat tests/missing_colon.py                → 讀了有 bug 的檔案
+Step 3: python3 tests/missing_colon.py            → 重現了 error
+Step 4: cat tests/missing_colon.py                → 確認問題位置
+Step 5: str_replace_editor（路徑錯）              → 自己修正路徑
+Step 6: str_replace_editor str_replace             → 修好 bug ✅
+Step 7: python3 tests/missing_colon.py            → 驗證修復 ✅
+Step 8-9: submit                                   → 提交 patch ✅
+```
+
+Patch 內容：
+
+```diff
+-def division(a: float, b: float) -> float
++def division(a: float, b: float) -> float:
+     return a/b
+```
+
+9 步。正確修復。成功 submit。在 OpenHands 上產生 40+ error 的那個模型，在 SWE-agent 上解完了一個真實 bug 並提交了 patch。
+
+### Qwen 3.5 35B on SWE-agent：修好了但無法結束
+
+Qwen 3.5 也找到並修好了 bug — 它正確地執行了同樣的 `str_replace` 修改。但它跑了 **96 步**，花大量時間做 git 歷史分析，始終沒有呼叫 `submit`。修復是正確的，模型只是不知道怎麼結束任務。
+
+---
+
+## 真正的發現
+
+| | OpenHands（function calling）| SWE-agent（文字指令）|
+|---|---|---|
+| **Gemma 4 26B** | ❌ 40+ errors，從未完成 | ✅ **9 步完成，patch 已提交** |
+| **Qwen 3.5 35B** | ✅ 1 error，完成任務 | ⚠️ 修好了但 96 步不會 submit |
+
+在一個框架上「不會 tool calling」的模型，換到另一個框架變成最快、最有效的 agent。
+
+**差別不在模型。在 action 格式。**
+
+- **Function calling**（OpenHands）：模型必須產出結構化 JSON，帶正確的參數名和型別。Gemma 4 在 11 個同時的 tool schema 壓力下會漏掉參數。這是它 function calling 實作的限制，不是推理能力的問題。
+- **文字指令**（SWE-agent）：模型輸出純文字，框架負責解析。不需要 JSON 結構。Gemma 4 完美處理這個格式 — 同樣的 coding 智慧不被 function calling 瓶頸限制。
+
+---
+
+## 重要的 vLLM 設定
+
+花了好幾個小時才搞清楚的三個設定：
+
+### 1. Chat template（最容易漏）
+
+```bash
+# 從 vLLM GitHub 下載
+curl -sL https://raw.githubusercontent.com/vllm-project/vllm/main/examples/tool_chat_template_gemma4.jinja \
+  -o tool_chat_template_gemma4.jinja
+
+# Mount 進 container
+-v /path/to/tool_chat_template_gemma4.jinja:/app/tool_chat_template_gemma4.jinja
+--chat-template /app/tool_chat_template_gemma4.jinja
+```
+
+沒設的話 Gemma 4 的 tool call 會丟失參數，即使模型有正確生成。[vLLM 官方 recipe](https://docs.vllm.ai/projects/recipes/en/latest/Google/Gemma4.html) 有寫但很容易忽略。
+
+### 2. Qwen 3.5 的 thinking mode 必須關掉
+
+```bash
+# 錯 — 所有 output 被當 thinking token 消化
+--reasoning-parser qwen3 --tool-call-parser qwen3_xml
+
+# 對 — tool calling 正常
+--tool-call-parser qwen3_xml
+# （不要加 --reasoning-parser）
+```
+
+### 3. Gemma 4 在 Ollama 上壞的
+
+Gemma 4 E2B、E4B、26B 在 Ollama 上的 tool call 全部回傳空的（已知 bug）。用 vLLM + `--tool-call-parser gemma4`。
+
+---
+
+## 收穫
+
+### 花最多時間的地方
+
+在 OpenHands 上 debug Gemma 4 的 tool calling。測了四種 `--tool-call-parser`、加了官方 chat template、確認 parser 程式碼包含 [PR #38847](https://github.com/vllm-project/vllm/pull/38847) 的修復、在每個層級跑 curl 測試。curl 測試全部通過 — 11 tools、8,892 字 system prompt、參數完整。問題只在 OpenHands 的多輪對話裡出現。
+
+如果一開始就用 SWE-agent 而不是 OpenHands，整個調查 20 分鐘就結束，不需要 4 小時。
+
+### 可轉移的診斷方法
+
+當模型「不會 tool calling」的時候，在下結論之前先在三個層級測試：
+
+1. **單一 API call**（curl + 2 tools）— 測基本格式
+2. **完整 schema**（curl + 全部 tools + system prompt）— 測規模
+3. **框架整合**（實際 agent loop）— 測多輪互動
+
+如果 1-2 通過但 3 失敗，問題在框架不在模型。換框架比 debug function calling 相容性快。
+
+### 通用 pattern
+
+**如果你的本地模型看起來壞掉了，先換一個 agent 框架再怪模型。** Action 格式（function calling vs 文字指令）是比模型推理能力更大的相容性變因。
+
+---
+
+## 重現步驟
+
+給任何想在 DGX Spark 或類似硬體上重現的人：
+
+1. **vLLM 跑 Gemma 4：** 用 `vllm/vllm-openai:gemma4-cu130` image（不要用 `latest` — 缺 Gemma 4 的 transformers 支援）
+2. **下載 chat template：** `curl -sL https://raw.githubusercontent.com/vllm-project/vllm/main/examples/tool_chat_template_gemma4.jinja`
+3. **安裝 SWE-agent：** `uv python install 3.12 && git clone SWE-agent && uv pip install -e .`
+4. **執行：** `sweagent run --agent.model.name openai/gemma-4-26b --agent.model.api_base http://<your-gx10-ip>:8000/v1 --agent.model.api_key dummy --agent.model.per_instance_cost_limit 0`
+5. **Qwen 3.5 的話：** 拿掉 `--reasoning-parser qwen3`，用 `--tool-call-parser qwen3_xml`
+
+*這是「[DGX Spark](/zh-TW/blog/dgx-spark-gemma4-26b-nvfp4-52-toks)」系列的第十五篇。*
