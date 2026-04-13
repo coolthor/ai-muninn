@@ -1,0 +1,258 @@
+---
+title: "[Claude Code] 讓 Claude 自己幫你瘦身 — 打造 /slim 設定檔健檢 Skill"
+description: "CLAUDE.md 和 MEMORY.md 會默默長大，直到每個 turn 吃掉 10K+ tokens。我做了一個 /slim skill 讓 Claude 自己診斷和修復膨脹 — 這是完整做法。"
+date: "2026-04-13"
+updatedAt: "2026-04-13"
+tags: ["Claude Code", "tokens", "context window", "skills", "CLAUDE.md", "MEMORY.md", "設定優化", "自我診斷", "QMD", "AI Workflow"]
+series: "AI Workflow"
+part: 5
+faq:
+  - q: "怎麼看 CLAUDE.md 吃了多少 token？"
+    a: "在 Claude Code 裡跑 /context。它會列出每個類別的 token 分布 — system prompt、tools、memory files、對話歷史。你的 CLAUDE.md 和 rules 檔案會出現在 'Memory files' 底下，有精確的 token 數字。"
+  - q: "CLAUDE.md 應該多大？"
+    a: "3,000 tokens 以下。CLAUDE.md 每個 turn 都會載入，所以裡面的東西是永久的每訊息稅。規則和指向其他檔案的 pointer 放 CLAUDE.md。完整的步驟教學放 SKILL.md，只在 skill 觸發時才載入。"
+  - q: "怎麼減少 MEMORY.md 的 token 用量？"
+    a: "MEMORY.md 應該是索引，不是倉庫。每一筆應該是一行、150 字元以內、指向一個獨立檔案。把 inline 的大段落搬到 memory 子檔案，原位只留一行 pointer。"
+  - q: "Claude Code 可以自己檢查設定嗎？"
+    a: "可以。你可以做一個自訂 skill（像 /slim），它會讀所有每 turn 載入的檔案、算 token 成本、找出膨脹模式（重複、inline 細節、過時內容），然後提出清理方案。Claude 在你確認後才執行。"
+---
+
+<TLDRCard>
+Claude Code 的設定檔會默默長大 — CLAUDE.md、MEMORY.md、rules 可以悄悄吃掉每個 turn 10K+ tokens。我做了一個 `/slim` skill 讓 Claude 自己檢查和修復膨脹。一個指令把我的每 turn 開銷從 ~10,500 砍到 ~4,100 tokens — 降 61%，零資訊遺失。
+</TLDRCard>
+
+<VideoEmbed src="/videos/slim-self-audit.mp4" />
+
+## 白話版：讓 AI 自己做健康檢查
+
+每次你傳訊息給 Claude Code，它不只讀你的問題。它還會載入一疊設定檔 — 你的 coding 規則、你的記憶筆記、你的工具定義。這些檔案會隨時間越長越大，因為你一直加規則、存記憶、裝工具。問題是：它們每一則訊息都載入，不管相不相關。
+
+想像你背一個背包。你一直往裡面放有用的東西 — 地圖、手電筒、急救包。最後背包 20 公斤重，但你只是走去咖啡廳。你不需要丟東西 — 你需要把大部分留在家裡，用到的時候再拿。
+
+我做了一個叫 `/slim` 的 skill，讓 Claude 自己檢查背包。它量每個每 turn 載入的檔案、標出重的、把內容搬到按需搜尋的儲存空間。結果：同樣的資訊都在，每則訊息輕 61%。
+
+---
+
+## 前言
+
+這個系列的[第一篇](/zh-TW/blog/dev-workflow-token-burn-rate)解釋了 token 花去哪、列了 8 招修法。最有用的建議：CLAUDE.md 精簡，細節搬到獨立檔案。
+
+好建議。我照做了大約兩週。然後 MEMORY.md 長到 12,000 bytes，因為我一直在裡面寫操作筆記。CLAUDE.md 重複了 SKILL.md 裡已經有的內容。背包又變重了。
+
+解法不是紀律 — 是自動化。我做了一個 skill 讓 Claude 自己做體檢。
+
+---
+
+## Part 1：問題 — 設定檔默默膨脹
+
+### 怎麼膨脹的
+
+Claude Code 每個 turn 都載入這些：
+
+| 檔案 | 裡面是什麼 | 何時載入 |
+|------|-----------|---------|
+| `CLAUDE.md` | 專案規則、coding 標準 | 每個 turn |
+| `rules/*.md` | 各種規則檔案 | 每個 turn |
+| `MEMORY.md` | 自動記憶索引 | 每個 turn |
+
+[SKILL.md 檔案](https://docs.anthropic.com/en/docs/claude-code/skills)只在 skill 觸發時才載入。這是關鍵差異 — 每 turn 的檔案很貴，按需的檔案很便宜。
+
+問題是：沒有警報。沒有東西告訴你 MEMORY.md 從 2,000 長到 12,000 bytes。沒有東西警告 CLAUDE.md 跟 SKILL.md 有重複。你只會在 context 比預期更快填滿的時候才注意到。
+
+### 我的真實數字
+
+體檢前，每個 turn 載入的：
+
+| 檔案 | Bytes | ~Tokens |
+|------|-------|---------|
+| CLAUDE.md | 11,306 | ~3,200 |
+| 7 個 rules 檔案 | 7,854 | ~2,300 |
+| MEMORY.md | 12,337 | ~3,500 |
+| **合計** | **31,497** | **~10,500** |
+
+10,500 tokens 的永久開銷。在 200K context window 上，還沒打字就花了 5%。在 1M 上只是 1% — 但每個 token 還是要[付費（Opus input $15/MTok）](https://docs.anthropic.com/en/docs/about-claude/models)。
+
+---
+
+## Part 2：診斷 — 五種膨脹模式
+
+手動審查設定檔後，我歸納出五種膨脹模式：
+
+### 模式 1：重複內容
+
+CLAUDE.md 裡有完整的 Core Loop 步驟（RETRIEVE → EXECUTE → RECORD）— 120 行的流程教學。一模一樣的內容已經在 `skills/yoshihiko-brain/SKILL.md` 裡，而那個只在 skill 觸發時才載入。
+
+**成本**：每 turn ~2,000 tokens，載入已經按需可用的內容。
+
+### 模式 2：MEMORY.md 裡的 inline 大段落
+
+MEMORY.md 應該是索引 — 一行 pointer 指向獨立檔案。我的裡面長了五大段操作細節：vLLM 啟動指令、Ollama 模型 benchmark、PAL routing 規則、gateway 重啟步驟。每段 10-30 行。
+
+**成本**：每 turn ~3,000 tokens，載入大概一週才用一次的參考資料。
+
+### 模式 3：CLAUDE.md 裡的流程教學
+
+CLAUDE.md 應該放規則（「永遠驗證 input」），不是流程（「步驟一：跑這個指令。步驟二：檢查這個檔案」）。流程屬於 SKILL.md 或按需讀取的文件。
+
+我的 Codex Code Review 段落有觸發條件、跳過條件、呼叫格式、還有一個 workflow 圖。重要 — 但不是每 turn 都重要。
+
+### 模式 4：過時內容
+
+MEMORY.md 還有一整段 llama-server on GX10 的記錄 — 一個我三月就因為 SM121 crash 而放棄的工具。那個段落每個 turn 都載入，為了一個我不會再用的東西。
+
+### 模式 5：該搜尋的內容被每 turn 載入
+
+像「怎麼重啟 openclaw gateway」或「GX10 vLLM 啟動指令是什麼」這種操作細節是參考資料。它們應該按需搜尋，不是每則訊息都帶著跑。
+
+修法：搬到 [QMD](https://github.com/tobi/qmd)（本地 markdown 搜尋引擎）索引的 memory 子檔案。Claude 需要的時候搜尋 — `qmd search "openclaw restart"` 30ms 就回傳答案，不用載入到每個 turn 的 context 裡。
+
+---
+
+## Part 3：打造 /slim Skill
+
+[Claude Code skill](https://docs.anthropic.com/en/docs/claude-code/skills) 是一個 markdown 檔案，放在 `~/.claude/skills/<name>/SKILL.md`，定義 Claude 被觸發時要跟的流程。Skill 按需載入 — 不加到每 turn 的開銷。
+
+`/slim` 的結構：
+
+### Step 1: Measure（量）
+
+讀所有每 turn 載入的檔案，算 bytes 和估計 tokens（bytes / 3.5），跟 target 比：
+
+```
+| File | Bytes | ~Tokens | Target | Status |
+|------|-------|---------|--------|--------|
+| CLAUDE.md | 11,306 | ~3,200 | <3,000 | ⚠️ OVER |
+| MEMORY.md | 12,337 | ~3,500 | <2,000 | ⚠️ OVER |
+```
+
+我定的 target：
+- **CLAUDE.md**：< 3,000 tokens（只放規則 + pointer，不放流程）
+- **MEMORY.md**：< 2,000 tokens（只是索引，每筆 < 150 字元）
+- **單一 rules/*.md**：< 500 tokens
+- **每 turn 總計**：< 8,000 tokens
+
+### Step 2: Diagnose（診斷）
+
+對每個超標的檔案，辨認是哪種膨脹模式，建議怎麼處理：
+
+```
+[MEMORY.md:94-104] INLINE DETAIL — 完整的 openclaw gateway 設定區塊
+  → 搬到 memory 子檔案，加一行 pointer
+  → 省 ~300 tokens/turn
+
+[CLAUDE.md:78-195] DUPLICATE — Core Loop 已在 yoshihiko-brain SKILL.md
+  → 從 CLAUDE.md 刪除（正本在 SKILL.md）
+  → 省 ~2,000 tokens/turn
+```
+
+### Step 3: Propose（提案）
+
+按省的 tokens 排序，提出方案給你審。Claude 沒有你的確認不會動手。
+
+### Step 4: Execute（執行）
+
+你確認後，Claude：
+1. 建 memory 子檔案（含 frontmatter）
+2. 更新 MEMORY.md pointer
+3. 索引新檔案到 QMD（`qmd update && qmd embed`）
+4. 報告前後對比
+
+整個 SKILL.md 大約 80 行。Skill 本身很輕 — 智慧在診斷模式裡，不是複雜邏輯。
+
+---
+
+## Part 4：清理結果 — 實際變了什麼
+
+### MEMORY.md：12,337 → 3,941 bytes（減 68%）
+
+五段 inline 內容變成五個 memory 子檔案：
+
+| 段落 | → 子檔案 | 搬走的 bytes |
+|------|---------|-------------|
+| openclaw Gateway 設定 | `infra_openclaw_gateway.md` | ~800 |
+| PAL MCP routing + 模型清單 | `infra_pal_routing.md` | ~3,200 |
+| yui agent 細節 | `project_yui.md` | ~600 |
+| GX10 vLLM 啟動設定 | 合併進現有的 `gx10-vllm.md` | ~2,400 |
+| llama-server 歷史（過時） | 合併進 `gx10-vllm.md` 當歷史段落 | ~800 |
+
+MEMORY.md 從 192 行混合內容變成 58 行乾淨的 pointer。
+
+### CLAUDE.md：11,306 → 2,569 bytes（減 77%）
+
+| 移除的 | 去了哪裡 | 為什麼 |
+|--------|---------|--------|
+| Core Loop（120 行） | 已在 `SKILL.md` | 重複 |
+| Query Strategy Guide | 已在 `SKILL.md` | 重複 |
+| Recording Format template | 已在 `SKILL.md` | 重複 |
+| PAL routing（完整版） | `infra_pal_routing.md` | 按需搜尋 |
+| Codex review（完整版） | 濃縮成 4 行 | 規則，不是流程 |
+| Integration Notes | 刪除 | 不影響行為 |
+
+留下的：規則（5 行）、collection map（12 列）、PAL routing 摘要（4 行）、Codex review 摘要（3 行）。
+
+### QMD 橋接
+
+子檔案不只是擺在資料夾裡 — 它們被索引為一個 QMD collection：
+
+```bash
+qmd collection add ~/.claude/projects/-Users-coolthor/memory \
+  --name claude-memory --mask "**/*.md"
+qmd embed
+```
+
+現在 Claude 可以按需搜尋自己的記憶：
+
+```bash
+qmd search "openclaw restart" -c claude-memory
+# → infra_openclaw_gateway.md (93% match, 30ms)
+```
+
+同樣的資訊。零每 turn 成本。需要的時候 30ms 找到。
+
+---
+
+## 帶走這些
+
+### 花最多時間的不是清理
+
+清理本身花了 15 分鐘。真正花時間的是**不知道膨脹存在**。我帶著 10,500 tokens 的每 turn 開銷跑了好幾週。`/context` 指令一直都在；我只是沒想過要拿設定檔的數字來審查。
+
+### 可遷移的診斷法
+
+五種膨脹模式適用於任何 Claude Code 設定：
+
+1. **Grep 找重複**：如果內容同時在 CLAUDE.md 和 SKILL.md 裡，從 CLAUDE.md 刪
+2. **數 MEMORY.md 行數**：如果有任何一筆超過一行，那是 inline 細節，應該是子檔案
+3. **檢查 CLAUDE.md 裡的流程**：步驟教學屬於 skill，不是 rules
+4. **搜 30 天前的日期**：每 turn 檔案裡的過時內容是白帶的重量
+5. **問「這需要每個 turn 都載入嗎？」**：如果答案是「偶爾」，它應該可搜尋，不是永久載入
+
+### 適用所有場景的原則
+
+區分規則和參考資料。規則短、永遠相關、改變行為（「永遠不要 mutate 物件」）。參考資料長、偶爾相關、回答問題（「怎麼重啟 gateway」）。規則放每 turn 檔案。參考資料放可搜尋的儲存空間。
+
+---
+
+## 結語
+
+```
+之前：~10,500 tokens/turn（CLAUDE.md 3,200 + rules 2,300 + MEMORY.md 3,500）
+之後：~4,100 tokens/turn （CLAUDE.md 730 + rules 2,300 + MEMORY.md 1,126）
+省了：~6,400 tokens/turn （減 61%）
+遺失：零 — 所有內容搬到可搜尋的子檔案
+```
+
+`/slim` skill 存在的意義是我不用記得要做這件事。下個月，MEMORY.md 因為新專案和新經驗又長大的時候，一個指令就能診斷和修復。
+
+如果你想自己做一個：
+
+1. 現在就跑 `/context` — 看你的 token 花在哪
+2. 建 `~/.claude/skills/slim/SKILL.md`，定義 measure → diagnose → propose → execute 步驟
+3. 設 target（我的：CLAUDE.md < 3,000、MEMORY.md < 2,000、總計 < 8,000）
+4. 每月跑一次，或 context 填得比預期快的時候跑
+
+最好的 token 優化不是寫得更少。是每 turn 載入更少，按需搜尋更多。
+
+---
+
+*同系列：[Token 燒太快？8 招讓你的 Session 撐 10 倍久](/zh-TW/blog/dev-workflow-token-burn-rate)*

@@ -1,0 +1,258 @@
+---
+title: "[Claude Code] Build a Self-Auditing Skill That Keeps Your Config Lean"
+description: "Your CLAUDE.md and MEMORY.md grow silently until they eat 10K+ tokens per turn. I built a /slim skill that lets Claude diagnose and fix its own bloat — here's how."
+date: "2026-04-13"
+updatedAt: "2026-04-13"
+tags: ["Claude Code", "tokens", "context window", "skills", "CLAUDE.md", "MEMORY.md", "config optimization", "self-audit", "QMD", "AI Workflow"]
+series: "AI Workflow"
+part: 5
+faq:
+  - q: "How do I check how many tokens my CLAUDE.md is using?"
+    a: "Run /context in Claude Code. It breaks down token usage by category — system prompt, tools, memory files, conversation history. Your CLAUDE.md and rules files appear under 'Memory files' with exact token counts."
+  - q: "What's a good target size for CLAUDE.md?"
+    a: "Under 3,000 tokens. CLAUDE.md loads every single turn, so anything in it is a permanent per-message tax. Rules and pointers belong in CLAUDE.md. Step-by-step procedures belong in SKILL.md files that load on demand."
+  - q: "How do I reduce MEMORY.md token usage?"
+    a: "MEMORY.md should be an index, not storage. Each entry should be one line under 150 characters pointing to a separate file. Move inline detail blocks to memory subfiles and replace them with one-line pointers."
+  - q: "Can Claude Code audit its own configuration?"
+    a: "Yes. You can build a custom skill (like /slim) that reads all per-turn loaded files, measures their token cost, identifies bloat patterns (duplicates, inline details, stale content), and proposes cleanup actions. Claude executes the cleanup after you confirm."
+---
+
+<TLDRCard>
+Your Claude Code config files grow silently — CLAUDE.md, MEMORY.md, and rules can quietly eat 10K+ tokens every turn. I built a `/slim` skill that lets Claude audit and fix its own bloat. One command cut my per-turn overhead from ~10,500 to ~4,100 tokens — a 61% reduction with zero information loss.
+</TLDRCard>
+
+<VideoEmbed src="/videos/slim-self-audit.mp4" />
+
+## Plain-Language Version: Self-Auditing AI Config
+
+Every time you send a message to Claude Code, it doesn't just read your question. It also loads a stack of configuration files — your coding rules, your memory notes, your tool definitions. These files grow over time as you add rules, save memories, and install tools. The problem: they load on every single message, whether relevant or not.
+
+Think of it like carrying a backpack. You keep adding useful things — a map, a flashlight, a first aid kit. Eventually the backpack weighs 20kg and you're just walking to the coffee shop. You don't need to throw anything away — you need to leave most of it at home and grab things when you actually need them.
+
+I built a skill called `/slim` that lets Claude check its own backpack. It measures every file that loads per turn, flags the heavy ones, and moves content to searchable storage that only loads on demand. The result: same information available, 61% less weight per message.
+
+---
+
+## Preface
+
+[Part 1](/en/blog/dev-workflow-token-burn-rate) of this series explained where your tokens go and listed 8 ways to fix it. The most impactful advice: keep CLAUDE.md small and move detail to separate files.
+
+Good advice. I followed it for about two weeks. Then my MEMORY.md grew to 12,000 bytes because I kept adding operational notes inline. My CLAUDE.md duplicated content that already existed in a SKILL.md file. The backpack was heavy again.
+
+The fix wasn't discipline — it was automation. I built a skill that makes Claude audit itself.
+
+---
+
+## Part 1: The Problem — Silent Config Bloat
+
+### How configs grow
+
+Claude Code loads these files on every turn:
+
+| File | What's in it | Loads when |
+|------|-------------|-----------|
+| `CLAUDE.md` | Project rules, coding standards | Every turn |
+| `rules/*.md` | Specific rule files | Every turn |
+| `MEMORY.md` | Auto-memory index | Every turn |
+
+[SKILL.md files](https://docs.anthropic.com/en/docs/claude-code/skills) only load when their skill triggers. That's the key distinction — per-turn files are expensive, on-demand files are cheap.
+
+The problem: there's no alarm. Nothing tells you that your MEMORY.md grew from 2,000 to 12,000 bytes. Nothing warns that your CLAUDE.md duplicates content from a SKILL.md. You only notice when context fills up faster than expected.
+
+### My actual numbers
+
+Before the audit, here's what loaded every turn:
+
+| File | Bytes | ~Tokens |
+|------|-------|---------|
+| CLAUDE.md | 11,306 | ~3,200 |
+| 7 rules files | 7,854 | ~2,300 |
+| MEMORY.md | 12,337 | ~3,500 |
+| **Total** | **31,497** | **~10,500** |
+
+10,500 tokens of permanent overhead. On a 200K context window, that's 5% gone before typing a single message. On 1M context, it's only 1% — but you're still paying for every token at [$15/MTok for Opus input](https://docs.anthropic.com/en/docs/about-claude/models).
+
+---
+
+## Part 2: The Diagnosis — Five Bloat Patterns
+
+After manually auditing my config files, I identified five patterns that cause bloat:
+
+### Pattern 1: Duplicate content
+
+My CLAUDE.md contained the entire Core Loop procedure (RETRIEVE → EXECUTE → RECORD) — 120 lines of step-by-step instructions. The exact same content already existed in `skills/yoshihiko-brain/SKILL.md`, which only loads when the skill triggers.
+
+**Cost:** ~2,000 tokens/turn for content that was already available on demand.
+
+### Pattern 2: Inline detail in MEMORY.md
+
+MEMORY.md is supposed to be an index — one-line pointers to separate files. Mine had grown five full sections of operational detail: vLLM launch commands, Ollama model benchmarks, PAL routing rules, gateway restart procedures. Each section was 10-30 lines.
+
+**Cost:** ~3,000 tokens/turn for reference material I needed maybe once a week.
+
+### Pattern 3: Procedures in CLAUDE.md
+
+CLAUDE.md should contain rules ("always validate input"), not procedures ("Step 1: run this command. Step 2: check this file"). Procedures belong in SKILL.md files or documentation that loads on demand.
+
+My Codex Code Review section had trigger rules, skip rules, call format, and a workflow diagram. Important — but not every-turn important.
+
+### Pattern 4: Stale content
+
+My MEMORY.md still had a full section about llama-server on GX10 — a tool I abandoned in March because it crashed on SM121. That section loaded every turn for a tool I'll never use again.
+
+### Pattern 5: Searchable content loaded per-turn
+
+Operational details like "how to restart the openclaw gateway" or "what's the GX10 vLLM launch command" are reference material. They should be searchable on demand, not carried in every message.
+
+The fix: move these to memory subfiles indexed by [QMD](https://github.com/tobi/qmd) (a local markdown search engine). Claude searches when it needs the information — `qmd search "openclaw restart"` returns the answer in 30ms without loading it into every turn's context.
+
+---
+
+## Part 3: Building the /slim Skill
+
+A [Claude Code skill](https://docs.anthropic.com/en/docs/claude-code/skills) is a markdown file in `~/.claude/skills/<name>/SKILL.md` that defines a procedure Claude follows when triggered. The skill loads on demand — it doesn't add to per-turn overhead.
+
+Here's the structure of `/slim`:
+
+### Step 1: Measure
+
+Read every per-turn file, calculate bytes and estimated tokens (bytes / 3.5), compare against targets:
+
+```
+| File | Bytes | ~Tokens | Target | Status |
+|------|-------|---------|--------|--------|
+| CLAUDE.md | 11,306 | ~3,200 | <3,000 | ⚠️ OVER |
+| MEMORY.md | 12,337 | ~3,500 | <2,000 | ⚠️ OVER |
+```
+
+Targets I settled on:
+- **CLAUDE.md**: < 3,000 tokens (rules + pointers, no procedures)
+- **MEMORY.md**: < 2,000 tokens (index only, each entry < 150 characters)
+- **Individual rules/*.md**: < 500 tokens each
+- **Total per-turn**: < 8,000 tokens
+
+### Step 2: Diagnose
+
+For each file over target, identify which bloat pattern applies and what to do:
+
+```
+[MEMORY.md:94-104] INLINE DETAIL — full openclaw gateway config block
+  → Move to memory subfile, add one-line pointer
+  → Saves ~300 tokens/turn
+
+[CLAUDE.md:78-195] DUPLICATE — Core Loop already in yoshihiko-brain SKILL.md
+  → Delete from CLAUDE.md (canonical copy in SKILL.md)
+  → Saves ~2,000 tokens/turn
+```
+
+### Step 3: Propose
+
+Rank actions by tokens saved and present for review. Claude doesn't execute anything without confirmation.
+
+### Step 4: Execute
+
+After user confirms, Claude:
+1. Creates memory subfiles with proper frontmatter
+2. Updates MEMORY.md pointers
+3. Indexes new files in QMD (`qmd update && qmd embed`)
+4. Reports before/after comparison
+
+The full SKILL.md is about 80 lines. The skill itself is lightweight — the intelligence is in the diagnostic patterns, not complex logic.
+
+---
+
+## Part 4: The Cleanup — What Actually Changed
+
+### MEMORY.md: 12,337 → 3,941 bytes (68% reduction)
+
+Five inline sections became five memory subfiles:
+
+| Section | → Subfile | Bytes moved |
+|---------|-----------|-------------|
+| openclaw Gateway config | `infra_openclaw_gateway.md` | ~800 |
+| PAL MCP routing + model inventory | `infra_pal_routing.md` | ~3,200 |
+| yui agent details | `project_yui.md` | ~600 |
+| GX10 vLLM launch config | merged into existing `gx10-vllm.md` | ~2,400 |
+| llama-server history (stale) | merged into `gx10-vllm.md` as history section | ~800 |
+
+MEMORY.md went from 192 lines of mixed content to 58 lines of clean pointers.
+
+### CLAUDE.md: 11,306 → 2,569 bytes (77% reduction)
+
+| Removed | Where it went | Why |
+|---------|--------------|-----|
+| Core Loop (120 lines) | Already in `SKILL.md` | Duplicate |
+| Query Strategy Guide | Already in `SKILL.md` | Duplicate |
+| Recording Format template | Already in `SKILL.md` | Duplicate |
+| PAL routing (full version) | `infra_pal_routing.md` | Searchable |
+| Codex review (full version) | Condensed to 4 lines | Rules, not procedures |
+| Integration Notes | Deleted | No behavioral impact |
+
+What stayed: rules (5 lines), collection map (12 rows), PAL routing summary (4 lines), Codex review summary (3 lines).
+
+### The QMD bridge
+
+The subfiles aren't just sitting in a directory — they're indexed as a QMD collection:
+
+```bash
+qmd collection add ~/.claude/projects/-Users-coolthor/memory \
+  --name claude-memory --mask "**/*.md"
+qmd embed
+```
+
+Now Claude can search its own memory on demand:
+
+```bash
+qmd search "openclaw restart" -c claude-memory
+# → infra_openclaw_gateway.md (93% match, 30ms)
+```
+
+Same information. Zero per-turn cost. Available in 30ms when needed.
+
+---
+
+## What Was Gained
+
+### What cost the most time
+
+Not the cleanup itself — that took 15 minutes. What cost time was **not knowing** the bloat existed. I'd been running with 10,500 tokens of per-turn overhead for weeks. The `/context` command existed the whole time; I just never thought to audit my config files against the numbers.
+
+### Transferable diagnostics
+
+The five bloat patterns apply to any Claude Code setup:
+
+1. **Grep for duplicates**: If content exists in both CLAUDE.md and a SKILL.md, delete it from CLAUDE.md
+2. **Count MEMORY.md lines**: If any entry is more than one line, it's inline detail that should be a subfile
+3. **Check for procedures in CLAUDE.md**: Step-by-step instructions belong in skills, not rules
+4. **Search for dates older than 30 days**: Stale content in per-turn files is dead weight
+5. **Ask "does this need to load every turn?"**: If the answer is "only sometimes," it should be searchable, not loaded
+
+### The pattern that applies everywhere
+
+The difference between rules and reference material. Rules are short, always-relevant, and change behavior ("never mutate objects"). Reference material is detailed, sometimes-relevant, and answers questions ("how to restart the gateway"). Rules belong in per-turn files. Reference material belongs in searchable storage.
+
+---
+
+## Conclusion
+
+```
+Before:  ~10,500 tokens/turn (CLAUDE.md 3,200 + rules 2,300 + MEMORY.md 3,500)
+After:   ~4,100 tokens/turn  (CLAUDE.md 730 + rules 2,300 + MEMORY.md 1,126)
+Saved:   ~6,400 tokens/turn  (61% reduction)
+Lost:    nothing — all content moved to searchable subfiles
+```
+
+The `/slim` skill exists so I don't have to remember to do this. Next month, when MEMORY.md has grown again from new projects and experiences, one command diagnoses and fixes it.
+
+If you want to build your own:
+
+1. Run `/context` right now — see where your tokens go
+2. Create `~/.claude/skills/slim/SKILL.md` with measure → diagnose → propose → execute steps
+3. Define targets (mine: < 3,000 for CLAUDE.md, < 2,000 for MEMORY.md, < 8,000 total)
+4. Run it monthly, or whenever context fills up faster than expected
+
+The best token optimization isn't about writing less. It's about loading less per turn and searching more on demand.
+
+---
+
+*Also in this series: [Token Burn Rate — 8 Ways to Make Your Session Last 10x Longer](/en/blog/dev-workflow-token-burn-rate)*
