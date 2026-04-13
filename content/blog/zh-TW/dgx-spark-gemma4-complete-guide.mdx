@@ -1,0 +1,159 @@
+---
+title: "[Benchmark] Gemma 4 全家桶 on DGX Spark — 哪個版本適合你？"
+description: "Gemma 4 E2B / E4B / 26B MoE / 31B Dense 在 DGX Spark、RTX 5090、MacBook Pro 上的完整對照表。一張表看完速度、記憶體、量化格式。附選擇建議。"
+date: "2026-04-13"
+updatedAt: "2026-04-13"
+tags: ["Gemma 4", "DGX Spark", "GB10", "benchmark", "MoE", "NVFP4", "vLLM", "Ollama"]
+series: "DGX Spark"
+part: 14
+faq:
+  - q: "Gemma 4 有幾種版本？各有什麼差別？"
+    a: "四種：E2B（2B active，手機/edge）、E4B（4B active，桌機）、26B MoE（4B active，伺服器）、31B Dense（31B active，最大但最慢）。前三個都是 MoE 或 PLE 架構，每次只激活一小部分參數；31B 是 dense，每個 token 讀全部參數。"
+  - q: "DGX Spark 上跑 Gemma 4 哪個版本最快？"
+    a: "26B-A4B MoE NVFP4，52 tok/s（vLLM）。E4B NVFP4 接近，49.9 tok/s。31B Dense 只有 7 tok/s — 不推薦。E2B 用 Ollama 53 tok/s，但能力較弱。"
+  - q: "MacBook Pro 32GB 能跑 Gemma 4 嗎？"
+    a: "可以跑到 26B MoE（47 tok/s），但 31B Dense 會因為 KV cache 超過記憶體而掉到 1.5 tok/s（swap）。降 context window 到 2048 可以救到 9 tok/s，用 oMLX 可以到 12.8 tok/s。建議用 E4B 或 26B MoE。"
+  - q: "哪種量化格式最好？"
+    a: "在 DGX Spark 上用 vLLM：NVFP4 最快（E4B 從 19 → 50 tok/s，提升 2.6 倍）。在 Mac/消費級 GPU 上用 Ollama：Q4_K_M 是唯一選項。FP8 是中間值（E4B 36 tok/s）但不值得——NVFP4 更快。"
+---
+
+<VideoEmbed src="/videos/gemma4-4-machines-4-models.mp4" />
+
+<TLDRCard>
+Gemma 4 家族四種版本在三台機器上的完整測試。**26B MoE NVFP4 在 DGX Spark 上 52 tok/s** 是最佳性價比。31B Dense 只有 7 tok/s — 別浪費時間。MacBook Pro 32GB 最高跑到 26B MoE（47 tok/s）。RTX 5090 全部碾壓（E2B 310 tok/s）。
+</TLDRCard>
+
+## 白話版：Google 的 AI 模型有四種大小，你該選哪個？
+
+[Gemma 4](https://blog.google/technology/developers/gemma-4/) 是 Google 在 2026 年推出的開源 AI 模型，像一個家族有四個成員：最小的 E2B 能在手機上跑，最大的 31B 需要工作站。問題是：文件沒告訴你每個版本在你的硬體上實際跑多快。
+
+這篇把四個版本在三種硬體上的實測數據放在一張表裡，讓你不用讀六篇文章就能做決定。
+
+---
+
+## 終極對照表
+
+### DGX Spark (GB10) — 128 GB, 273 GB/s
+
+| 模型 | 類型 | Active 參數 | 量化 | Runtime | tok/s | 模型佔用 | 推薦度 |
+|------|------|------------|------|---------|-------|---------|--------|
+| **26B-A4B** | MoE | 4B | NVFP4 | vLLM | **52** | 16.5 GB | ⭐⭐⭐⭐⭐ |
+| **E4B** | PLE | 4B | NVFP4 | vLLM | **50** | 9.8 GB | ⭐⭐⭐⭐ |
+| E4B | PLE | 4B | FP8 | vLLM | 36 | ~14 GB | ⭐⭐⭐ |
+| E2B | PLE | 2B | Q4_K_M | Ollama | 53 | 7.2 GB | ⭐⭐⭐ |
+| E4B | PLE | 4B | BF16 | vLLM | 19 | ~18 GB | ⭐⭐ |
+| 31B Dense | Dense | 31B | NVFP4 | vLLM | **7** | 31 GB | ❌ |
+
+### RTX 5090 — 32 GB GDDR7, 1792 GB/s
+
+| 模型 | 量化 | Runtime | tok/s | 推薦度 |
+|------|------|---------|-------|--------|
+| **E2B** | Q4_K_M | Ollama | **310** | ⭐⭐⭐⭐⭐ |
+| E4B | Q4_K_M | Ollama | 202 | ⭐⭐⭐⭐ |
+| 26B MoE | Q4_K_M | Ollama | 186 | ⭐⭐⭐⭐ |
+| 31B Dense | Q4_K_M | Ollama | 62 | ⭐⭐⭐ |
+
+### MacBook Pro M1 Max — 32 GB, 400 GB/s
+
+| 模型 | 量化 | Runtime | tok/s | 備註 |
+|------|------|---------|-------|------|
+| E2B | Q4_K_M | Ollama | **81** | 最速 |
+| 26B MoE | Q4_K_M | Ollama | 47 | 最大可用 |
+| 31B Dense | Q4_K_M | oMLX | 12.8 | 需要 oMLX |
+| 31B Dense | Q4_K_M | Ollama (ctx=2048) | 9 | 要砍 context |
+| 31B Dense | Q4_K_M | Ollama (預設) | **1.5** | ❌ swap 地獄 |
+
+---
+
+## 怎麼選？
+
+### 你有 DGX Spark
+
+→ **26B-A4B NVFP4 + vLLM**。52 tok/s，模型只佔 16 GB，剩 82 GB 給 KV cache。能力最強 + 速度最快的組合。
+
+詳細部署：[26B NVFP4 完整指南](/zh-TW/blog/dgx-spark-gemma4-26b-nvfp4-52-toks)
+
+### 你有 RTX 5090
+
+→ 要**速度**：E2B（310 tok/s）。要**能力**：26B MoE（186 tok/s）。31B Dense 也能跑（62 tok/s），但 26B MoE 更快且更聰明。
+
+### 你有 MacBook Pro 32GB
+
+→ **26B MoE**（47 tok/s）是最大可用的版本。31B Dense **不要用 Ollama 預設** — 會掉到 1.5 tok/s。
+
+想試 31B 的話：[拯救 31B on 32GB MBP](/zh-TW/blog/dgx-spark-gemma4-31b-rescue-mbp-32gb)
+
+### 你在評估買什麼硬體
+
+| 你的需求 | 推薦硬體 | 理由 |
+|---------|---------|------|
+| 極速 + 消費級 | RTX 5090 | 1792 GB/s 頻寬碾壓一切 |
+| 大模型 + 長 context | DGX Spark | 128 GB 記憶體，26B MoE 不用量化也裝得下 |
+| 便攜 + 日常使用 | MacBook Pro | E2B/E4B 隨開即跑，26B MoE 也 OK |
+
+---
+
+## 一張圖：速度 vs 記憶體頻寬
+
+記憶體頻寬是決定 decode 速度的唯一因素（在 batch=1 的情況下）：
+
+| 硬體 | 頻寬 | 26B MoE tok/s | 倍數 |
+|------|------|---------------|------|
+| RTX 5090 | 1792 GB/s | 186 | 5.0x |
+| MBP M1 Max | 400 GB/s | 47 | 1.3x |
+| DGX Spark | 273 GB/s | 37 | 1.0x |
+
+DGX Spark 的**容量**優勢（128 GB）在大模型上發揮，但純**速度**不如 RTX 5090 和 MBP（頻寬更低）。
+
+詳細分析：[4 台機器、4 個模型、1 個答案](/zh-TW/blog/dgx-spark-gemma4-4-machines-4-models-bandwidth)
+
+---
+
+## 為什麼 Dense 不能選？
+
+31B Dense 在 GB10 上只有 7 tok/s。26B MoE 有 52 tok/s。同樣的硬體，7.5 倍差距。
+
+原因很簡單：Dense 模型每個 token 要讀完**全部 31B 參數**（62 GB @ BF16）。MoE 每次只激活 4B（8 GB）。在 273 GB/s 的匯流排上，這就是速度的天花板。
+
+**除非你有 RTX 5090 的 1792 GB/s**（31B Dense 也有 62 tok/s），否則在任何其他硬體上都應該選 MoE。
+
+詳細數學：[31B Dense 的頻寬之牆](/zh-TW/blog/dgx-spark-gemma4-31b-dense-7-toks)
+
+---
+
+## 量化格式怎麼選
+
+| 格式 | 適用 | 說明 |
+|------|------|------|
+| **NVFP4** | DGX Spark + vLLM | 最快。E4B 提升 2.6x，26B 提升顯著。但需要 vLLM + `--moe-backend marlin` |
+| FP8 | DGX Spark + vLLM | 中間值。比 BF16 快但不如 NVFP4 |
+| Q4_K_M | 任何 + Ollama | 通用格式。Mac/RTX/DGX 都能跑。速度合理 |
+| BF16 | 足夠大的 VRAM | 無損品質但最慢。只在 VRAM 充裕時考慮 |
+
+E4B NVFP4 的完整量化過程：[全球首個 E4B NVFP4 量化](/zh-TW/blog/dgx-spark-gemma4-e4b-nvfp4-50-toks)
+
+---
+
+## 這次的收穫
+
+**最浪費時間的地方：** 沒有統一比較表，每次要查數據都要翻個別文章。這篇就是為了解決這個問題。
+
+**可以複用的診斷思路：** 選模型的決策樹永遠是：記憶體裝得下嗎 → 頻寬夠嗎 → MoE 有對應大小嗎 → 有 NVFP4 checkpoint 嗎。
+
+**一句話結論：** 在頻寬受限的硬體上，永遠選 MoE 而不是 Dense。參數總量不重要，active 參數才決定速度。
+
+---
+
+## 深入閱讀
+
+每個數據點背後都有一篇完整的踩坑紀錄：
+
+| 主題 | 文章 |
+|------|------|
+| 26B NVFP4 部署 + 52 tok/s | [完整指南](/zh-TW/blog/dgx-spark-gemma4-26b-nvfp4-52-toks) |
+| 31B Dense 為什麼這麼慢 | [頻寬之牆](/zh-TW/blog/dgx-spark-gemma4-31b-dense-7-toks) |
+| 31B on 32GB MacBook Pro | [從 1.5 到 12.8 tok/s](/zh-TW/blog/dgx-spark-gemma4-31b-rescue-mbp-32gb) |
+| 4 台機器完整對照 | [記憶體決定一切](/zh-TW/blog/dgx-spark-gemma4-4-machines-4-models-bandwidth) |
+| E2B vs E4B 三機實測 | [頻寬 = 速度](/zh-TW/blog/dgx-spark-gemma4-e2b-vs-e4b-ollama-3-machines) |
+| E4B NVFP4 量化實作 | [從 19 到 50 tok/s](/zh-TW/blog/dgx-spark-gemma4-e4b-nvfp4-50-toks) |
+| DGX Spark 供電診斷 | [30W / 100W / 過熱完整指南](/zh-TW/blog/dgx-spark-30w-power-safety-mode) |

@@ -1,0 +1,135 @@
+---
+title: "[Benchmark] Gemma 4 Complete Guide on DGX Spark — Which Model Should You Pick?"
+description: "Gemma 4 E2B / E4B / 26B MoE / 31B Dense benchmarked on DGX Spark, RTX 5090, and MacBook Pro. One table with speed, memory, quantization format. Selection guide included."
+date: "2026-04-13"
+updatedAt: "2026-04-13"
+tags: ["Gemma 4", "DGX Spark", "GB10", "benchmark", "MoE", "NVFP4", "vLLM", "Ollama"]
+series: "DGX Spark"
+part: 14
+faq:
+  - q: "How many Gemma 4 variants are there and what is the difference?"
+    a: "Four: E2B (2B active, phone/edge), E4B (4B active, desktop), 26B MoE (4B active, server), 31B Dense (31B active, largest but slowest). The first three use MoE or PLE architecture activating only a fraction of parameters per token. 31B is dense — reads all parameters every token."
+  - q: "Which Gemma 4 variant runs fastest on DGX Spark?"
+    a: "26B-A4B MoE NVFP4, 52 tok/s (vLLM). E4B NVFP4 is close at 49.9 tok/s. 31B Dense is only 7 tok/s — not recommended. E2B on Ollama gets 53 tok/s but has weaker capabilities."
+  - q: "Can a MacBook Pro 32GB run Gemma 4?"
+    a: "Up to 26B MoE (47 tok/s). 31B Dense will drop to 1.5 tok/s because KV cache exceeds memory and triggers swap. Reducing context window to 2048 gets 9 tok/s, oMLX gets 12.8 tok/s. Recommend E4B or 26B MoE."
+  - q: "Which quantization format is best?"
+    a: "On DGX Spark with vLLM: NVFP4 is fastest (E4B goes from 19 to 50 tok/s, 2.6x improvement). On Mac/consumer GPUs with Ollama: Q4_K_M is the only option. FP8 is a middle ground (E4B 36 tok/s) but not worth it over NVFP4."
+---
+
+<VideoEmbed src="/videos/gemma4-4-machines-4-models.mp4" />
+
+<TLDRCard>
+Complete benchmark of all four Gemma 4 variants across three machines. **26B MoE NVFP4 on DGX Spark: 52 tok/s** is the best bang for buck. 31B Dense is only 7 tok/s — skip it. MacBook Pro 32GB maxes out at 26B MoE (47 tok/s). RTX 5090 crushes everything (E2B at 310 tok/s).
+</TLDRCard>
+
+## Plain-Language Version: Four AI Models, One Table
+
+[Gemma 4](https://blog.google/technology/developers/gemma-4/) is Google's 2026 open-source AI model family. It comes in four sizes: E2B runs on phones, E4B on desktops, 26B on servers, 31B for maximum capability. The docs don't tell you how fast each one actually runs on your hardware.
+
+This article puts all four variants on three machines into one table so you can decide without reading six separate articles.
+
+---
+
+## The Complete Comparison
+
+### DGX Spark (GB10) — 128 GB, 273 GB/s
+
+| Model | Type | Active Params | Quant | Runtime | tok/s | Model Size | Rating |
+|-------|------|--------------|-------|---------|-------|-----------|--------|
+| **26B-A4B** | MoE | 4B | NVFP4 | vLLM | **52** | 16.5 GB | ⭐⭐⭐⭐⭐ |
+| **E4B** | PLE | 4B | NVFP4 | vLLM | **50** | 9.8 GB | ⭐⭐⭐⭐ |
+| E4B | PLE | 4B | FP8 | vLLM | 36 | ~14 GB | ⭐⭐⭐ |
+| E2B | PLE | 2B | Q4_K_M | Ollama | 53 | 7.2 GB | ⭐⭐⭐ |
+| E4B | PLE | 4B | BF16 | vLLM | 19 | ~18 GB | ⭐⭐ |
+| 31B Dense | Dense | 31B | NVFP4 | vLLM | **7** | 31 GB | ❌ |
+
+### RTX 5090 — 32 GB GDDR7, 1792 GB/s
+
+| Model | Quant | Runtime | tok/s | Rating |
+|-------|-------|---------|-------|--------|
+| **E2B** | Q4_K_M | Ollama | **310** | ⭐⭐⭐⭐⭐ |
+| E4B | Q4_K_M | Ollama | 202 | ⭐⭐⭐⭐ |
+| 26B MoE | Q4_K_M | Ollama | 186 | ⭐⭐⭐⭐ |
+| 31B Dense | Q4_K_M | Ollama | 62 | ⭐⭐⭐ |
+
+### MacBook Pro M1 Max — 32 GB, 400 GB/s
+
+| Model | Quant | Runtime | tok/s | Notes |
+|-------|-------|---------|-------|-------|
+| E2B | Q4_K_M | Ollama | **81** | Fastest |
+| 26B MoE | Q4_K_M | Ollama | 47 | Largest usable |
+| 31B Dense | Q4_K_M | oMLX | 12.8 | Requires oMLX |
+| 31B Dense | Q4_K_M | Ollama (ctx=2048) | 9 | Context cap required |
+| 31B Dense | Q4_K_M | Ollama (default) | **1.5** | ❌ Swap death |
+
+---
+
+## How to Choose
+
+### You have a DGX Spark
+
+→ **26B-A4B NVFP4 + vLLM**. 52 tok/s, model uses only 16 GB, leaving 82 GB for KV cache. Best capability + speed combination.
+
+Full deployment guide: [26B NVFP4 Complete Guide](/en/blog/dgx-spark-gemma4-26b-nvfp4-52-toks)
+
+### You have an RTX 5090
+
+→ Want **speed**: E2B (310 tok/s). Want **capability**: 26B MoE (186 tok/s). 31B Dense runs too (62 tok/s) but 26B MoE is faster and smarter.
+
+### You have a MacBook Pro 32GB
+
+→ **26B MoE** (47 tok/s) is the largest usable variant. 31B Dense **do not use Ollama defaults** — drops to 1.5 tok/s.
+
+If you want to try 31B anyway: [Rescuing 31B on 32GB MBP](/en/blog/dgx-spark-gemma4-31b-rescue-mbp-32gb)
+
+---
+
+## Why Not Dense?
+
+31B Dense on GB10: 7 tok/s. 26B MoE: 52 tok/s. Same hardware, 7.5x difference.
+
+Dense models read **all 31B parameters** per token (62 GB at BF16). MoE activates only 4B per token (8 GB). On a 273 GB/s memory bus, that difference is the ceiling.
+
+**Unless you have an RTX 5090's 1792 GB/s** (31B Dense gets 62 tok/s there), choose MoE on any other hardware.
+
+Detailed math: [31B Dense Bandwidth Wall](/en/blog/dgx-spark-gemma4-31b-dense-7-toks)
+
+---
+
+## Quantization Format Guide
+
+| Format | Best For | Notes |
+|--------|----------|-------|
+| **NVFP4** | DGX Spark + vLLM | Fastest. E4B: 2.6x speedup. Needs `--moe-backend marlin` |
+| FP8 | DGX Spark + vLLM | Middle ground. Slower than NVFP4 |
+| Q4_K_M | Any + Ollama | Universal. Works everywhere |
+| BF16 | Large VRAM only | Lossless but slowest |
+
+Full E4B NVFP4 quantization walkthrough: [World-First E4B NVFP4](/en/blog/dgx-spark-gemma4-e4b-nvfp4-50-toks)
+
+---
+
+## What Was Gained
+
+**What cost the most time:** Not having a unified comparison table, forcing re-reading of individual articles for every decision. This article exists to fix that.
+
+**Transferable diagnostics:** The model selection decision tree is always: Does it fit in memory → Is bandwidth sufficient → Is there a MoE variant at this size → Is there an NVFP4 checkpoint.
+
+**The pattern that applies everywhere:** On bandwidth-limited hardware, always choose MoE over Dense. Total parameter count does not matter — active parameters determine speed.
+
+---
+
+## Deep Dive Links
+
+Every data point has a full article behind it:
+
+| Topic | Article |
+|-------|---------|
+| 26B NVFP4 deployment + 52 tok/s | [Full guide](/en/blog/dgx-spark-gemma4-26b-nvfp4-52-toks) |
+| Why 31B Dense is so slow | [Bandwidth wall](/en/blog/dgx-spark-gemma4-31b-dense-7-toks) |
+| 31B on 32GB MacBook Pro | [From 1.5 to 12.8 tok/s](/en/blog/dgx-spark-gemma4-31b-rescue-mbp-32gb) |
+| 4 machines full comparison | [Memory decides everything](/en/blog/dgx-spark-gemma4-4-machines-4-models-bandwidth) |
+| E2B vs E4B on 3 machines | [Bandwidth = speed](/en/blog/dgx-spark-gemma4-e2b-vs-e4b-ollama-3-machines) |
+| E4B NVFP4 quantization | [From 19 to 50 tok/s](/en/blog/dgx-spark-gemma4-e4b-nvfp4-50-toks) |
+| DGX Spark power diagnostic | [30W / 100W / overheating guide](/en/blog/dgx-spark-30w-power-safety-mode) |
