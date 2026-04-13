@@ -64,9 +64,9 @@ Here's what a typical session looks like in tokens:
 
 ### The Hidden Buffer
 
-Here's something most people don't know: Claude Code reserves about **33K tokens** as an internal buffer. This space is used for summarization when compaction happens and for generating responses. You can't disable it.
+Here's something most people don't know: Claude Code reserves roughly **33K tokens** as an internal buffer ([source](https://claudefa.st/blog/guide/mechanics/context-buffer-management)). This space is used for summarization when compaction happens and for generating responses. You can't disable it. (Note: this number may change as Claude Code updates — run `/context` to see your actual usable space.)
 
-That means your 200K context window is really **~167K of usable space**. Auto-compaction kicks in around 83% capacity, not 100%. If you're wondering why compaction happens "earlier than expected" — this is why.
+That means your 200K context window is closer to **~167K of usable space**. Auto-compaction kicks in well before 100%. If you're wondering why compaction happens "earlier than expected" — this is why.
 
 ### Why It Gets Worse Over Time
 
@@ -86,7 +86,7 @@ This isn't a bug. It's just how context windows work. The key is knowing what fi
 
 ### Waste #1: Reading the Same File Over and Over
 
-This is the single biggest token waste. Studies suggest **40-60% of file-read tokens are redundant** — Claude reading files it already read, with barely any changes.
+This is the single biggest token waste. Community reports suggest a large portion of file-read tokens are redundant — Claude reading files it already read, with barely any changes.
 
 Watch what happens in a typical bug fix:
 
@@ -121,6 +121,19 @@ By turn 15, the first 8 turns are usually irrelevant — you asked some explorat
 ---
 
 ## Part 3: What You Can Do About It
+
+### Fix 0: See Where Your Tokens Actually Go
+
+Before fixing anything, **measure first.** Claude Code has built-in commands that show you exactly what's eating your context:
+
+```
+/context    — Shows breakdown: system prompt, tools, memory, conversation
+/cost       — Shows token usage and dollar cost for this session
+/memory     — Shows what persistent files Claude is loading
+/mcp        — Shows which MCP servers and tools are active
+```
+
+Run `/context` right now. You might discover that one MCP server is consuming 18K tokens, or that your CLAUDE.md is bigger than you thought. Fix the biggest offender first — that's worth more than all the other tips combined.
 
 ### Fix 1: Use the Right Model for the Job
 
@@ -232,9 +245,11 @@ This doesn't fix the underlying waste — you're still paying for redundant read
 
 ---
 
-## Part 4: Give Claude a Search Engine for Your Notes
+## Part 4: Give Claude a Search Engine for Your Notes (Advanced)
 
-Fixes 1-7 reduce waste. This fix changes the game.
+*Fixes 0-7 above are enough for most people. Parts 4 and 5 are for power users who work with hundreds of notes across sessions. Full disclosure: I built [Musubi](https://github.com/coolthor/musubi), one of the tools mentioned below.*
+
+Fixes 0-7 reduce waste. This fix changes the game.
 
 **The pattern without a search engine:**
 1. You ask Claude about a bug you've seen before
@@ -254,7 +269,7 @@ But keyword search has a limitation: it only finds notes that use the **same wor
 
 ---
 
-## Part 5: When Your Notes Learn to Cross-Reference Themselves
+## Part 5: When Your Notes Learn to Cross-Reference Themselves (Advanced)
 
 This is where knowledge graphs come in. Don't let the fancy name intimidate you — the concept is simple.
 
@@ -307,11 +322,12 @@ When integrated with Claude Code, Musubi runs automatically before Claude search
 Your context window fills up fast because of invisible overhead — not because your questions are too long.
 
 **Do these today (free, immediate):**
+0. Run `/context` and `/cost` to see where your tokens actually go
 1. Pick the right model — Sonnet for daily work, Opus for hard problems
 2. `/compact` when switching tasks, `/clear` for fresh starts
 3. Tell Claude to read specific line ranges, not whole files
 4. Disable MCP tools you're not using (try `gh` CLI over GitHub MCP)
-5. Keep CLAUDE.md under 2,000 tokens — put details in separate files
+5. Keep CLAUDE.md lean — put details in separate files
 6. Use subagents for exploratory work
 
 **Do this when ready (requires setup):**

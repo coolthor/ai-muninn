@@ -64,9 +64,9 @@ Claude Code 的 context 會滿是因為每條訊息都帶隱形開銷 — 規則
 
 ### 隱藏的 Buffer
 
-大部分人不知道的事：Claude Code 內部 reserve 了大約 **33K tokens** 做 buffer。這個空間用來做 compaction 時的摘要和生成回應。你不能關掉它。
+大部分人不知道的事：Claude Code 內部 reserve 了大約 **33K tokens** 做 buffer（[來源](https://claudefa.st/blog/guide/mechanics/context-buffer-management)）。這個空間用來做 compaction 時的摘要和生成回應。你不能關掉它。（注意：這個數字可能隨 Claude Code 更新而改變 — 跑 `/context` 看你的實際可用空間。）
 
-也就是說你的 200K context window 其實只有 **~167K 可用**。Auto-compaction 在大約 83% 容量時就觸發，不是 100%。如果你覺得 compaction「比預期早」— 這就是原因。
+也就是說你的 200K context window 其實接近 **~167K 可用**。Auto-compaction 在遠低於 100% 時就觸發。如果你覺得 compaction「比預期早」— 這就是原因。
 
 ### 為什麼越到後面越糟
 
@@ -86,7 +86,7 @@ Claude Code 的 context 會滿是因為每條訊息都帶隱形開銷 — 規則
 
 ### 浪費 #1：同一個檔案讀了又讀
 
-這是最大的 token 浪費。研究指出 **40-60% 的讀檔 token 是重複的** — Claude 讀它已經讀過的檔案，內容幾乎沒變。
+這是最大的 token 浪費。社群普遍觀察到大量讀檔 token 是重複的 — Claude 讀它已經讀過的檔案，內容幾乎沒變。
 
 看一個典型的 bug fix 過程：
 
@@ -121,6 +121,19 @@ Claude Code 的 context 會滿是因為每條訊息都帶隱形開銷 — 規則
 ---
 
 ## Part 3：你可以做什麼
+
+### 修正 0：先看你的 Token 花在哪
+
+修任何東西之前，**先量**。Claude Code 有內建指令告訴你 context 被什麼吃掉了：
+
+```
+/context    — 顯示分布：system prompt、tools、memory、對話歷史
+/cost       — 顯示這個 session 的 token 用量和費用
+/memory     — 顯示 Claude 載了哪些持久檔案
+/mcp        — 顯示哪些 MCP server 和 tool 在跑
+```
+
+現在就跑 `/context`。你可能會發現某個 MCP server 吃了 18K tokens，或你的 CLAUDE.md 比你以為的大。先修最大的那個 — 這比所有其他技巧加起來都值。
 
 ### 修正 1：用對的模型做對的事
 
@@ -232,9 +245,11 @@ Subagent 讀了 20 個檔案、探索程式碼，然後帶回摘要。你的主 
 
 ---
 
-## Part 4：給 Claude 一個搜尋引擎找你的筆記
+## Part 4：給 Claude 一個搜尋引擎找你的筆記（進階）
 
-修正 1-7 是減少浪費。這一步改變遊戲。
+*修正 0-7 對大部分人已經夠用。Part 4 和 5 是給有幾百篇筆記、跨 session 工作的進階用戶。聲明：我是 [Musubi](https://github.com/coolthor/musubi) 的作者，下面會提到這個工具。*
+
+修正 0-7 是減少浪費。這一步改變遊戲。
 
 **沒有搜尋引擎的模式：**
 1. 你問 Claude 一個之前遇過的 bug
@@ -254,7 +269,7 @@ Subagent 讀了 20 個檔案、探索程式碼，然後帶回摘要。你的主 
 
 ---
 
-## Part 5：讓你的筆記學會旁徵博引
+## Part 5：讓你的筆記學會旁徵博引（進階）
 
 這就是知識圖譜登場的地方。別被名字嚇到 — 概念很簡單。
 
@@ -307,11 +322,12 @@ Musubi 自己**不花任何 LLM token** — 圖譜建立靠的是確定性的概
 你的 context window 滿很快是因為隱形開銷 — 不是因為你的問題太長。
 
 **今天就做（免費、立即生效）：**
+0. 跑 `/context` 和 `/cost` 看你的 token 花在哪
 1. 用對的模型 — 日常用 Sonnet，難題才用 Opus
 2. 切任務時 `/compact`，不相關就 `/clear`
 3. 叫 Claude 讀特定行範圍，不要讀整個檔案
 4. 關掉不用的 MCP tool（GitHub 改用 `gh` CLI）
-5. CLAUDE.md 控制在 2,000 tokens 以內 — 細節放獨立檔案
+5. CLAUDE.md 精簡 — 細節放獨立檔案
 6. 用 subagent 做探索性工作
 
 **準備好再做（需要設定）：**
