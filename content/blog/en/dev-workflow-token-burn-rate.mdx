@@ -1,0 +1,223 @@
+---
+title: "[Dev Workflow] Why Your AI Burns Through Tokens — and What Actually Fixes It"
+description: "A practical breakdown of where AI coding tokens go, what's wasted, and the approaches that actually reduce burn rate — from prompt caching to knowledge graphs."
+date: "2026-04-13"
+tags: ["tokens", "context window", "Claude Code", "prompt caching", "RAG", "knowledge graph", "musubi", "dev workflow", "AI cost optimization"]
+series: "AI Workflow"
+part: 1
+faq:
+  - q: "Why does Claude Code use so many tokens?"
+    a: "Every message includes the full system prompt, CLAUDE.md rules, MCP tool definitions, and conversation history. A single turn can cost 10-30K tokens before your actual question. With 20 MCP tools loaded, tool schemas alone can consume 50K+ tokens per turn."
+  - q: "What is the biggest waste of tokens in AI coding workflows?"
+    a: "Re-reading the same files repeatedly. Every time an AI agent reads a file to 'check something,' the full file content enters the context window. In a typical debugging session, the same 3-4 files get read 5-10 times each. Prompt caching helps with the cost but not the context window pressure."
+  - q: "How do knowledge graphs reduce token usage?"
+    a: "Instead of embedding entire documents into context for the AI to search through, a knowledge graph pre-computes which documents are related. The AI queries the graph (a few hundred tokens) and only retrieves the 2-3 most relevant documents — instead of dumping 10+ files into context and hoping the AI finds the right one."
+  - q: "What is the difference between RAG and knowledge graph retrieval?"
+    a: "RAG finds documents similar to your query. Knowledge graphs find documents connected to documents similar to your query. RAG answers 'what matches this question?' — knowledge graphs answer 'what else should I know, given what I already found?' This cross-document discovery is what saves the most tokens."
+---
+
+<TLDRCard>
+Tokens burn fast because every AI turn carries invisible overhead: system prompts, tool schemas, conversation history, and redundant file reads. Prompt caching cuts cost but not context pressure. RAG helps but misses cross-document connections. Knowledge graphs — pre-computed maps of how your documents relate — let the AI ask targeted questions instead of brute-force searching, cutting retrieval tokens by 40-60%.
+</TLDRCard>
+
+## Plain-Language Version: Why AI Gets Expensive Fast
+
+Every time you ask an AI coding assistant a question, it doesn't just read your question. It re-reads its entire instruction manual, every tool it has access to, and the full history of your conversation. That overhead is invisible to you but very real in cost and capacity.
+
+This article explains where those tokens go, which ones are wasted, and what approaches actually reduce the burn — from simple fixes anyone can apply today, to a structural approach using knowledge graphs that changes how AI finds information in your notes and code.
+
+---
+
+## Preface
+
+A water bill doesn't tell you which tap is leaking. A token bill doesn't tell you which part of your AI workflow is wasteful.
+
+Most developers notice the symptom — "my context window fills up too fast" or "my API bill is higher than expected" — but don't diagnose the cause. The cause is almost never your prompts being too long. It's the invisible infrastructure that rides along with every single message.
+
+This is a breakdown of where tokens actually go, what you can cut, and what the current state of the art looks like for reducing burn rate without reducing capability.
+
+---
+
+## Why Tokens Burn So Fast
+
+### The Invisible Tax Per Turn
+
+Every message you send to an AI model carries overhead you don't see:
+
+| Component | Typical Size | Frequency |
+|-----------|-------------|-----------|
+| System prompt | 2-8K tokens | Every turn |
+| CLAUDE.md / rules | 3-15K tokens | Every turn |
+| MCP tool definitions | 5-50K tokens | Every turn |
+| Conversation history | Grows per turn | Every turn |
+| File contents from reads | 1-10K per file | On demand |
+| Tool call results | Variable | On demand |
+
+A fresh Claude Code session with 20 MCP tools, a detailed CLAUDE.md, and standard rules can start at **50-80K tokens before you type anything**. That's 25-40% of a 200K context window consumed by infrastructure.
+
+### The Compounding Problem
+
+Context windows are not just about cost — they're about capacity. Every token of overhead is a token that can't hold your actual code, your actual question, or the AI's actual reasoning.
+
+At turn 1, you have ~150K tokens of useful capacity. By turn 20 of a debugging session — with conversation history, repeated file reads, and tool results accumulating — you might have 30K left. The AI starts losing track of earlier context. Responses get less accurate. You hit compaction or start a new session.
+
+The token burn isn't linear. It compounds.
+
+---
+
+## What's Actually Wasted
+
+### 1. Repeated File Reads
+
+This is the single largest waste in AI coding workflows.
+
+A typical debugging session looks like this:
+1. AI reads `server.ts` to understand the structure (4K tokens)
+2. AI reads `handler.ts` to check the bug (3K tokens)
+3. You ask a follow-up → AI reads `server.ts` again (4K tokens)
+4. AI makes an edit → reads `handler.ts` to verify (3K tokens)
+5. Build fails → AI reads both files again (7K tokens)
+
+That's **21K tokens** to read two files, when the content only changed by a few lines between reads. The AI doesn't have a "diff since last read" mechanism — it re-ingests the full file every time.
+
+### 2. MCP Tool Schema Bloat
+
+Every MCP tool loaded in your session adds its full JSON schema to the system prompt. A well-defined tool with descriptions and parameter docs can be 500-2000 tokens. Load 20 tools and you've added **10-40K tokens of permanent overhead** that rides along with every single message.
+
+Most sessions only use 3-5 of those tools. The other 15 are pure waste.
+
+### 3. Conversation History That's No Longer Relevant
+
+By turn 15 of a session, turns 1-8 are usually irrelevant — exploratory questions, wrong approaches, superseded decisions. But they're still in context, consuming tokens and potentially confusing the AI with outdated information.
+
+### 4. Verbose Tool Results
+
+When a search tool returns 50 results but only 3 are relevant, the AI still processes all 50 in context. When a `git diff` returns a 200-line diff but only 10 lines matter, the full diff enters the window.
+
+---
+
+## What Actually Works
+
+### Tier 1: Free Wins (Do These First)
+
+**Lazy MCP Loading**
+
+Don't load all MCP tools at startup. Use deferred tool loading — tools are listed by name but their schemas aren't loaded until actually needed. This can recover 30-50K tokens of context.
+
+In Claude Code, this is already the default behavior for many tools. If you're configuring MCP servers manually, check if your setup supports lazy loading.
+
+**Selective File Reads**
+
+Instead of reading entire files, read specific line ranges when you know what you're looking for:
+
+```
+Read file.ts lines 45-80
+```
+
+This seems obvious but AI agents default to reading full files. A 400-line file costs 3-4K tokens. The 35 lines you actually need cost 300 tokens.
+
+**Strategic Compaction**
+
+Don't let auto-compaction surprise you at random points. Compact manually at logical boundaries — after finishing a feature, before starting a new task, when switching from exploration to implementation. This preserves the context that matters and drops what doesn't.
+
+### Tier 2: Infrastructure (Requires Setup)
+
+**Prompt Caching**
+
+Anthropic's prompt caching stores the prefix of your conversation (system prompt, tool definitions, CLAUDE.md) on the server side. Subsequent turns that share the same prefix get a **90% cost reduction** on the cached portion and faster TTFT.
+
+This is the single biggest cost reduction available. It doesn't reduce context window pressure (the cached tokens still count toward your 200K limit), but it cuts the bill dramatically.
+
+**RAG (Retrieval-Augmented Generation)**
+
+Instead of putting all relevant documents into context, use a retrieval system to find and inject only the most relevant ones per query.
+
+A basic RAG setup:
+1. Index your documents (embeddings or keyword index)
+2. When a question comes in, search the index
+3. Inject only the top 2-3 results into context
+4. AI answers based on those specific documents
+
+This works well for direct questions: "How did I fix the FP8 KV cache bug?" → RAG finds the exact experience file → AI reads just that one document (2K tokens instead of searching through 20 files at 40K tokens).
+
+**The RAG Limitation**
+
+RAG finds documents similar to your query. That's useful but incomplete.
+
+Consider this scenario: you're debugging a vLLM memory issue on DGX Spark. RAG finds your experience file about "vLLM OOM on startup." Good. But it doesn't find your separate note about "Ollama KEEP_ALIVE holds models in shared memory" — because that document doesn't mention vLLM at all. The connection between those two documents is **implicit**: they share the concept of "unified memory contention" without sharing vocabulary.
+
+This is where RAG breaks down. It answers "what documents match this query?" but not "what documents are connected to the documents that match this query?"
+
+### Tier 3: Knowledge Graphs (The Structural Fix)
+
+A knowledge graph pre-computes the relationships between your documents. Instead of relying on keyword overlap or embedding similarity at query time, it builds a persistent map of which documents share concepts, even when they use different words.
+
+**How it works:**
+
+1. **Build phase** (offline, once): scan all documents, extract concepts (keywords, entities, domain terms), create edges between documents that share concepts. Weight edges by concept specificity — rare concepts create stronger connections than common ones.
+
+2. **Query phase** (per-question): find the document that matches the query (keyword or vector search), then traverse the graph to find its neighbors — documents that are conceptually related but might use entirely different vocabulary.
+
+**The token savings come from precision:**
+
+| Approach | Documents Retrieved | Tokens Used | Relevant Docs Found |
+|----------|-------------------|-------------|-------------------|
+| Dump everything | 20 files | ~40K | 2-3 |
+| RAG (top-5) | 5 files | ~10K | 2-3 |
+| Graph-aware retrieval | 2-3 files | ~4-6K | 2-3 |
+
+The graph doesn't retrieve more relevant documents — it retrieves **fewer irrelevant ones**. Same recall, lower cost.
+
+**The cross-document discovery bonus:**
+
+The real value isn't just token savings. It's finding documents you wouldn't have searched for.
+
+Back to the vLLM memory example: graph-aware retrieval finds the OOM experience file (direct hit) AND surfaces the Ollama KEEP_ALIVE note (graph neighbor — they share the "unified memory" concept). RAG would never find that second document because it doesn't mention vLLM.
+
+This is what "knowledge graph" means in practice: **your notes learn to cross-reference themselves.**
+
+---
+
+## Building This: Musubi
+
+[Musubi](https://github.com/coolthor/musubi) is an open-source tool that builds a knowledge graph over your markdown notes. No LLM required — it uses concept co-occurrence and IDF weighting to create edges between documents.
+
+```bash
+# Install
+uvx --from "git+https://github.com/coolthor/musubi" musubi init
+
+# Build the graph
+musubi build
+
+# Find related documents
+musubi neighbors "vLLM memory issue"
+# → ★ experience-vllm-oom-startup.md (direct)
+# → + experience-ollama-keep-alive.md (graph neighbor)
+# → + experience-unified-memory-conflict.md (graph neighbor)
+
+# Search with graph expansion
+musubi search "fp8 kv cache"
+# → keyword hits + their graph neighbors
+```
+
+The integration with Claude Code is a [PreToolUse hook](/en/blog/...) — before the AI runs a web search or reads files, it checks the knowledge graph first. If a relevant note already exists, the AI reads that instead of searching from scratch.
+
+**Current scale:** 400 nodes, 14K edges across 700+ markdown documents spanning 11 knowledge domains. Zero isolated nodes. Average query adds 2-3 graph-expanded results that keyword search alone would miss.
+
+The token saving benchmark scaffold exists (`musubi benchmark`) but hasn't run yet — results will be published when available. The estimated saving from graph-aware retrieval vs. brute-force search is **40-60% fewer retrieval tokens** with equal or better recall, based on the precision improvement of retrieving 2-3 targeted documents instead of 5-10 broad matches.
+
+---
+
+## What Was Gained
+
+**The diagnosis:** Token burn comes from invisible overhead (system prompts, tool schemas, history) and redundant operations (repeated file reads, broad searches). Your prompts are probably fine. Your infrastructure is the problem.
+
+**The quick fixes:** Lazy MCP loading, selective file reads, and strategic compaction are free and immediate. Prompt caching is the single biggest cost reduction.
+
+**The structural fix:** RAG reduces retrieval tokens but misses cross-document connections. Knowledge graphs pre-compute those connections, enabling precise retrieval that finds fewer documents but the right ones.
+
+**The principle:** The best way to save tokens isn't compression — it's precision. Don't make context smaller. Make it more targeted.
+
+---
+
+*[Musubi](https://github.com/coolthor/musubi) is open source (MIT). It works with any collection of markdown files — no vendor lock-in, no LLM dependency, no cloud service.*

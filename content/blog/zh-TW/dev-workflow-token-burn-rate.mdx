@@ -1,0 +1,223 @@
+---
+title: "[Dev Workflow] 為什麼你的 AI 一直在燒 Token — 以及真正有效的解法"
+description: "拆解 AI coding 的 token 花在哪裡、哪些浪費了、現在主流怎麼省 — 從 prompt caching 到知識圖譜。"
+date: "2026-04-13"
+tags: ["tokens", "context window", "Claude Code", "prompt caching", "RAG", "knowledge graph", "musubi", "dev workflow", "AI 省 token"]
+series: "AI Workflow"
+part: 1
+faq:
+  - q: "為什麼 Claude Code 吃那麼多 token？"
+    a: "每條訊息都包含完整的 system prompt、CLAUDE.md 規則、MCP tool 定義、對話歷史。一個 turn 在你的問題之前就花了 10-30K tokens。載 20 個 MCP tool，光 schema 就吃 50K+ tokens。"
+  - q: "AI coding 工作流裡最大的 token 浪費是什麼？"
+    a: "重複讀同一個檔案。AI agent 每次「確認一下」就把整個檔案讀進 context window。一個典型的 debug session，同樣的 3-4 個檔案被讀 5-10 次。Prompt caching 省成本但不省 context window 空間。"
+  - q: "知識圖譜怎麼省 token？"
+    a: "不用把整批文件塞進 context 讓 AI 自己翻，知識圖譜預先算好文件之間的關聯。AI 查圖譜（幾百 token）然後只取 2-3 篇最相關的 — 不是丟 10+ 篇進去碰運氣。"
+  - q: "RAG 和知識圖譜檢索有什麼差別？"
+    a: "RAG 找跟你問題相似的文件。知識圖譜找「跟你問題相似的文件」的鄰居。RAG 回答「什麼匹配這個問題？」— 知識圖譜回答「既然找到了這個，還有什麼應該一起看？」這種跨文件發現才是真正省 token 的地方。"
+---
+
+<TLDRCard>
+Token 噴很快是因為每個 AI turn 都帶隱形開銷：system prompt、tool schema、對話歷史、重複讀檔。Prompt caching 省錢但不省 context 空間。RAG 有幫助但抓不到跨文件的關聯。知識圖譜 — 預先算好文件之間怎麼連的 — 讓 AI 精準提問而不是暴力搜尋，檢索 token 省 40-60%。
+</TLDRCard>
+
+## 白話版：為什麼 AI 越用越貴
+
+每次你問 AI coding 助手一個問題，它不是只讀你的問題。它會重讀整份說明書、所有能用的工具、加上你們之前所有的對話。這些開銷你看不到，但在帳單和容量上很真實。
+
+這篇解釋 token 花去哪了、哪些浪費了、什麼方法真的能降低消耗 — 從今天就能用的簡單修正，到用知識圖譜改變 AI 找資料方式的結構性解法。
+
+---
+
+## 前言
+
+水費帳單不會告訴你哪個水龍頭在漏。Token 帳單也不會告訴你工作流的哪個環節在浪費。
+
+大部分開發者注意到的是症狀 — 「context window 太快就滿了」或「API 帳單比預期高」 — 但不會去診斷原因。原因幾乎不是你的 prompt 太長。是每條訊息都帶著的隱形基礎設施。
+
+這篇拆解 token 實際流向、你能砍什麼、以及現在最先進的省法。
+
+---
+
+## 為什麼 Token 噴那麼快
+
+### 每個 Turn 的隱形稅
+
+你送出的每條訊息都帶著你看不到的開銷：
+
+| 項目 | 典型大小 | 頻率 |
+|------|---------|------|
+| System prompt | 2-8K tokens | 每個 turn |
+| CLAUDE.md / rules | 3-15K tokens | 每個 turn |
+| MCP tool 定義 | 5-50K tokens | 每個 turn |
+| 對話歷史 | 逐 turn 增長 | 每個 turn |
+| 讀檔內容 | 每檔 1-10K | 按需 |
+| Tool call 結果 | 不定 | 按需 |
+
+一個載了 20 個 MCP tool、有完整 CLAUDE.md 和標準 rules 的 Claude Code session，**還沒打字就花 50-80K tokens**。200K context window 的 25-40% 被基礎設施吃掉了。
+
+### 複利問題
+
+Context window 不只是成本問題 — 是容量問題。每一個 token 的開銷，就是少一個 token 放你的程式碼、你的問題、AI 的推理。
+
+第一個 turn，你有 ~150K tokens 可用。Debug session 到了第 20 個 turn — 對話歷史、重複讀檔、tool 結果不斷累積 — 你可能只剩 30K。AI 開始忘記前面的 context。回答變不準。compaction 觸發或你開新 session。
+
+Token 消耗不是線性的。它是複利。
+
+---
+
+## 到底浪費在哪
+
+### 1. 重複讀檔
+
+這是 AI coding 工作流裡最大的浪費。
+
+典型的 debug session 長這樣：
+1. AI 讀 `server.ts` 理解結構（4K tokens）
+2. AI 讀 `handler.ts` 看 bug（3K tokens）
+3. 你問後續 → AI 再讀一次 `server.ts`（4K tokens）
+4. AI 改了 → 讀 `handler.ts` 確認（3K tokens）
+5. Build 失敗 → AI 兩個檔案都再讀一次（7K tokens）
+
+**21K tokens** 讀兩個檔案，但內容兩次讀取之間只改了幾行。AI 沒有「上次讀完之後的 diff」機制 — 每次都重新吞整個檔案。
+
+### 2. MCP Tool Schema 膨脹
+
+session 裡載的每個 MCP tool 都把完整 JSON schema 加進 system prompt。一個定義完善的 tool 帶說明和參數文件可以是 500-2000 tokens。載 20 個就是 **10-40K tokens 的永久開銷**，每條訊息都帶著。
+
+大部分 session 只用其中 3-5 個。另外 15 個是純浪費。
+
+### 3. 已經不相關的對話歷史
+
+到了第 15 個 turn，第 1-8 個 turn 通常已經不相關了 — 試探性問題、錯誤路線、被覆蓋的決策。但它們還在 context 裡，吃 token，還可能用過時資訊誤導 AI。
+
+### 4. 囉嗦的 Tool 結果
+
+搜尋工具回傳 50 個結果但只有 3 個相關，AI 還是把 50 個都處理進 context。`git diff` 回傳 200 行但只有 10 行重要，整個 diff 都進 window。
+
+---
+
+## 什麼真的有效
+
+### 第一層：免費的贏面（先做這些）
+
+**Lazy MCP 載入**
+
+不要啟動時載所有 MCP tool。用延遲載入 — tool 先只列名稱，schema 等實際需要時才載。這能省回 30-50K tokens。
+
+Claude Code 對很多 tool 已經預設這樣做了。如果你手動設定 MCP server，檢查你的設定是否支援 lazy loading。
+
+**選擇性讀檔**
+
+不要讀整個檔案，知道要看什麼就讀特定行範圍：
+
+```
+Read file.ts lines 45-80
+```
+
+看似廢話但 AI agent 預設讀整個檔案。400 行的檔案花 3-4K tokens。你真正需要的 35 行只花 300 tokens。
+
+**策略性 Compaction**
+
+不要讓 auto-compaction 在隨機的地方觸發。手動在邏輯邊界 compact — 做完一個功能之後、開始新任務之前、從探索切換到實作的時候。保留重要的 context，丟掉不重要的。
+
+### 第二層：基礎設施（需要設定）
+
+**Prompt Caching**
+
+Anthropic 的 prompt caching 把對話的前綴（system prompt、tool 定義、CLAUDE.md）快取在 server 端。後續共享相同前綴的 turn 在快取部分享 **90% 成本折扣**加更快的 TTFT。
+
+這是目前能拿到的最大成本削減。它不減 context window 壓力（快取的 token 還是算在 200K 限制裡），但帳單大幅降低。
+
+**RAG（檢索增強生成）**
+
+不把所有相關文件放進 context，用檢索系統每次只找最相關的幾篇注入。
+
+基本 RAG 設定：
+1. 索引你的文件（embedding 或 keyword index）
+2. 問題來時，搜索引
+3. 只注入前 2-3 個結果到 context
+4. AI 根據那幾篇文件回答
+
+對直接問題很有效：「我之前怎麼修 FP8 KV cache 的 bug？」→ RAG 找到那篇經驗文件 → AI 只讀那一篇（2K tokens，不是搜 20 個檔案花 40K tokens）。
+
+**RAG 的天花板**
+
+RAG 找跟你問題相似的文件。有用但不完整。
+
+想像這個場景：你在 DGX Spark 上 debug vLLM 記憶體問題。RAG 找到你的經驗文件「vLLM 啟動 OOM」。好。但它沒找到你另一篇「Ollama KEEP_ALIVE 佔住共用記憶體」的筆記 — 因為那篇完全沒提到 vLLM。這兩篇文件之間的關聯是**隱式的**：它們共享「統一記憶體競爭」的概念，但用的詞彙完全不同。
+
+這就是 RAG 的極限。它回答「什麼文件匹配這個問題？」但不回答「跟匹配的文件相連的還有哪些文件？」
+
+### 第三層：知識圖譜（結構性解法）
+
+知識圖譜預先算好文件之間的關係。不是在查詢時靠 keyword 重疊或 embedding 相似度，而是建一張持久的地圖，標記哪些文件共享概念 — 即使它們用不同的詞。
+
+**怎麼運作：**
+
+1. **建圖階段**（離線，一次性）：掃描所有文件，提取概念（關鍵字、實體、領域術語），在共享概念的文件之間建邊。依概念稀有度加權 — 稀有概念建立更強的連結。
+
+2. **查詢階段**（每次提問）：找到匹配問題的文件（keyword 或 vector search），然後走圖譜找鄰居 — 概念相關但可能用完全不同詞彙的文件。
+
+**Token 節省來自精準度：**
+
+| 方法 | 取回文件數 | 花的 Token | 找到相關文件 |
+|------|-----------|-----------|------------|
+| 全部丟進去 | 20 篇 | ~40K | 2-3 篇 |
+| RAG（top-5） | 5 篇 | ~10K | 2-3 篇 |
+| Graph-aware 檢索 | 2-3 篇 | ~4-6K | 2-3 篇 |
+
+圖譜不是找到更多相關文件 — 它是**少取不相關的**。同樣的 recall，更低的成本。
+
+**跨文件發現的加值：**
+
+真正的價值不只是省 token。是找到你不會去搜的文件。
+
+回到 vLLM 記憶體的例子：graph-aware 檢索找到 OOM 經驗文件（直接命中），同時浮出 Ollama KEEP_ALIVE 筆記（graph 鄰居 — 它們共享「統一記憶體」概念）。RAG 永遠不會找到第二篇，因為它沒提到 vLLM。
+
+這就是「知識圖譜」在實務上的意思：**你的筆記學會了旁徵博引。**
+
+---
+
+## 怎麼建：Musubi
+
+[Musubi](https://github.com/coolthor/musubi)（結び）是開源工具，對 markdown 筆記建知識圖譜。不需要 LLM — 用概念共現和 IDF 加權建邊。
+
+```bash
+# 安裝
+uvx --from "git+https://github.com/coolthor/musubi" musubi init
+
+# 建圖
+musubi build
+
+# 找相關文件
+musubi neighbors "vLLM memory issue"
+# → ★ experience-vllm-oom-startup.md（直接命中）
+# → + experience-ollama-keep-alive.md（graph 鄰居）
+# → + experience-unified-memory-conflict.md（graph 鄰居）
+
+# 帶圖譜擴展的搜尋
+musubi search "fp8 kv cache"
+# → keyword 命中 + 它們的 graph 鄰居
+```
+
+跟 Claude Code 的整合是 [PreToolUse hook](/zh-TW/blog/...) — AI 跑 web search 或讀檔之前，先查知識圖譜。如果相關筆記已經存在，AI 讀那篇而不是從頭搜。
+
+**目前規模：** 400 nodes、14K edges，橫跨 700+ 篇 markdown 文件、11 個知識領域。零孤島。平均每次查詢多找到 2-3 篇 keyword search 會漏掉的 graph-expanded 結果。
+
+Token saving benchmark 的框架已經建好（`musubi benchmark`），實際數據跑完後會發布。基於精準度提升的估計 — 取 2-3 篇精準文件取代 5-10 篇粗略匹配 — graph-aware 檢索比暴力搜尋**省 40-60% 檢索 token**。
+
+---
+
+## 這次的收穫
+
+**診斷：** Token 噴快的原因是隱形開銷（system prompt、tool schema、歷史）和重複操作（重複讀檔、粗暴搜尋）。你的 prompt 大概沒問題。你的基礎設施才是問題。
+
+**速效解：** Lazy MCP 載入、選擇性讀檔、策略性 compaction 免費又立即有效。Prompt caching 是最大的成本削減。
+
+**結構性解法：** RAG 減少檢索 token 但抓不到跨文件關聯。知識圖譜預先算好那些關聯，讓檢索精準到少取文件但取對文件。
+
+**原則：** 省 token 最好的方法不是壓縮 — 是精準。不要讓 context 變小，讓它變準。
+
+---
+
+*[Musubi](https://github.com/coolthor/musubi) 是開源的（MIT）。可以用在任何 markdown 文件集合 — 不綁平台、不需要 LLM、不需要雲端。*
