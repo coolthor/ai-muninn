@@ -8,7 +8,7 @@ series: "LLM 101"
 part: 5
 faq:
   - q: "What is a context window in AI?"
-    a: "A context window is the maximum amount of text an AI model can 'see' at one time. Think of it as the model's desk — it can only hold so many pages before older ones fall off. GPT-4o has a 128K token window (~96,000 words), Claude has up to 200K tokens, and Gemini goes up to 2M tokens. Once the window is full, the AI can no longer see your earliest messages."
+    a: "A context window is the maximum amount of text an AI model can 'see' at one time. Think of it as the model's desk. In 2026, mainstream cloud models (GPT-5.4, Claude 4.6, Gemini 2.5 Pro) hold ~750K-787K words. Llama 4 Scout goes up to 7.5M words (but needs 128GB+ RAM). Once the window is full, the AI can no longer see your earliest messages — they fall off the desk."
   - q: "Why does AI forget what I said earlier in a long conversation?"
     a: "AI doesn't have persistent memory like a human. Every time it responds, it re-reads the entire conversation from the beginning. When the conversation grows past the context window limit, the oldest messages get dropped. The AI isn't forgetting — it literally can't see those messages anymore because they fell off the desk."
   - q: "What are tokens and how do they relate to the context window?"
@@ -20,7 +20,7 @@ faq:
 <VideoEmbed src="/videos/llm-101-context-window.mp4" />
 
 <TLDRCard>
-A context window is **how much text an AI can see at once** — think of it as the size of its desk. GPT-4o's desk holds ~96K words, Claude's holds ~150K words (up to 750K in extended mode), and Gemini's holds ~1.5M words. When the desk is full, older messages **fall off** and the AI can't see them anymore. It's not forgetting — it literally can't read what's no longer on the desk. To work around this: start fresh conversations, break big tasks into pieces, and paste key context at the top.
+A context window is **how much text an AI can see at once** — think of it as the size of its desk. In 2026, mainstream cloud models (GPT-5.4, Claude 4.6, Gemini 2.5 Pro) all have desks holding **~750K-787K words**. Meta's Llama 4 Scout goes to 7.5M words. When the desk is full, older messages **fall off** and the AI can't see them anymore. It's not forgetting — it literally can't read what's no longer on the desk. To work around this: start fresh conversations, break big tasks into pieces, and paste key context at the top.
 </TLDRCard>
 
 ## Plain-Language Version: Why AI loses track of your conversation
@@ -73,20 +73,21 @@ For the rest of this article, I'll use "words" loosely, but know that the actual
 
 Here are the context window sizes for popular models as of early 2026:
 
-| Model | Context window | Roughly how many words |
-|-------|---------------|----------------------|
-| **GPT-4o** (OpenAI) | 128K tokens | ~96,000 words |
-| **Claude Sonnet/Opus** (Anthropic) | 200K tokens | ~150,000 words |
-| **Claude** (extended) | 1M tokens | ~750,000 words |
-| **Gemini 2.5 Pro** (Google) | 1M tokens | ~750,000 words |
-| **Gemini 2.5 Pro** (extended) | 2M tokens | ~1,500,000 words |
-| **Llama 4 Scout** (Meta, local) | 10M tokens | ~7,500,000 words |
-| **Qwen3 14B** (local via Ollama) | 32K-128K tokens | ~24,000-96,000 words |
-| **Smaller local models** (7B-8B) | 8K-32K tokens | ~6,000-24,000 words |
+| Model | Context window | Roughly how many words | Notes |
+|-------|---------------|----------------------|-------|
+| **Llama 4 Scout** (Meta) | 10M tokens | ~7,500,000 words | Local, needs 128GB+ RAM |
+| **GPT-5.4** (OpenAI) | 1.05M tokens | ~787,500 words | Cloud, 2x pricing past 272K |
+| **Claude Opus/Sonnet 4.6** (Anthropic) | 1M tokens | ~750,000 words | Cloud, no long-context surcharge |
+| **Llama 4 Maverick** (Meta) | 1M tokens | ~750,000 words | Local or cloud |
+| **Gemini 2.5 Pro** (Google) | 1M tokens | ~750,000 words | Cloud |
+| **Qwen3.5-122B** (Alibaba) | 262K tokens | ~196,000 words | Local, extendable to 1M |
+| **GPT-4o** (OpenAI) | 128K tokens | ~96,000 words | Previous gen, still available |
+| **Qwen3 14B** (local via Ollama) | 32K-128K tokens | ~24,000-96,000 words | Depends on RAM |
+| **Smaller local models** (7B-8B) | 8K-32K tokens | ~6,000-24,000 words | Most memory-efficient |
 
 A few things stand out:
 
-1. **Cloud models have much bigger desks than local ones.** Running a model on your laptop typically gives you 8K-128K tokens. Cloud services offer 128K to 2M.
+1. **Cloud models now start at 1M tokens.** Running locally typically gives you 32K-262K. Llama 4 Scout is the exception — 10M, but you need 128GB+ RAM to use the full window.
 2. **The numbers keep growing.** Two years ago, 4K was standard. Now 128K is the baseline for major cloud models.
 3. **Bigger isn't always better.** We'll get to why in a moment.
 
