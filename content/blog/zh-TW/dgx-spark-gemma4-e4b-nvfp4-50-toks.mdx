@@ -2,7 +2,7 @@
 title: "[Benchmark] 從 19 到 50 tok/s：我們搶先做了全球首個 Gemma 4 E4B NVFP4 量化"
 description: "Gemma 4 E4B NVFP4A16 在 DGX Spark 上跑 49.9 tok/s — 比 BF16 快 2.6 倍。HuggingFace 上第一個 NVFP4 checkpoint。PLE 架構解析、FP8 vs NVFP4、以及差點讓我們放棄的 llm-compressor 版本地獄。"
 date: "2026-04-07"
-updatedAt: "2026-04-07"
+updatedAt: "2026-04-14"
 tags: ["Gemma 4", "E4B", "NVFP4", "FP8", "vLLM", "DGX Spark", "GB10", "quantization", "llm-compressor", "PLE", "HuggingFace"]
 series: "DGX Spark"
 part: 10
@@ -20,54 +20,54 @@ faq:
 <VideoEmbed src="/videos/gemma4-e4b-nvfp4-quantization.mp4" />
 
 <TLDRCard>
-Gemma 4 E4B NVFP4A16 在 DGX Spark 上跑 **49.9 tok/s** — 比 BF16 快 2.6 倍，GPU 佔用只有 9.8 GB。HuggingFace 上第一個 E4B NVFP4 checkpoint，已上傳 [coolthor/Gemma-4-E4B-it-NVFP4A16](https://huggingface.co/coolthor/Gemma-4-E4B-it-NVFP4A16)。
+Gemma 4 E4B NVFP4A16 在 DGX Spark 上跑 **49.9 tok/s** — 比 BF16 快 2.6 倍，GPU 只佔 9.8 GB。這是 HuggingFace 上第一個 E4B NVFP4 checkpoint：[coolthor/Gemma-4-E4B-it-NVFP4A16](https://huggingface.co/coolthor/Gemma-4-E4B-it-NVFP4A16)。
 </TLDRCard>
 
-## 白話版：Gemma 4 E4B 量化
+## 白話版：把 Gemma 4 E4B 壓縮到能即時對話
 
-Gemma 4 是 Google 在 2026 年 4 月發布的開源 AI 模型家族，共四種大小：E2B（手機用）、E4B（桌機用）、26B MoE、31B dense。E4B 是桌機等級的 edge 模型 — 手機跑不動，但筆電和工作站輕鬆搞定。它能讀文字、看圖片、聽音訊，支援 128K tokens 的上下文（大約一本 300 頁的書）。
+Gemma 4 是 Google 2026 年 4 月發布的開源 AI 模型，有四個尺寸。E4B 是其中桌機等級的版本 — 手機跑不動，但筆電和工作站可以。它能讀文字、看圖片、聽音訊，一次能處理大約一本 300 頁書的內容。
 
-量化（Quantization）是一種 AI 模型壓縮技術。想像把高畫質照片轉成較小的檔案：你損失一些細節，但圖片還是看得清楚，而且載入速度快很多。NVFP4 是 NVIDIA 的 4-bit 量化格式 — 把模型裡每個數字從 16 bit 壓到 4 bit，記憶體用量減少，GPU 處理 token 的速度就更快。
+問題是：原始版本在我的 DGX Spark 上只跑 19 tok/s，打字聊天會覺得卡。我用 NVIDIA 的 4-bit 壓縮格式（NVFP4）把它壓小，速度直接拉到 50 tok/s — 足夠當本機 AI agent 用了。
 
-為什麼這很重要？在本機跑 AI 代表不用付雲端 API 費用、資料不會離開你的電腦、也沒有速率限制。但本機模型只有跑得夠快才有用。每秒 19 個 token 的 E4B 太慢，沒辦法即時對話。每秒 50 個 token 的 E4B，就能當一個可用的本機 AI agent。
-
-我在 NVIDIA DGX Spark 上把 Gemma 4 E4B 量化成 NVFP4，然後上傳到 HuggingFace — 這是全球第一個 E4B 的 NVFP4 量化版本。這篇文章記錄了完整的過程：三次失敗的嘗試、依賴衝突的地獄、以及最終的 benchmark 數據。
+這個壓縮版是全球第一個上傳 HuggingFace 的，過程踩了不少坑。這篇完整記錄。
 
 ---
 
 ## 前言
 
-最好的量化是你差點放棄的那個。三次失敗、兩個依賴衝突、一個前一天才 merge 的 PR — 這就是從 19 tok/s 到 50 tok/s 的路。
+量化這種事，最後成功的那次往往是你差點放棄的那次。
 
-這是 [Part 9：31B Dense — 7 tok/s](/zh-TW/blog/dgx-spark-gemma4-31b-dense-7-toks) 的後續。證明了 dense 模型在 GB10 上撞牆之後，問題轉向：小模型呢？Gemma 4 E4B 有個特殊架構 — Per-Layer Embedding (PLE) — 不是 dense 也不是 MoE。值得測。
+三次失敗、兩種依賴打架、靠一個前一天才 merge 的 PR 才過關 — 這就是 19 tok/s 變成 50 的真實路徑。
+
+[上一篇](/zh-TW/blog/dgx-spark-gemma4-31b-dense-7-toks)證明了 31B dense 模型在 GB10 上被頻寬卡死，只有 7 tok/s。既然大模型跑不動，那小模型呢？E4B 的架構比較特別 — 不是傳統的 dense，也不是 MoE — 值得測一下。
 
 ---
 
-## E4B 到底是什麼：PLE，不是 Dense，不是 MoE
+## E4B 長什麼樣：不是 Dense，不是 MoE，是 PLE
 
-多數討論叫 E4B「8B 模型」然後就沒了。這漏掉了它有趣的地方。
+大部分人看到 E4B 就說「喔，8B 模型」然後跳過。但它跟一般的 8B 差很多。
 
-E4B 用的是 **Per-Layer Embedding (PLE)**：42 層 decoder 每一層都有自己的 embedding table，把完整的 262K vocabulary 映射到 256 維向量。這些 table 很大 — 262,144 × 256 × 2 bytes × 42 層 = BF16 下 **5.4 GB** — 但它們只做 table lookup，不做矩陣乘法。
+E4B 用了一種叫 **PLE（Per-Layer Embedding）** 的架構：42 層 decoder，每一層都帶著自己的 embedding table，把 262K 個 vocabulary 對應到 256 維的向量。這些 table 加起來很大 — 262,144 × 256 × 2 bytes × 42 層 = BF16 下足足 **5.4 GB** — 但它們的用途只是查表，不跑矩陣乘法。
 
-每個 token 實際經過 Linear 層的 compute 大約只有 4B 參數。剩下的是查表。
+每個 token 真正經過 Linear 層計算的只有大約 4B 參數。剩下的全是查表。
 
 ```
 模型總量：15 GB (BF16)
-├── PLE embeddings:  5.4 GB（純 lookup）
-├── Decoder weights: 4.0 GB（真正的 compute）
+├── PLE embeddings:  5.4 GB（純查表）
+├── Decoder weights: 4.0 GB（真正在算的）
 ├── Word embedding:  1.3 GB（262K × 2560）
 ├── Vision encoder:  0.5 GB
 ├── Audio encoder:   0.3 GB
 └── 其他：           3.5 GB
 ```
 
-這對量化有什麼影響？壓縮 PLE table 省磁碟空間，但不太加速推論 — 因為它們本來就不是 compute 瓶頸。Linear 層才是。
+這對量化有什麼意義？壓縮 PLE table 能省硬碟空間，但對速度幫助不大 — 因為瓶頸本來就不在那裡。真正要壓的是 Linear 層。
 
 ---
 
 ## BF16 基線：19.2 tok/s
 
-先跑未量化的基線。E4B BF16 + vLLM：
+先跑原始版本當對照組。E4B BF16 + vLLM：
 
 ```bash
 docker run -d --name gemma4-e4b \
@@ -82,7 +82,7 @@ docker run -d --name gemma4-e4b \
   --gpu-memory-utilization 0.75
 ```
 
-3 輪，每輪 500 tokens：
+跑 3 輪，每輪生成 500 tokens：
 
 | 輪次 | tok/s |
 |------|-------|
@@ -90,13 +90,13 @@ docker run -d --name gemma4-e4b \
 | 2 | 19.2 |
 | 3 | 19.1 |
 
-穩定，但慢。餐巾紙算術預測了這個結果：就算只算每個 token 實際讀取的 ~10 GB（PLE lookup + decoder weights），10 GB ÷ 273 GB/s ≈ 37 ms/token ≈ 27 tok/s 理論值。27 和 19 的差距來自 PLE lookup pattern 不如 sequential weight read 高效。
+穩得不行，但就是慢。粗估一下就知道為什麼：每個 token 實際要讀的資料量大約 ~10 GB（PLE 查表 + decoder weights），10 GB ÷ 273 GB/s ≈ 37 ms/token ≈ 理論值 27 tok/s。實際只跑到 19，差距來自 PLE 的查表模式沒有連續讀取那麼高效 — 到處跳著讀，頻寬利用率打折。
 
 ---
 
-## FP8 Online：免費拿到 36 tok/s
+## FP8 Online：一個 flag 就快了一倍
 
-在造任何東西之前，先試零成本路線。vLLM 支援 online FP8 量化 — 加一個 flag，BF16 checkpoint 在載入時自動量化：
+在自己動手量化之前，先試最省事的路。vLLM 支援 online FP8 — 加一個參數，BF16 模型在載入的時候自動壓成 FP8：
 
 ```bash
 docker run -d --name gemma4-e4b-fp8 \
@@ -112,7 +112,7 @@ docker run -d --name gemma4-e4b-fp8 \
   --gpu-memory-utilization 0.75
 ```
 
-唯一的改變：`--quantization fp8`。不需要預量化 checkpoint，不需要 calibration data，不需要額外下載。
+就多了一行 `--quantization fp8`。不用另外下載 checkpoint，不用準備 calibration data。
 
 | 輪次 | tok/s |
 |------|-------|
@@ -120,17 +120,17 @@ docker run -d --name gemma4-e4b-fp8 \
 | 2 | 35.9 |
 | 3 | 35.9 |
 
-模型載入：11.4 GB（原本 15 GB）。速度翻倍，零額外工作。這就是 80/20 解法。
+記憶體從 15 GB 降到 11.4 GB。速度直接翻倍，什麼都不用額外做。如果你只想花 30 秒改善速度，這就是答案。
 
 但能不能再快？
 
 ---
 
-## NVFP4 嘗試：版本地獄
+## NVFP4：踩進版本地獄
 
-NVFP4A16（4-bit weights, 16-bit activations）應該能在 FP8 的基礎上再壓 2x。工具：[llm-compressor](https://github.com/vllm-project/llm-compressor)，vLLM 官方量化工具。
+NVFP4A16（4-bit weights, 16-bit activations）理論上能在 FP8 的基礎上再壓一倍。要用的工具是 [llm-compressor](https://github.com/vllm-project/llm-compressor)，vLLM 官方的量化工具。
 
-### 第一次：PyPI 安裝
+### 第一次嘗試：直接 pip install
 
 ```bash
 pip install llmcompressor
@@ -141,20 +141,20 @@ from transformers.modeling_utils import TORCH_INIT_FUNCTIONS
 ImportError: cannot import name 'TORCH_INIT_FUNCTIONS'
 ```
 
-Gemma 4 需要 `transformers>=5.5`（因為 `gemma4` model type）。llm-compressor PyPI 版 0.10.0.1 鎖定 `transformers<=4.57.6`。兩者不相容。強制升級 transformers 會打爛 llm-compressor 的 internal import。
+原因：Gemma 4 要 `transformers>=5.5`，但 llm-compressor 的 PyPI 版本釘死 `transformers<=4.57.6`。兩個裝在一起就打架。硬升 transformers 會把 llm-compressor 弄壞。
 
-### 第二次：`--no-deps` 繞路
+### 第二次嘗試：跳過依賴檢查
 
 ```bash
 pip install llmcompressor
 pip install --no-deps 'transformers>=5.5'
 ```
 
-同樣的錯誤。`TORCH_INIT_FUNCTIONS` 在 transformers 5.x 被移除了。PyPI 版的 llm-compressor 直接 reference 它。
+一樣炸。`TORCH_INIT_FUNCTIONS` 這個東西在 transformers 5.x 被拿掉了，但 PyPI 版的 llm-compressor 還在用它。
 
-### 第三次：Git Main
+### 第三次嘗試：裝 git main
 
-[PR #2561](https://github.com/vllm-project/llm-compressor/pull/2561) — 4 月 6 日 merge，測試的前一天 — 加了官方 Gemma 4 E4B NVFP4A16 範例並修了 transformers 5.x 相容性。
+[PR #2561](https://github.com/vllm-project/llm-compressor/pull/2561) 在 4 月 6 日 merge — 剛好是我測試的前一天。這個 PR 加了 Gemma 4 E4B 的官方 NVFP4A16 範例，順便修了 transformers 5.x 的相容性問題。
 
 ```bash
 pip install 'git+https://github.com/vllm-project/llm-compressor.git@main'
@@ -162,15 +162,15 @@ pip install --force-reinstall --no-deps 'transformers>=5.5' 'huggingface_hub>=0.
 pip install torchvision --index-url https://download.pytorch.org/whl/cu130
 ```
 
-安裝順序很重要。讓 llm-compressor 先拉完所有依賴，再精準替換 transformers 和 huggingface_hub。另外：Gemma 4 的 multimodal processor 需要 torchvision — 不跑不知道，跑了才噴 `Gemma4VideoProcessor requires the Torchvision library`。
+裝的順序不能亂。先讓 llm-compressor 把所有依賴拉齊，再用 `--force-reinstall --no-deps` 把 transformers 和 huggingface_hub 換成新版。另外，Gemma 4 的 multimodal processor 會用到 torchvision — 不裝的話跑到一半才噴 `Gemma4VideoProcessor requires the Torchvision library`，非常不直覺。
 
-這次成功了。
+終於過了。
 
 ---
 
-## NVFP4A16 量化：2 分鐘
+## 量化本身：2 分鐘搞定
 
-工具鏈搞定後，量化本身毫無波瀾：
+工具裝好之後，量化反而是最無聊的一步：
 
 ```python
 from transformers import AutoModelForImageTextToText, AutoProcessor
@@ -201,13 +201,13 @@ model.save_pretrained("gemma4-e4b-nvfp4", save_compressed=True)
 processor.save_pretrained("gemma4-e4b-nvfp4")
 ```
 
-379 個 Linear 層被量化。Sanity check generation：`"Hello! It's nice to meet you. What is your name?"` — 連貫、正常。
+379 個 Linear 層完成量化。試跑一下確認沒壞：`"Hello! It's nice to meet you. What is your name?"` — 回答連貫，沒有亂碼。
 
-NVFP4A16 是 weight-only 且 data-free。不需要 calibration dataset。`ignore` 列表跳過 vision/audio encoder 和 embeddings — 這些不是太小就是 lookup table，量化它們沒意義。
+NVFP4A16 是 weight-only 量化，不需要 calibration dataset。`ignore` 裡面列的是 vision/audio encoder 和 embeddings — 這些要嘛太小，要嘛是查表用的 PLE，壓了也沒幫助。
 
 ---
 
-## 結果：49.9 tok/s
+## 跑分：49.9 tok/s
 
 ```bash
 docker run -d --name gemma4-e4b-nvfp4 \
@@ -223,7 +223,7 @@ docker run -d --name gemma4-e4b-nvfp4 \
   --gpu-memory-utilization 0.75
 ```
 
-模型載入：**9.8 GB**（BF16 原本 15 GB，FP8 11.4 GB）。
+記憶體佔用：**9.8 GB**（BF16 原本 15 GB，FP8 是 11.4 GB）。
 
 | 輪次 | Tokens | 時間 | tok/s |
 |------|--------|------|-------|
@@ -231,69 +231,69 @@ docker run -d --name gemma4-e4b-nvfp4 \
 | 2 | 500 | 10.01s | 49.9 |
 | 3 | 500 | 10.03s | 49.8 |
 
-### 全貌
+### 三種格式一次看完
 
-| 格式 | GPU 佔用 | tok/s | 相對 |
-|------|---------|-------|------|
+| 格式 | GPU 佔用 | tok/s | 對比 BF16 |
+|------|---------|-------|----------|
 | BF16 | 15.0 GB | 19.2 | 1.0x |
 | FP8 online | 11.4 GB | 36.0 | 1.9x |
 | **NVFP4A16** | **9.8 GB** | **49.9** | **2.6x** |
 
-### 品質驗證
+### 品質有沒有掉？
 
 | 測試 | 結果 |
 |------|------|
-| 長輸出（1000 tokens） | 49.8 tok/s，無退化 |
-| 並發（3 parallel） | 每個 52.7 tok/s，合計 158 tok/s |
-| 中文（繁體） | 流暢解釋 BPS 策略 |
-| 數學推理 | Put spread 最大獲利/虧損計算正確 |
-| 程式碼生成 | Black-Scholes 完整且正確 |
-| Structured Output (JSON) | 格式正確 |
-| 重複退化（數到 50） | 無重複、無 garbage |
+| 長輸出（1000 tokens） | 49.8 tok/s，沒退化 |
+| 同時 3 個 request | 每個 52.7 tok/s，合計 158 tok/s |
+| 繁體中文 | 流暢解釋 BPS 策略 |
+| 數學 | Put spread 最大獲利/虧損算對 |
+| 寫程式 | Black-Scholes 完整且能跑 |
+| JSON 輸出 | 格式正確 |
+| 數到 50 | 沒重複、沒亂碼 |
 
 ---
 
-## 為什麼這很重要：Executor 架構
+## 這個速度能拿來幹嘛：雙模型 Agent 架構
 
-測試 E4B 的動機不只是 benchmark。是在驗證一個 agent 架構假說：
+測 E4B 不只是為了跑分好看。我在驗證一個 agent 架構的想法：
 
 ```
-E4B NVFP4 (50 tok/s, local, 免費)
-  → 處理 95% 的 routine agent 任務
-  → 讀檔、跑指令、parse output
+E4B NVFP4 (50 tok/s, 本機, 免費)
+  → 負責 95% 的日常任務
+  → 讀檔案、跑指令、整理 output
 
-26B-A4B NVFP4 (52 tok/s, local, 免費)
-  → 複雜推理的 fallback
-  → 只在 E4B escalate 時出場
+26B-A4B NVFP4 (52 tok/s, 本機, 免費)
+  → 負責需要深度推理的 5%
+  → 只在 E4B 搞不定的時候出場
 ```
 
-兩個模型同時放在一台 DGX Spark 上。E4B 9.8 GB + 26B 16.5 GB = 26.3 GB，剩 ~100 GB 給 KV cache。同時跑時頻寬競爭會把速度拉低（26B 降到 ~31 tok/s，E4B ~18 tok/s）— 但在 sequential executor 模式下每次只有一個跑，各自拿到完整頻寬。
+兩個模型可以同時塞進一台 DGX Spark。E4B 佔 9.8 GB + 26B 佔 16.5 GB = 26.3 GB，剩下 ~100 GB 給 KV cache。如果兩個同時跑會搶頻寬（26B 降到 ~31 tok/s，E4B ~18 tok/s），但如果設計成輪流跑（sequential executor），每個都能拿到完整頻寬。
 
-如果 95% 的 agent 操作是 routine（讀檔、執行指令、parse output），用 50 tok/s 的 local 模型跑而不是打 cloud API，省延遲也省成本。需要深度推理的 5% escalate 到 26B — 也是 local，也是免費。
+邏輯很簡單：95% 的 agent 操作是 routine 的（讀個檔案、跑個指令、parse 一下 output），用 50 tok/s 的本機模型跑就好，不用為這些小事打 cloud API。真的需要動腦的 5% 才交給 26B — 也是本機，也不花錢。
 
-缺的那一塊：E4B 的 tool calling 準確度夠不夠當可靠的 executor。這是下一個實驗。
-
----
-
-## 這次學到什麼
-
-### 最花時間的事
-
-llm-compressor 版本地獄。三次嘗試、三種不同的失敗模式（`TORCH_INIT_FUNCTIONS` import、`huggingface_hub` 不相容、缺 `torchvision`）。實際量化花了 2 分鐘。依賴解決花了一小時。最後的解法 — 從 git main 裝、force-replace transformers — 只有效是因為 PR #2561 前一天才 merge。
-
-### 可遷移的診斷經驗
-
-- **FP8 online 是 80/20 解法。** 在 vLLM 加 `--quantization fp8` 就能把任何 BF16 模型速度翻倍，零額外工作。永遠先試這個。
-- **PLE 架構量化不一樣。** 5.4 GB 的 embedding table 不像 Linear 層那樣受益於 weight 量化。模型大小降幅比預期小（BF16 15 GB → FP8 11.5 GB，不是你對傳統 8B 模型預期的 7.5 GB）。
-- **當 PyPI 落後 git main 時**，先讓 package 拉完所有依賴，再用 `--force-reinstall --no-deps` 精準替換衝突的包。不要對主 package 用 `--no-deps` — 會漏掉間接依賴。
-
-### 放之四海皆準的模式
-
-最高槓桿的優化往往是不用換 checkpoint 就能用的。`--quantization fp8` 之於模型服務，就像 `--release` 之於編譯語言 — 一個你應該永遠開著的 flag，例外很少。
+還缺的那一塊：E4B 的 tool calling 準確度到底夠不夠格當 executor。這是下一個要測的。
 
 ---
 
-## 拿模型
+## 帶走這些
+
+### 最花時間的不是量化
+
+量化本身 2 分鐘就跑完了。花掉一小時的是 llm-compressor 的版本地獄 — 三次嘗試、三種炸法（`TORCH_INIT_FUNCTIONS` 被移除、`huggingface_hub` 版本打架、少裝 `torchvision`）。最後能過完全是因為 PR #2561 剛好前一天 merge。
+
+### 下次遇到類似問題可以直接用的經驗
+
+- **FP8 online 永遠先試。** vLLM 加 `--quantization fp8`，任何 BF16 模型都能速度翻倍，什麼都不用準備。這是投報率最高的一步。
+- **PLE 架構不能用一般 8B 的直覺去算。** 5.4 GB 的 embedding table 壓了也不會變快，因為它本來就不是計算瓶頸。所以模型大小從 15 GB → 11.5 GB（FP8），不是你對一般 8B 模型預期的 7.5 GB。
+- **PyPI 追不上 git main 的時候**，先讓 package 把所有依賴裝齊，再用 `--force-reinstall --no-deps` 精準換掉衝突的那幾個。千萬不要對主 package 用 `--no-deps`，會漏掉一堆間接依賴。
+
+### 通用原則
+
+最有效的優化通常是不用換 checkpoint 就能做的。`--quantization fp8` 對模型部署來說，就像編譯程式時開 `--release` — 幾乎沒有理由不開。
+
+---
+
+## 下載模型
 
 Checkpoint 在 HuggingFace：[coolthor/Gemma-4-E4B-it-NVFP4A16](https://huggingface.co/coolthor/Gemma-4-E4B-it-NVFP4A16)
 
@@ -304,7 +304,7 @@ vllm serve coolthor/Gemma-4-E4B-it-NVFP4A16 \
   --max-model-len 16384
 ```
 
-或者用 FP8（不需要額外下載）：
+不想下載的話，FP8 online 也很好用：
 
 ```bash
 vllm serve google/gemma-4-E4B-it \
@@ -315,4 +315,4 @@ vllm serve google/gemma-4-E4B-it \
 
 ---
 
-同系列文章：[Part 7：Gemma 4 26B-A4B 52 tok/s](/zh-TW/blog/dgx-spark-gemma4-26b-nvfp4-52-toks) · [Part 8：vLLM vs Ollama](/zh-TW/blog/dgx-spark-vllm-vs-ollama-same-model) · [Part 9：31B Dense — 7 tok/s](/zh-TW/blog/dgx-spark-gemma4-31b-dense-7-toks)
+同系列：[Part 7：Gemma 4 26B-A4B 52 tok/s](/zh-TW/blog/dgx-spark-gemma4-26b-nvfp4-52-toks) · [Part 8：vLLM vs Ollama](/zh-TW/blog/dgx-spark-vllm-vs-ollama-same-model) · [Part 9：31B Dense — 7 tok/s](/zh-TW/blog/dgx-spark-gemma4-31b-dense-7-toks)
