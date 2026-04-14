@@ -154,7 +154,7 @@ ollama ps  # 確認：100% GPU
 - 在統一記憶體架構上（GB10、Apple Silicon），CPU/GPU split 特別痛 — 記憶體是物理共享的，效能差距純粹來自計算路徑不同。
 - Docker container stop 後應該會釋放 GPU memory，但 Ollama 的記憶體估算可能沒有立刻反映。container stop 和模型載入之間加個短暫 sleep 有幫助。
 
-### 放之四海皆準的模式
+### 通用原則
 
 最快的 runtime 是那個在模型權重和計算單元之間消除最多 overhead 的。格式專用 kernel（Marlin）贏過通用 dequant 路徑（GGUF），跟手寫 SQL 贏 ORM 是一樣的道理 — 抽象層有成本，在 52 tok/s 的尺度上，那個成本是 30%。
 

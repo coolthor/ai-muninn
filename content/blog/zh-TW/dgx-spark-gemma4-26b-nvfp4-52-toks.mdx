@@ -182,7 +182,7 @@ Phase 0 研究，不是部署本身。vLLM 0.19 的 SM121 修復（[#37725](http
 - `vllm/vllm-openai:gemma4` 和 `vllm/vllm-openai:gemma4-cu130` 是不同 image、不同 vLLM 版本。Tag 命名不代表前者是後者的子集。永遠用 `docker images` 確認。
 - Ollama 的 CPU/GPU split 是靜默的。同一個模型上次跑 40 tok/s 這次跑 16 tok/s，多半是 split 問題，不是模型問題。
 
-### 放之四海皆準的模式
+### 通用原則
 
 部署前先算數學。31B 參數 × 2 bytes (BF16) ÷ 273 GB/s = 每個 token 227 ms = 理論最大 4.4 tok/s。不管量化技巧多高明，dense 模型在頻寬受限的晶片上就是這個速度。
 

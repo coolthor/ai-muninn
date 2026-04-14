@@ -41,7 +41,7 @@ Gemma 4 31B dense NVFP4 在 DGX Spark 上跑 **7.0 tok/s** — 跟社群 benchma
 
 ## 先算數學
 
-開跑之前，餐巾紙算術：
+開跑之前，粗估一下：
 
 ```
 31B 參數 × 2 bytes (BF16) = 62 GB
@@ -140,11 +140,11 @@ MoE 繞過這個問題：每個 token 讀更少的權重。Gemma 4 26B-A4B activ
 
 ### 可遷移的診斷經驗
 
-- 餐巾紙算術（`參數 × bytes_per_param ÷ 頻寬 = time_per_token`）對頻寬受限硬體上的 dense 模型精確到 60% 以內。夠做 go/no-go 決策，不需要先下載 31 GB 模型。
+- 粗估一下（`參數 × bytes_per_param ÷ 頻寬 = time_per_token`）對頻寬受限硬體上的 dense 模型精確到 60% 以內。夠做 go/no-go 決策，不需要先下載 31 GB 模型。
 - 跑出 7.0 tok/s 且跨 3 輪零波動 — 這是頻寬飽和工作負載的特徵。如果波動接近零，瓶頸是物理，不是軟體。
 - Dense 模型在 GB10 上只有一種情境成立：你需要品質差異且能接受延遲 — 例如 batch processing，throughput per token 不是重點。
 
-### 放之四海皆準的模式
+### 通用原則
 
 當硬體頻寬是限制時，正確的回應是減少每次推論讀取的位元組 — 不是把同樣的位元組壓得更小。MoE 從架構層面做到這件事。Speculative decoding 透過分攤 draft token 成本做到。量化有幫助，但在同一個架構類別內，它是常數因子，不是逃生門。
 
