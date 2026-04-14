@@ -1,11 +1,475 @@
 # ai-muninn — Full Site Content
 # https://ai-muninn.com
-# Generated: 2026-04-13
-# Articles: 47
+# Generated: 2026-04-14
+# Articles: 50
 
 This file contains the full text of all articles on ai-muninn.com.
 It is intended for AI tools that need complete site context.
 For the article index only, see /llms.txt.
+
+---
+
+# [Ask AI Right] The Art of Follow-Up Questions — What to Do When the First Answer Is Too Shallow
+URL: https://ai-muninn.com/en/blog/ai-ask-right-follow-up-questions
+Date: 2026-04-14
+Series: Ask AI Right (Part 6)
+
+<VideoEmbed src="/videos/ai-ask-right-follow-up.mp4" />
+
+
+The first answer AI gives you is a rough draft. The quality lives in the follow-ups: add constraints, ask for comparisons, challenge the answer, and — most powerful of all — ask AI what information it needs from you. Two to four follow-up messages routinely turn a generic response into something genuinely useful.
+
+
+## Plain-Language Version: Why the first answer is never the best one
+
+When you ask AI a question and get a response, that response is based on guessing what you probably mean. AI doesn't know your situation, your skill level, your constraints, or what you've already tried. It gives you the safest, most general answer it can — which usually means a shallow one.
+
+According to research from [Wharton professor Ethan Mollick](https://www.oneusefulthing.org/p/getting-started-with-ai-good-enough), the biggest gap between casual AI users and power users isn't technical skill — it's the willingness to have a conversation instead of expecting one perfect answer. The people who get the most from AI treat it like a back-and-forth discussion, not a search engine.
+
+This article teaches you five specific follow-up techniques. None of them require any technical knowledge. All of them work with ChatGPT, Claude, Gemini, or any other AI assistant you use.
+
+---
+
+## Preface
+
+Imagine you walk into a restaurant and tell the waiter: "Bring me something good." You'll get a dish that's fine — probably their most popular item. But it might not match your mood, your dietary needs, or what you're craving.
+
+Now imagine you say: "I'm in the mood for something spicy, not too heavy, and I don't eat shellfish." Completely different result. Same kitchen, same chef — but a better order because you gave them something to work with.
+
+AI works the same way. The first answer is "something good." The follow-ups are where you tell it what you actually want.
+
+In the [last article](/en/blog/ai-ask-right-does-it-exist), we talked about using AI as a research assistant to find existing tools. This one is about a more fundamental skill: the back-and-forth. How to take any AI answer — whether it's research, advice, writing help, or problem-solving — and make it dramatically better with a few follow-up messages.
+
+---
+
+## Why the first answer is almost always too shallow
+
+This isn't AI being lazy. It's AI being cautious.
+
+When you ask "How do I start a small business?" — AI doesn't know if you're a college student with $500, a retired professional with $50,000, if you're in Taipei or Toronto, if you want an online store or a physical shop, or if you've already tried and failed once.
+
+So it gives you the answer that works for the most people: a safe, broad overview. Something like "First, identify your target market. Then write a business plan. Register your business..."
+
+That's not wrong. It's just not useful *to you specifically*. And the only way AI can give you a better answer is if you tell it more — through follow-up questions.
+
+Here are five techniques that work every time.
+
+---
+
+## Technique 1: Add constraints
+
+The simplest and most effective follow-up. Tell AI what the answer should look like.
+
+**Without constraints:**
+> "How do I learn photography?"
+→ Gets a 10-paragraph essay covering cameras, composition, lighting, editing, online courses, and practice tips. Technically correct, practically overwhelming.
+
+**With constraints:**
+> "I have a smartphone, no budget, and 30 minutes a day. Give me a 2-week beginner plan for learning photography — just the first steps, nothing about gear."
+→ Gets a focused, day-by-day plan using only a phone. Immediately actionable.
+
+Here are constraint types you can mix and match:
+
+- **Length:** "in 300 words or less" / "in 3 bullet points"
+- **Audience:** "explain it to a 10-year-old" / "assume I'm a complete beginner"
+- **Scope:** "only talk about [specific thing]" / "skip the basics, I already know those"
+- **Format:** "give me a comparison table" / "just the pros and cons" / "as a checklist"
+- **Context:** "I'm in Taiwan" / "I work from home" / "my budget is $0"
+
+You don't need all of them. Even one constraint transforms the answer.
+
+---
+
+## Technique 2: Ask for comparisons
+
+When AI recommends something, don't just accept it. Ask it to compare.
+
+**Without comparison:**
+> "What's a good note-taking app?"
+→ "Notion is a popular choice. It offers flexible databases, templates, and collaboration features."
+
+That tells you nothing about whether Notion is right for *you*. So follow up:
+
+**With comparison:**
+> "Compare Notion, Apple Notes, and Obsidian for a freelancer who just wants quick notes on their phone. Pros, cons, and who each one is best for."
+
+Now you get a decision table. You see that Apple Notes wins on speed and simplicity, Notion wins on structure, and Obsidian wins on privacy and ownership. You pick based on what matters to you — not based on what's popular.
+
+**Pro tip:** You can also ask for comparisons between approaches, not just tools:
+
+> "I want to improve my English. Compare taking an online course vs using a language exchange app vs practicing with AI. Which gets results fastest for someone who can spend 20 minutes a day?"
+
+---
+
+## Technique 3: Ask AI to ask you questions
+
+This is the single most underused technique, and it's the most powerful.
+
+Instead of trying to anticipate what AI needs to know, just ask:
+
+> "I want to plan a weekend trip. Before you give me suggestions — what information do you need from me to give a really good answer?"
+
+AI will come back with something like:
+
+> "To give you better suggestions, I'd like to know:
+> 1. Where are you located?
+> 2. How far are you willing to travel?
+> 3. What's your budget?
+> 4. Are you traveling solo, with a partner, or with kids?
+> 5. Do you prefer nature, cities, or cultural experiences?
+> 6. Any dietary restrictions or accessibility needs?"
+
+Answer those questions, and the next recommendation will be dramatically more specific than anything you'd have gotten from a cold start.
+
+This works for almost anything:
+
+- "I want to change careers. What do you need to know about me to give useful advice?"
+- "I need to write a cover letter. Before you draft one, what should you know about the job and my experience?"
+- "I want to pick a laptop. Ask me questions first so your recommendation actually fits."
+
+You're essentially saying: *I don't know what I don't know — help me figure out what matters.*
+
+---
+
+## Technique 4: Challenge the answer
+
+AI tends to be agreeable. It gives you a solution and doesn't mention the downsides unless you ask. So ask.
+
+After getting any recommendation or advice, try:
+
+> "What are the downsides of this approach?"
+
+> "What could go wrong if I follow this advice?"
+
+> "Is there a counter-argument or a different school of thought?"
+
+> "What would someone who disagrees with you say?"
+
+**Example:**
+
+First message:
+> "Should I learn Python or JavaScript first?"
+
+AI says Python — easier syntax, great for beginners, versatile.
+
+Challenge:
+> "What would someone who recommends JavaScript over Python say? What are Python's weaknesses for a beginner?"
+
+Now you get the other side: JavaScript is more immediately visual (you see results in a browser), has a bigger job market in some regions, and Python's simplicity can actually hide important concepts you'll need later.
+
+With both sides, you make a better decision than with either alone.
+
+---
+
+## Technique 5: Iterate — the first answer is a rough draft
+
+Think of your first message as a rough draft of your question, and AI's first answer as a rough draft of the response. Neither is the final version.
+
+Here's what iteration looks like in practice:
+
+**Round 1:**
+> "Help me write an email to my landlord about a broken heater."
+
+AI writes a polite, generic email.
+
+**Round 2:**
+> "Make it shorter — just 3 sentences. And make the tone more direct. The heater has been broken for two weeks and I've already asked once."
+
+AI rewrites: shorter, more assertive, mentions the timeline.
+
+**Round 3:**
+> "Good, but add that I'd like a response by Friday, and mention that the lease requires working heating."
+
+AI adds the deadline and the lease reference.
+
+Three rounds. Each one took 15 seconds to write. The final email is exactly right — specific to your situation, in your tone, with the right details. The first draft would have been forgettable.
+
+This applies to everything: meal plans, travel itineraries, project proposals, study guides. The pattern is always the same — start broad, then narrow with each round.
+
+---
+
+## Before and after: the full difference
+
+Let's see the complete contrast — the same need, handled two different ways.
+
+### Someone planning their first vegetable garden
+
+**The one-message approach:**
+> "How do I start a vegetable garden?"
+
+AI gives a 800-word overview: choose a sunny spot, test your soil, decide between raised beds and ground planting, here are 15 vegetables to consider, watering schedule, composting basics...
+
+Technically helpful. Practically overwhelming. You close the tab.
+
+**The follow-up approach:**
+
+> "How do I start a vegetable garden?"
+
+*(Gets the same overview)*
+
+> "I live in an apartment with a balcony that gets about 4 hours of sun. I've never grown anything. What are the 3 easiest things I can grow in containers?"
+
+*(Gets: cherry tomatoes, basil, lettuce. With container size and specific instructions.)*
+
+> "I'm in a subtropical climate — does that change anything?"
+
+*(Gets adjusted advice: lettuce prefers cooler months, add sweet potato leaves as a better alternative.)*
+
+> "What are the most common beginner mistakes for balcony gardening?"
+
+*(Gets: overwatering, too-small containers, not enough drainage holes. Specific to your situation.)*
+
+Four messages. Each one took seconds. The result is a personalized, actionable plan instead of a generic encyclopedia entry.
+
+---
+
+## When to stop following up
+
+Not every question needs four rounds. Here's a quick guide:
+
+**One message is enough when:**
+- You need a simple fact ("What year was [movie] released?")
+- You need a quick format conversion ("Convert this to bullet points")
+- The first answer nails it
+
+**Follow up when:**
+- The answer is too generic (add constraints)
+- You're making a decision (ask for comparison)
+- You're not sure what to ask (let AI ask you)
+- The answer sounds too good (challenge it)
+- The answer is close but not quite (iterate)
+
+---
+
+## Try this today
+
+Pick something you've been meaning to ask AI about — anything at all. Ask your first question as you normally would. Then, before accepting the answer, try just one of these follow-ups:
+
+1. Add one constraint: "Now assume I'm a beginner with no budget."
+2. Ask for a comparison: "How does this compare to [alternative]?"
+3. Flip the conversation: "What do you need to know about me to give a better answer?"
+4. Challenge it: "What could go wrong with this approach?"
+5. Iterate: "Good start. Now make it shorter/more specific/more practical."
+
+You'll be surprised how much better the second answer is.
+
+---
+
+## One sentence
+
+**The first answer AI gives you is a rough draft — the quality you're looking for lives in the follow-up questions you ask next.**
+
+Next up: AI is incredibly useful, but it has real limits. How do you know when to trust an answer and when to double-check? We'll talk about hallucinations, outdated information, and knowing AI's boundaries.
+
+*This is Part 6 of the "[Ask AI Right](/en/blog/ai-ask-right-which-ai-to-use-2026)" series. Previous: [Before You Build It, Ask: Does This Already Exist?](/en/blog/ai-ask-right-does-it-exist).*
+
+---
+
+# [LLM 101] Context Window — How Much Can AI Read at Once?
+URL: https://ai-muninn.com/en/blog/llm-101-context-window
+Date: 2026-04-14
+Series: LLM 101 (Part 5)
+
+<VideoEmbed src="/videos/llm-101-context-window.mp4" />
+
+
+A context window is **how much text an AI can see at once** — think of it as the size of its desk. GPT-4o's desk holds ~96K words, Claude's holds ~150K words (up to 750K in extended mode), and Gemini's holds ~1.5M words. When the desk is full, older messages **fall off** and the AI can't see them anymore. It's not forgetting — it literally can't read what's no longer on the desk. To work around this: start fresh conversations, break big tasks into pieces, and paste key context at the top.
+
+
+## Plain-Language Version: Why AI loses track of your conversation
+
+You've probably had this happen: you're 30 messages into a conversation with ChatGPT or Claude, and suddenly the AI gives you an answer that contradicts what you agreed on ten messages ago. Or it asks you a question you already answered. It feels like the AI has short-term memory loss.
+
+It does, in a way. But not because it's broken — because it has a **desk**, and the desk is only so big.
+
+This article explains what that desk is, how big it is for different AI models, what fills it up, and how to keep your conversations productive even when the desk overflows.
+
+---
+
+## Preface
+
+Imagine you're working at a desk. You have a stack of papers — your notes, your boss's email, the spreadsheet, the reference document. As long as everything fits on the desk, you can glance at any page. But the desk has a fixed size. Once it's full, you have to slide the oldest pages off the edge to make room for new ones.
+
+You don't lose the ability to understand those old pages. If someone put them back on the desk, you'd read them just fine. The problem is simple: **they're not on the desk anymore, so you can't see them.**
+
+This is exactly how AI context windows work.
+
+Last article was about [quantization — how AI models get compressed to fit on your computer](/en/blog/llm-101-what-is-quantization). This one tackles a different kind of "fitting": how much text the model can look at while it's thinking.
+
+---
+
+## What is a context window?
+
+Every time you send a message to an AI model, the model doesn't just read your latest message. It re-reads **the entire conversation from the top** — your first message, its first reply, your second message, its second reply, all the way down to what you just typed. Then it generates a response.
+
+The **context window** is the maximum size of everything it can re-read. Think of it as the total number of words that can fit on the desk at once.
+
+But AI models don't count words. They count **tokens**.
+
+### Quick detour: what's a token?
+
+A token is how AI models break text into bite-sized pieces. It's not exactly a word and not exactly a character — it's somewhere in between.
+
+Rules of thumb:
+- **English**: 1 token is roughly 3/4 of a word. "The cat sat on the mat" is about 6 tokens.
+- **Chinese / Japanese / Korean**: 1 token is roughly 1/2 to 1 character, depending on the model.
+- **Code**: brackets, indentation, and keywords all cost tokens. A short Python function might be 50-100 tokens.
+- **Spaces and punctuation** count too.
+
+So when someone says "128K context window," they mean the model can hold 128,000 tokens at once — roughly 96,000 English words. That's a 300-page book.
+
+For the rest of this article, I'll use "words" loosely, but know that the actual currency is tokens.
+
+---
+
+## How big is the desk?
+
+Here are the context window sizes for popular models as of early 2026:
+
+| Model | Context window | Roughly how many words |
+|-------|---------------|----------------------|
+| **GPT-4o** (OpenAI) | 128K tokens | ~96,000 words |
+| **Claude Sonnet/Opus** (Anthropic) | 200K tokens | ~150,000 words |
+| **Claude** (extended) | 1M tokens | ~750,000 words |
+| **Gemini 2.5 Pro** (Google) | 1M tokens | ~750,000 words |
+| **Gemini 2.5 Pro** (extended) | 2M tokens | ~1,500,000 words |
+| **Llama 4 Scout** (Meta, local) | 10M tokens | ~7,500,000 words |
+| **Qwen3 14B** (local via Ollama) | 32K-128K tokens | ~24,000-96,000 words |
+| **Smaller local models** (7B-8B) | 8K-32K tokens | ~6,000-24,000 words |
+
+A few things stand out:
+
+1. **Cloud models have much bigger desks than local ones.** Running a model on your laptop typically gives you 8K-128K tokens. Cloud services offer 128K to 2M.
+2. **The numbers keep growing.** Two years ago, 4K was standard. Now 128K is the baseline for major cloud models.
+3. **Bigger isn't always better.** We'll get to why in a moment.
+
+---
+
+## What fills up the desk?
+
+This is the part people underestimate. Your desk space isn't just your messages. It's **everything**:
+
+1. **Your messages** — every question you've asked in this conversation
+2. **The AI's replies** — every response the AI has given (these are often longer than your messages!)
+3. **System instructions** — behind the scenes, the app you're using often sends a block of instructions telling the AI how to behave. You never see this, but it sits on the desk permanently. This can range from a few hundred tokens (simple chatbot) to thousands (complex assistants with tools).
+4. **Uploaded files** — if you paste a document, PDF, or code file into the chat, the entire thing goes on the desk.
+5. **Tool outputs** — if the AI searches the web or runs code, the results land on the desk too.
+
+Here's a rough example of desk usage for a typical conversation:
+
+| What | Tokens |
+|------|--------|
+| System instructions | ~2,000 |
+| Your 5 messages | ~1,500 |
+| AI's 5 replies | ~4,000 |
+| Document you uploaded | ~8,000 |
+| **Total on the desk** | **~15,500** |
+
+With a 128K window, you have plenty of room. But watch what happens after 50 back-and-forth messages with long AI replies — you can easily burn through 60,000-80,000 tokens. And if you uploaded a long document at the start, even faster.
+
+---
+
+## What happens when the desk overflows?
+
+Different AI services handle overflow differently, but the most common strategy is simple: **the oldest messages get pushed off the desk.**
+
+You don't get a warning. The AI just can't see your early messages anymore. If you agreed on a set of rules in message #3 and you're now on message #40, those rules may have fallen off the desk. The AI isn't being disobedient — it genuinely can't see them.
+
+Some services are smarter about this (summarizing old messages instead of dropping them entirely, or letting you "pin" important context), but the fundamental limit remains: the desk is only so big.
+
+---
+
+## The "lost in the middle" problem
+
+Here's something counterintuitive: even when everything fits on the desk, the AI doesn't pay equal attention to all of it.
+
+Researchers at Stanford and UC Berkeley found that AI models are much better at using information placed at the **beginning** or the **end** of the context window, and worse at using information buried in the **middle**. They called this the ["lost in the middle"](https://arxiv.org/abs/2307.03172) problem.
+
+Think of it like a desk stacked with papers. You naturally pay more attention to the page on top (the most recent) and the first page you read (the beginning). The pages in the middle get less attention.
+
+This has practical implications:
+
+- **Put your most important instructions first.** If you're telling the AI "always respond in bullet points," say it at the top, not buried after three paragraphs of context.
+- **Repeat key points near the end.** If you set up something critical early in the conversation, remind the AI about it in your latest message.
+- **Bigger window ≠ better answers.** Dumping a 200-page document into the chat and asking a question about page 97 may give worse results than giving the AI just the relevant pages. More context can actually *hurt* if the important bits get drowned out.
+
+---
+
+## Local models: smaller desks
+
+If you're running AI on your own computer using Ollama (covered in [Part 1](/en/blog/llm-101-ollama-vs-vllm)), the context window is typically smaller — and it has a direct cost.
+
+**Why?** The context window requires working memory (RAM or GPU memory) beyond what the model itself uses. This working memory — technically called the "KV cache" — grows linearly with context length. Double the context window, double the working memory.
+
+For a local 14B model at Q4_K_M (about 9 GB for the model itself):
+
+| Context length | Extra memory needed | Total memory |
+|---------------|-------------------|-------------|
+| 8K tokens | ~0.5 GB | ~9.5 GB |
+| 32K tokens | ~2 GB | ~11 GB |
+| 128K tokens | ~8 GB | ~17 GB |
+
+That extra 8 GB at 128K context is why many local setups default to shorter context windows. If you have 16 GB of RAM and the model takes 9 GB, you only have 7 GB left — enough for 32K context but not 128K.
+
+This is a real tradeoff when running models locally. Cloud services absorb this cost for you, which is one reason they can offer much larger context windows.
+
+---
+
+## Practical tips: working around the desk limit
+
+**1. Start a new conversation when the current one gets long.**
+
+This is the simplest and most effective strategy. If you've been chatting for 30+ messages and the AI starts losing track, just start fresh. Copy-paste the key decisions or context from the old conversation into your first message in the new one.
+
+**2. Front-load important context.**
+
+Put the most important information — your requirements, constraints, key decisions — at the very beginning of the conversation. This takes advantage of both the "beginning gets more attention" effect and ensures it's the last thing to fall off the desk if the conversation gets long.
+
+**3. Break big tasks into smaller ones.**
+
+Instead of "write me a complete marketing strategy for 2026," try:
+- Conversation 1: "Analyze our competitors" (paste competitor data)
+- Conversation 2: "Draft a positioning statement" (paste the analysis from conversation 1)
+- Conversation 3: "Create a quarterly action plan" (paste the positioning statement)
+
+Each conversation gets a clean desk with exactly the context it needs.
+
+**4. Repeat key points when they matter.**
+
+If you set up a rule 20 messages ago ("use American English, not British") and the AI starts drifting, don't just correct it — repeat the full rule. The AI may no longer be able to see the original instruction.
+
+**5. Be aware of what's consuming desk space.**
+
+Long AI responses eat desk space fast. If you don't need a detailed explanation, ask for a concise answer. If you uploaded a big document, consider extracting just the relevant section instead of the whole thing.
+
+---
+
+## Common misconceptions
+
+**"AI has memory like a human."** No. Each time the AI responds, it re-reads the entire conversation from scratch. There is no persistent memory between messages (some apps add memory features on top, but the model itself starts from the desk contents every single time).
+
+**"A bigger context window means a smarter AI."** No. Context window size and intelligence are independent. A model with a 2M token window isn't "smarter" than one with 128K — it can just see more text at once. And as we saw with the "lost in the middle" problem, seeing more text doesn't guarantee *understanding* more text.
+
+**"If the AI contradicts itself, it's lying."** Usually not. The most common reason for contradictions in long conversations is that the relevant context fell off the desk. The AI is answering consistently with what it can still see — it just can't see the thing it's contradicting.
+
+**"I should always use the model with the biggest context window."** Not necessarily. Bigger windows cost more (in money for cloud models, in memory for local ones). If your task fits in 32K tokens, using a 1M window model doesn't help — it just costs more per message.
+
+---
+
+## One sentence
+
+**The context window is AI's desk: it can only hold so many pages, and when it's full the oldest ones fall off — so start fresh conversations, front-load key context, and break big tasks into pieces.**
+
+Next up: we'll explore how AI models actually generate text — what's happening behind the scenes when the AI "writes" its answer word by word.
+
+*This is Part 5 of the "[LLM 101](/en/blog/llm-101-ollama-vs-vllm)" series. Previous: [What Is Quantization? Q4, Q8, FP16 Explained](/en/blog/llm-101-what-is-quantization).*
+
+---
+
+**Further reading:**
+- [Anthropic's documentation on context windows](https://docs.anthropic.com/en/docs/build-with-claude/context-windows) — technical details on how Claude handles long conversations
+- ["Lost in the Middle" paper (Liu et al., 2023)](https://arxiv.org/abs/2307.03172) — the research behind why AI attention fades in the middle of long inputs
+- For a technical angle on how tokens translate into real costs, see our [Token Burn Rate](/en/blog/dev-workflow-token-burn-rate) analysis
 
 ---
 
@@ -1201,6 +1665,218 @@ Every data point has a full article behind it:
 
 ---
 
+# [AI Agent] Gemma 4 Went from 40 Errors to a 9-Step Bug Fix — by Switching One Thing
+URL: https://ai-muninn.com/en/blog/swe-bench-local-models-framework-matters
+Date: 2026-04-13
+Series: DGX Spark (Part 15)
+
+<VideoEmbed src="/videos/swe-bench-local-models-framework-matters.mp4" />
+
+
+**Feasibility test, not a full benchmark.** Gemma 4 26B went from 40+ tool calling errors on OpenHands to fixing a test bug in 9 steps on SWE-agent — same model, same GX10 hardware. The pipeline works; a full SWE-Bench Lite run (300 tasks) is next.
+
+
+## Plain-Language Version: Can a desktop AI fix real bugs?
+
+[SWE-Bench](https://www.swebench.com/) is the standard test for whether an AI can fix real software bugs — it takes actual GitHub issues from popular projects and checks if the AI can produce a working patch. The leaderboard is dominated by Claude and GPT through cloud APIs.
+
+I wanted to know if you could skip the API bill entirely — run SWE-Bench on your own hardware with open-source models. So I tested Gemma 4 26B and Qwen 3.5 35B on a DGX Spark, first with [OpenHands](https://github.com/All-Hands-AI/OpenHands), then with [SWE-agent](https://github.com/SWE-agent/SWE-agent). I spent four hours convinced Gemma 4 was broken before discovering the problem was OpenHands, not the model.
+
+---
+
+## The Setup
+
+- **Hardware:** NVIDIA DGX Spark (GB10, 128 GB unified memory, SM121)
+- **Models:** Gemma 4 26B-A4B NVFP4, Qwen 3.5 35B-A3B FP8 — both served via vLLM
+- **Frameworks:** [OpenHands](https://github.com/All-Hands-AI/OpenHands) v0.59.0, [SWE-agent](https://github.com/SWE-agent/SWE-agent) v1.1.0
+- **Agent host:** Mac mini M4 (16 GB, OrbStack Docker) — runs the agent + sandbox, connects to GX10 vLLM via Tailscale
+
+---
+
+## Test 1: OpenHands — Function Calling Hell
+
+OpenHands uses [OpenAI-style function calling](https://platform.openai.com/docs/guides/function-calling) — the model receives tool schemas as JSON and must respond with structured `tool_calls` objects. It exposes 11 tools: `execute_bash`, `str_replace_editor`, `think`, `finish`, `browser`, `execute_ipython_cell`, `task_tracker`, `fetch`, `create_pr`, `create_mr`, `create_bitbucket_pr`.
+
+**Task:** "Write a Python function that checks if a number is prime. Include a test."
+
+### Gemma 4 26B on OpenHands: 40+ errors
+
+Every parser configuration failed:
+
+| `--tool-call-parser` | Errors before first success | Result |
+|---|---|---|
+| `pythonic` | 5 | Only produced `task_tracker:plan` |
+| `hermes` | 4 | Same |
+| None | 7 | Same |
+| `gemma4` + official chat template | 40+ | Never completed task |
+
+The errors were always the same pattern:
+
+```
+Missing required parameters for function 'execute_bash': {'command', 'security_risk'}
+Missing required parameters for function 'str_replace_editor': {'path', 'command', 'security_risk'}
+```
+
+Gemma 4 called the right functions but dropped the parameters. Every time.
+
+### But the API works fine?
+
+This is what kept me debugging for hours. The exact same 11 tools + the full OpenHands system prompt (8,892 characters) via `curl`? Perfect:
+
+```bash
+curl http://<gx10-ip>:8000/v1/chat/completions -d '{
+  "model": "gemma-4-26b",
+  "messages": [{"role": "system", "content": "<8892-char OpenHands prompt>"},
+               {"role": "user", "content": "Create hello.py"}],
+  "tools": [<all 11 tools>]
+}'
+```
+
+Response: correct `str_replace_editor` call with all parameters. So the API worked. The framework somehow broke it.
+
+### Qwen 3.5 35B on OpenHands: Success (with caveats)
+
+Qwen 3.5 completed the same task with only **1 error** — missing `security_risk` parameter once, then recovered:
+
+```
+✅ Created prime_check.py with is_prime() function
+✅ Ran python3 prime_check.py — all tests passed
+✅ Task completed
+```
+
+**Critical setup detail:** Qwen 3.5's `--reasoning-parser qwen3` must be removed. With it enabled, all output gets consumed as "thinking tokens" and the response comes back empty. Use `--tool-call-parser qwen3_xml` without the reasoning parser.
+
+---
+
+## Test 2: SWE-agent — Different action format, different story
+
+SWE-agent doesn't use function calling at all. The model just writes plain text, and the framework parses it:
+
+```
+💭 THOUGHT
+I need to look at the file with the syntax error.
+
+🎬 ACTION
+str_replace_editor view /repo/tests/missing_colon.py
+```
+
+The framework parses the text. No OpenAI function calling involved.
+
+**Task:** Fix a bug from [SWE-agent/test-repo#1](https://github.com/SWE-agent/test-repo/issues/1) — a missing colon in a Python function definition causing `SyntaxError`. This is SWE-agent's own test repo, not a real SWE-Bench task — deliberately simple to validate the pipeline.
+
+### Gemma 4 26B on SWE-agent: 9 steps, patch submitted
+
+```
+Step 1: find . -maxdepth 2 -not -path '*/.*'     → Found repo structure
+Step 2: cat tests/missing_colon.py                → Read the broken file
+Step 3: python3 tests/missing_colon.py            → Reproduced the error
+Step 4: cat tests/missing_colon.py                → Confirmed the issue
+Step 5: str_replace_editor (wrong path)           → Path error, self-corrected
+Step 6: str_replace_editor str_replace             → Fixed the bug ✅
+Step 7: python3 tests/missing_colon.py            → Verified the fix ✅
+Step 8-9: submit                                   → Patch submitted ✅
+```
+
+The patch:
+
+```diff
+-def division(a: float, b: float) -> float
++def division(a: float, b: float) -> float:
+     return a/b
+```
+
+That's the same model that couldn't write "hello world" on OpenHands without 40 errors.
+
+### Qwen 3.5 35B on SWE-agent: Fixed but couldn't finish
+
+Qwen 3.5 also found and fixed the bug — it correctly applied the same `str_replace` edit. But it ran for **96 steps** doing excessive git archaeology and never called `submit`. The fix was correct; the model just couldn't figure out how to end the session.
+
+---
+
+## So what actually happened
+
+| | OpenHands (function calling) | SWE-agent (text actions) |
+|---|---|---|
+| **Gemma 4 26B** | ❌ 40+ errors, never completed | ✅ 9 steps, patch produced |
+| **Qwen 3.5 35B** | ✅ 1 error, completed | ⚠️ Fixed the bug but ran 96 steps, never called submit |
+
+The difference is the action format. OpenHands requires structured JSON function calls with exact parameter names. Gemma 4 keeps dropping parameters when there are 11 tools competing for its attention. SWE-agent just needs plain text — and Gemma 4 writes plain text fine.
+
+Gemma 4 can code. It just can't fill out JSON forms reliably.
+
+---
+
+## vLLM Configuration That Matters
+
+These cost me most of the afternoon:
+
+### 1. The chat template (most commonly missed)
+
+```bash
+# Download from vLLM GitHub
+curl -sL https://raw.githubusercontent.com/vllm-project/vllm/main/examples/tool_chat_template_gemma4.jinja \
+  -o tool_chat_template_gemma4.jinja
+
+# Mount into container
+-v /path/to/tool_chat_template_gemma4.jinja:/app/tool_chat_template_gemma4.jinja
+--chat-template /app/tool_chat_template_gemma4.jinja
+```
+
+Without this, Gemma 4's tool calls lose their parameters even when the model generates them correctly. The [official vLLM recipe](https://docs.vllm.ai/projects/recipes/en/latest/Google/Gemma4.html) documents this but it's easy to miss.
+
+### 2. Qwen 3.5's thinking mode must be disabled
+
+```bash
+# WRONG — all output gets consumed as thinking tokens
+--reasoning-parser qwen3 --tool-call-parser qwen3_xml
+
+# RIGHT — tool calling works
+--tool-call-parser qwen3_xml
+# (no --reasoning-parser)
+```
+
+### 3. Gemma 4 on Ollama: broken
+
+Gemma 4 E2B, E4B, and 26B all return empty tool calls on Ollama (known bug). Use vLLM with `--tool-call-parser gemma4`.
+
+---
+
+## What Was Gained
+
+### What cost the most time
+
+Debugging Gemma 4's tool calling on OpenHands. I tested four different `--tool-call-parser` settings, added the official chat template, verified the parser code included the [PR #38847](https://github.com/vllm-project/vllm/pull/38847) fix, and ran curl tests at every level. The curl tests all passed perfectly — 11 tools, 8,892-character system prompt, correct parameters every time. The problem only appeared inside OpenHands' multi-turn conversation loop.
+
+I should have tried SWE-agent first.
+
+### Transferable diagnostics
+
+When a model "can't do tool calling," test it at three levels before concluding it's broken:
+
+1. **Single API call** (curl with 2 tools) — tests basic format
+2. **Full schema** (curl with all tools + system prompt) — tests scale
+3. **Framework integration** (actual agent loop) — tests multi-turn interaction
+
+If level 1-2 pass but level 3 fails, the problem is the framework, not the model. Switching frameworks is faster than debugging function calling compatibility.
+
+### The thing I'll remember
+
+Next time a local model looks broken on an agent framework, I'm switching frameworks before I start debugging the model. Would've saved me four hours this time.
+
+---
+
+## How to reproduce
+
+1. **vLLM for Gemma 4:** Use `vllm/vllm-openai:gemma4-cu130` image (not `latest` — it lacks Gemma 4 transformers support)
+2. **Download the chat template:** `curl -sL https://raw.githubusercontent.com/vllm-project/vllm/main/examples/tool_chat_template_gemma4.jinja`
+3. **SWE-agent install:** `uv python install 3.12 && git clone SWE-agent && uv pip install -e .`
+4. **Run:** `sweagent run --agent.model.name openai/gemma-4-26b --agent.model.api_base http://<your-gx10-ip>:8000/v1 --agent.model.api_key dummy --agent.model.per_instance_cost_limit 0`
+5. **For Qwen 3.5:** Remove `--reasoning-parser qwen3`, use `--tool-call-parser qwen3_xml`
+
+*This is Part 15 of the "[DGX Spark](/en/blog/dgx-spark-gemma4-26b-nvfp4-52-toks)" series.*
+
+---
+
 # [Ask AI Right] Why AI Feels Useless to You — Answer Machine vs Collaboration Tool
 URL: https://ai-muninn.com/en/blog/ai-ask-right-why-ai-feels-useless
 Date: 2026-04-11
@@ -1621,6 +2297,45 @@ I benchmarked different model sizes on my own machines to give you a feel:
 | MacBook Pro (32GB) | 31B (default settings) | 1.5 | Unusable |
 
 Notice the last two rows — same computer, same model, but different software settings caused an 8x speed difference. Settings matter, but that's an advanced topic ([details here](/en/blog/dgx-spark-gemma4-31b-rescue-mbp-32gb) if you're curious).
+
+### Want to estimate speed yourself? Two formulas
+
+> Thanks to reader marqd114 for suggesting this addition.
+
+AI runs models in two phases, each with a different bottleneck:
+
+- **Generating** (outputting the answer, word by word) — bottlenecked by "how fast stuff moves," i.e. memory bandwidth
+- **Reading your prompt** (processing the input) — bottlenecked by "how fast it can think," i.e. compute power
+
+What you're usually waiting for is generation, so start here:
+
+**Generation speed (decode):**
+
+> **words/sec ≈ memory bandwidth (GB/s) ÷ model size (GB)**
+
+| Hardware | Bandwidth | Running 14B Q4 (~9 GB) | Running 31B Q4 (~19 GB) |
+|----------|----------|----------------------|----------------------|
+| MacBook Pro M1 Max | 400 GB/s | ~44 words/sec | ~21 words/sec |
+| RTX 5090 | 1,792 GB/s | ~199 words/sec | ~94 words/sec |
+| DGX Spark (GB10) | 273 GB/s | ~30 words/sec | ~14 words/sec |
+
+These are theoretical ceilings — real-world speed is typically 60-80% of this. But it's already useful for comparing "roughly how fast will this model run on my machine."
+
+**Prompt processing speed (prefill):**
+
+> **words/sec ≈ compute (TFLOPS) × utilization ÷ parameters (B) × 500**
+
+This means: stronger GPU and smaller model = faster prompt reading. Utilization is typically 40-60%.
+
+| Hardware | Compute (FP16) | Utilization | Reading 14B | Reading 70B |
+|----------|---------------|-------------|------------|------------|
+| MacBook Pro M1 Max | 10.4 TFLOPS | ~50% | ~185 words/sec | ~37 words/sec |
+| RTX 5090 | 209 TFLOPS | ~50% | ~3,732 words/sec | ~746 words/sec |
+| 10× A100 | 3,120 TFLOPS | ~46% | ~51,171 words/sec | ~10,234 words/sec |
+
+Prompt processing is usually much faster than generation, so the "waiting" you feel is mostly the generation phase.
+
+**Note**: If the model is a MoE architecture (names containing A4B, A3B, etc.), it only activates a fraction of its parameters per token, so actual speed will be faster than the formula suggests. For example, [Qwen3.5-35B MoE hits 47 words/sec](/en/blog/dgx-spark-vllm-qwen35-setup) on DGX Spark because only 3B of active parameters are used per token.
 
 **Key takeaway: when choosing a model, don't just look at size — look at how fast your computer can run it. A medium model at 40 words/sec feels much better than a large model at 5 words/sec.**
 

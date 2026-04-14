@@ -1,0 +1,219 @@
+---
+title: "[LLM 101] Context Window — How Much Can AI Read at Once?"
+description: "AI forgets what you said 20 messages ago. It's not broken — its desk is full. This guide explains context windows, why conversations go stale, and how to work around the limit."
+date: "2026-04-14"
+updatedAt: "2026-04-14"
+tags: ["LLM", "Context Window", "Beginner", "Tokens", "AI Memory"]
+series: "LLM 101"
+part: 5
+faq:
+  - q: "What is a context window in AI?"
+    a: "A context window is the maximum amount of text an AI model can 'see' at one time. Think of it as the model's desk — it can only hold so many pages before older ones fall off. GPT-4o has a 128K token window (~96,000 words), Claude has up to 200K tokens, and Gemini goes up to 2M tokens. Once the window is full, the AI can no longer see your earliest messages."
+  - q: "Why does AI forget what I said earlier in a long conversation?"
+    a: "AI doesn't have persistent memory like a human. Every time it responds, it re-reads the entire conversation from the beginning. When the conversation grows past the context window limit, the oldest messages get dropped. The AI isn't forgetting — it literally can't see those messages anymore because they fell off the desk."
+  - q: "What are tokens and how do they relate to the context window?"
+    a: "Tokens are how AI models break text into pieces. One token is roughly 3/4 of an English word or about half a Chinese character. A 128K context window means the AI can hold about 96,000 English words — roughly a 300-page book — in its view at once. Both your messages and the AI's responses count toward this limit."
+  - q: "How can I avoid AI forgetting things in long conversations?"
+    a: "Start a new conversation when the current one gets long. Break big tasks into smaller, focused conversations. Copy-paste key context (names, requirements, decisions) into the new chat. Put the most important information at the beginning or end of your message — AI pays less attention to the middle of very long inputs."
+---
+
+<VideoEmbed src="/videos/llm-101-context-window.mp4" />
+
+<TLDRCard>
+A context window is **how much text an AI can see at once** — think of it as the size of its desk. GPT-4o's desk holds ~96K words, Claude's holds ~150K words (up to 750K in extended mode), and Gemini's holds ~1.5M words. When the desk is full, older messages **fall off** and the AI can't see them anymore. It's not forgetting — it literally can't read what's no longer on the desk. To work around this: start fresh conversations, break big tasks into pieces, and paste key context at the top.
+</TLDRCard>
+
+## Plain-Language Version: Why AI loses track of your conversation
+
+You've probably had this happen: you're 30 messages into a conversation with ChatGPT or Claude, and suddenly the AI gives you an answer that contradicts what you agreed on ten messages ago. Or it asks you a question you already answered. It feels like the AI has short-term memory loss.
+
+It does, in a way. But not because it's broken — because it has a **desk**, and the desk is only so big.
+
+This article explains what that desk is, how big it is for different AI models, what fills it up, and how to keep your conversations productive even when the desk overflows.
+
+---
+
+## Preface
+
+Imagine you're working at a desk. You have a stack of papers — your notes, your boss's email, the spreadsheet, the reference document. As long as everything fits on the desk, you can glance at any page. But the desk has a fixed size. Once it's full, you have to slide the oldest pages off the edge to make room for new ones.
+
+You don't lose the ability to understand those old pages. If someone put them back on the desk, you'd read them just fine. The problem is simple: **they're not on the desk anymore, so you can't see them.**
+
+This is exactly how AI context windows work.
+
+Last article was about [quantization — how AI models get compressed to fit on your computer](/en/blog/llm-101-what-is-quantization). This one tackles a different kind of "fitting": how much text the model can look at while it's thinking.
+
+---
+
+## What is a context window?
+
+Every time you send a message to an AI model, the model doesn't just read your latest message. It re-reads **the entire conversation from the top** — your first message, its first reply, your second message, its second reply, all the way down to what you just typed. Then it generates a response.
+
+The **context window** is the maximum size of everything it can re-read. Think of it as the total number of words that can fit on the desk at once.
+
+But AI models don't count words. They count **tokens**.
+
+### Quick detour: what's a token?
+
+A token is how AI models break text into bite-sized pieces. It's not exactly a word and not exactly a character — it's somewhere in between.
+
+Rules of thumb:
+- **English**: 1 token is roughly 3/4 of a word. "The cat sat on the mat" is about 6 tokens.
+- **Chinese / Japanese / Korean**: 1 token is roughly 1/2 to 1 character, depending on the model.
+- **Code**: brackets, indentation, and keywords all cost tokens. A short Python function might be 50-100 tokens.
+- **Spaces and punctuation** count too.
+
+So when someone says "128K context window," they mean the model can hold 128,000 tokens at once — roughly 96,000 English words. That's a 300-page book.
+
+For the rest of this article, I'll use "words" loosely, but know that the actual currency is tokens.
+
+---
+
+## How big is the desk?
+
+Here are the context window sizes for popular models as of early 2026:
+
+| Model | Context window | Roughly how many words |
+|-------|---------------|----------------------|
+| **GPT-4o** (OpenAI) | 128K tokens | ~96,000 words |
+| **Claude Sonnet/Opus** (Anthropic) | 200K tokens | ~150,000 words |
+| **Claude** (extended) | 1M tokens | ~750,000 words |
+| **Gemini 2.5 Pro** (Google) | 1M tokens | ~750,000 words |
+| **Gemini 2.5 Pro** (extended) | 2M tokens | ~1,500,000 words |
+| **Llama 4 Scout** (Meta, local) | 10M tokens | ~7,500,000 words |
+| **Qwen3 14B** (local via Ollama) | 32K-128K tokens | ~24,000-96,000 words |
+| **Smaller local models** (7B-8B) | 8K-32K tokens | ~6,000-24,000 words |
+
+A few things stand out:
+
+1. **Cloud models have much bigger desks than local ones.** Running a model on your laptop typically gives you 8K-128K tokens. Cloud services offer 128K to 2M.
+2. **The numbers keep growing.** Two years ago, 4K was standard. Now 128K is the baseline for major cloud models.
+3. **Bigger isn't always better.** We'll get to why in a moment.
+
+---
+
+## What fills up the desk?
+
+This is the part people underestimate. Your desk space isn't just your messages. It's **everything**:
+
+1. **Your messages** — every question you've asked in this conversation
+2. **The AI's replies** — every response the AI has given (these are often longer than your messages!)
+3. **System instructions** — behind the scenes, the app you're using often sends a block of instructions telling the AI how to behave. You never see this, but it sits on the desk permanently. This can range from a few hundred tokens (simple chatbot) to thousands (complex assistants with tools).
+4. **Uploaded files** — if you paste a document, PDF, or code file into the chat, the entire thing goes on the desk.
+5. **Tool outputs** — if the AI searches the web or runs code, the results land on the desk too.
+
+Here's a rough example of desk usage for a typical conversation:
+
+| What | Tokens |
+|------|--------|
+| System instructions | ~2,000 |
+| Your 5 messages | ~1,500 |
+| AI's 5 replies | ~4,000 |
+| Document you uploaded | ~8,000 |
+| **Total on the desk** | **~15,500** |
+
+With a 128K window, you have plenty of room. But watch what happens after 50 back-and-forth messages with long AI replies — you can easily burn through 60,000-80,000 tokens. And if you uploaded a long document at the start, even faster.
+
+---
+
+## What happens when the desk overflows?
+
+Different AI services handle overflow differently, but the most common strategy is simple: **the oldest messages get pushed off the desk.**
+
+You don't get a warning. The AI just can't see your early messages anymore. If you agreed on a set of rules in message #3 and you're now on message #40, those rules may have fallen off the desk. The AI isn't being disobedient — it genuinely can't see them.
+
+Some services are smarter about this (summarizing old messages instead of dropping them entirely, or letting you "pin" important context), but the fundamental limit remains: the desk is only so big.
+
+---
+
+## The "lost in the middle" problem
+
+Here's something counterintuitive: even when everything fits on the desk, the AI doesn't pay equal attention to all of it.
+
+Researchers at Stanford and UC Berkeley found that AI models are much better at using information placed at the **beginning** or the **end** of the context window, and worse at using information buried in the **middle**. They called this the ["lost in the middle"](https://arxiv.org/abs/2307.03172) problem.
+
+Think of it like a desk stacked with papers. You naturally pay more attention to the page on top (the most recent) and the first page you read (the beginning). The pages in the middle get less attention.
+
+This has practical implications:
+
+- **Put your most important instructions first.** If you're telling the AI "always respond in bullet points," say it at the top, not buried after three paragraphs of context.
+- **Repeat key points near the end.** If you set up something critical early in the conversation, remind the AI about it in your latest message.
+- **Bigger window ≠ better answers.** Dumping a 200-page document into the chat and asking a question about page 97 may give worse results than giving the AI just the relevant pages. More context can actually *hurt* if the important bits get drowned out.
+
+---
+
+## Local models: smaller desks
+
+If you're running AI on your own computer using Ollama (covered in [Part 1](/en/blog/llm-101-ollama-vs-vllm)), the context window is typically smaller — and it has a direct cost.
+
+**Why?** The context window requires working memory (RAM or GPU memory) beyond what the model itself uses. This working memory — technically called the "KV cache" — grows linearly with context length. Double the context window, double the working memory.
+
+For a local 14B model at Q4_K_M (about 9 GB for the model itself):
+
+| Context length | Extra memory needed | Total memory |
+|---------------|-------------------|-------------|
+| 8K tokens | ~0.5 GB | ~9.5 GB |
+| 32K tokens | ~2 GB | ~11 GB |
+| 128K tokens | ~8 GB | ~17 GB |
+
+That extra 8 GB at 128K context is why many local setups default to shorter context windows. If you have 16 GB of RAM and the model takes 9 GB, you only have 7 GB left — enough for 32K context but not 128K.
+
+This is a real tradeoff when running models locally. Cloud services absorb this cost for you, which is one reason they can offer much larger context windows.
+
+---
+
+## Practical tips: working around the desk limit
+
+**1. Start a new conversation when the current one gets long.**
+
+This is the simplest and most effective strategy. If you've been chatting for 30+ messages and the AI starts losing track, just start fresh. Copy-paste the key decisions or context from the old conversation into your first message in the new one.
+
+**2. Front-load important context.**
+
+Put the most important information — your requirements, constraints, key decisions — at the very beginning of the conversation. This takes advantage of both the "beginning gets more attention" effect and ensures it's the last thing to fall off the desk if the conversation gets long.
+
+**3. Break big tasks into smaller ones.**
+
+Instead of "write me a complete marketing strategy for 2026," try:
+- Conversation 1: "Analyze our competitors" (paste competitor data)
+- Conversation 2: "Draft a positioning statement" (paste the analysis from conversation 1)
+- Conversation 3: "Create a quarterly action plan" (paste the positioning statement)
+
+Each conversation gets a clean desk with exactly the context it needs.
+
+**4. Repeat key points when they matter.**
+
+If you set up a rule 20 messages ago ("use American English, not British") and the AI starts drifting, don't just correct it — repeat the full rule. The AI may no longer be able to see the original instruction.
+
+**5. Be aware of what's consuming desk space.**
+
+Long AI responses eat desk space fast. If you don't need a detailed explanation, ask for a concise answer. If you uploaded a big document, consider extracting just the relevant section instead of the whole thing.
+
+---
+
+## Common misconceptions
+
+**"AI has memory like a human."** No. Each time the AI responds, it re-reads the entire conversation from scratch. There is no persistent memory between messages (some apps add memory features on top, but the model itself starts from the desk contents every single time).
+
+**"A bigger context window means a smarter AI."** No. Context window size and intelligence are independent. A model with a 2M token window isn't "smarter" than one with 128K — it can just see more text at once. And as we saw with the "lost in the middle" problem, seeing more text doesn't guarantee *understanding* more text.
+
+**"If the AI contradicts itself, it's lying."** Usually not. The most common reason for contradictions in long conversations is that the relevant context fell off the desk. The AI is answering consistently with what it can still see — it just can't see the thing it's contradicting.
+
+**"I should always use the model with the biggest context window."** Not necessarily. Bigger windows cost more (in money for cloud models, in memory for local ones). If your task fits in 32K tokens, using a 1M window model doesn't help — it just costs more per message.
+
+---
+
+## One sentence
+
+**The context window is AI's desk: it can only hold so many pages, and when it's full the oldest ones fall off — so start fresh conversations, front-load key context, and break big tasks into pieces.**
+
+Next up: we'll explore how AI models actually generate text — what's happening behind the scenes when the AI "writes" its answer word by word.
+
+*This is Part 5 of the "[LLM 101](/en/blog/llm-101-ollama-vs-vllm)" series. Previous: [What Is Quantization? Q4, Q8, FP16 Explained](/en/blog/llm-101-what-is-quantization).*
+
+---
+
+**Further reading:**
+- [Anthropic's documentation on context windows](https://docs.anthropic.com/en/docs/build-with-claude/context-windows) — technical details on how Claude handles long conversations
+- ["Lost in the Middle" paper (Liu et al., 2023)](https://arxiv.org/abs/2307.03172) — the research behind why AI attention fades in the middle of long inputs
+- For a technical angle on how tokens translate into real costs, see our [Token Burn Rate](/en/blog/dev-workflow-token-burn-rate) analysis

@@ -187,6 +187,10 @@ experimentation with real hardware and production systems.
   https://ai-muninn.com/en/blog/llm-101-what-is-quantization
   Q4_K_M, Q8_0, FP16 decoded. How compression affects speed and quality.
 
+- [Part 5] Context Window — How Much Can AI Read at Once?
+  https://ai-muninn.com/en/blog/llm-101-context-window
+  AI's desk size. Why conversations go stale, lost-in-the-middle problem, local vs cloud trade-offs.
+
 ### Series: Ask AI Right (Non-technical AI usage guide)
 
 - [Part 1] Which AI Should You Use in 2026?
@@ -208,6 +212,10 @@ experimentation with real hardware and production systems.
 - [Part 5] Before You Build It, Ask: Does This Already Exist?
   https://ai-muninn.com/en/blog/ai-ask-right-does-it-exist
   Your first question to AI shouldn't be "help me do X" — it should be "is there something that already does X?"
+
+- [Part 6] The Art of Follow-Up Questions
+  https://ai-muninn.com/en/blog/ai-ask-right-follow-up-questions
+  Five techniques: add constraints, ask for comparisons, let AI ask you, challenge answers, iterate.
 
 ## Citation Policy
 
