@@ -19,6 +19,23 @@ faq:
 
 
 <VideoEmbed src="/videos/telegram-routing.mp4" />
+
+<TLDRCard>
+An openclaw Telegram bot went silent while looking perfectly healthy: process running, token valid, messages received, no errors. Root cause: Tailscale injects IPv6 routes via utun interfaces that look valid but have no internet reachability. Node.js undici (Happy Eyeballs, RFC 8305) tries IPv6 first, hits EHOSTUNREACH, and fails without falling back to IPv4. Fix: set `OPENCLAW_TELEGRAM_DISABLE_AUTO_SELECT_FAMILY=1` in the launchd plist environment.
+</TLDRCard>
+
+## Plain-Language Version: When "Running" Doesn't Mean "Working"
+
+Your Telegram bot appears to be working: the process is alive, the login token is fine, and your messages reach the server. But no replies come back. The bot went silent without crashing — the worst category of failure, because every diagnostic tool says everything is fine.
+
+This one turned out to have three actors: Tailscale (the VPN that lets your devices talk to each other), IPv6 (the newer internet addressing scheme that's slowly replacing IPv4), and Node.js's network library choosing the "wrong" one first.
+
+The short version: Tailscale creates network routes that claim to handle IPv6 traffic but actually go nowhere. Node.js trusts the route table, tries IPv6, fails, and gives up — it doesn't fall back to IPv4 even though IPv4 would work. The fix is one environment variable that tells Node.js to skip IPv6 entirely.
+
+If you run Node.js services on a machine with Tailscale installed — Telegram bots, web scrapers, anything that talks to external APIs — this article shows the full debug trail and the one-line fix.
+
+---
+
 ## Preface
 
 The bot was online. The process was running. I sent a message. Nothing came back.

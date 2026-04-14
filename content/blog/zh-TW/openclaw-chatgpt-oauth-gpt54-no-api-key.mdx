@@ -6,6 +6,15 @@ updatedAt: "2026-04-07"
 tags: ["openclaw", "GPT-5.4", "ChatGPT", "OAuth", "AI agent"]
 series: "OpenClaw"
 part: 11
+faq:
+  - q: "怎麼在 openclaw 裡用 GPT-5.4 又不買 OpenAI API 額度？"
+    a: "跑 `openclaw models auth login --provider openai-codex` 然後用 ChatGPT Plus 帳號登入。openclaw 會把 OAuth token 存到 `~/.openclaw/openclaw.json`，之後透過 Codex endpoint 呼叫 GPT-5.4，不需要另外開 OpenAI 帳單。"
+  - q: "openclaw + ChatGPT OAuth 需要 ChatGPT Pro 還是 Plus 就夠？"
+    a: "Plus 就夠。OAuth 用的就是 ChatGPT 網站的同一組憑證，agent 拿到的是同一顆 GPT-5.4，context window 一樣 105 萬 token。"
+  - q: "為什麼 `openclaw models auth login` 在 SSH 上會顯示 requires an interactive TTY？"
+    a: "OAuth callback 要在 localhost 開瀏覽器，`ssh -t` 沒辦法 forward。要直接在裝 openclaw 的機器上跑——坐在電腦前，或用螢幕分享、VNC。登入一次之後 token 會存下來，後續不需要 TTY。"
+  - q: "OAuth 登入後為什麼 openclaw 還是用舊的模型？"
+    a: "auth 和預設模型是分開的設定。登入後必須重啟 gateway，然後另外指定預設模型：改 `~/.openclaw/openclaw.json` 把 active profile 指到 `openai-codex/gpt-5.4`，或跑 `openclaw models set-default`。release notes 沒寫清楚這一步。"
 ---
 
 

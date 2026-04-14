@@ -19,6 +19,23 @@ faq:
 
 
 <VideoEmbed src="/videos/telegram-routing.mp4" />
+
+<TLDRCard>
+openclaw 的 Telegram bot 全面沉默，但看起來完全健康：process 在跑、token 有效、訊息有進來、沒 error。根因：Tailscale 透過 utun 介面注入 IPv6 路由，路由看起來有效但實際上通不到網路。Node.js undici（Happy Eyeballs、RFC 8305）先嘗試 IPv6，撞到 EHOSTUNREACH，整個 request 失敗不會 fallback 到 IPv4。修法：在 launchd plist 的環境變數裡設 `OPENCLAW_TELEGRAM_DISABLE_AUTO_SELECT_FAMILY=1`。
+</TLDRCard>
+
+## 白話版：看起來「在跑」不等於「有用」
+
+你的 Telegram bot 看起來一切正常：process 活著、登入 token 沒過期、你發的訊息有到伺服器。但就是沒回應。Bot 沒當機卻沉默了——這是最難查的那種問題，因為每個診斷工具都說沒事。
+
+這次的罪魁禍首有三個：Tailscale（讓你的裝置之間可以互相通訊的 VPN）、IPv6（新版網際網路位址系統，正在慢慢取代 IPv4）、還有 Node.js 網路庫選錯了優先順序。
+
+簡單版的故事是：Tailscale 在你的路由表裡加了幾條「我能處理 IPv6」的假路由，實際上通到死路。Node.js 相信路由表、試 IPv6、失敗、然後放棄——不會 fallback 到 IPv4 即使 IPv4 其實能用。修法是一個環境變數，叫 Node.js 跳過 IPv6。
+
+如果你在裝了 Tailscale 的機器上跑 Node.js 服務——Telegram bot、爬蟲、任何呼叫外部 API 的東西——這篇完整記錄了我怎麼找到根因，以及那行修法。
+
+---
+
 ## 前言
 
 Bot 顯示在線。Process 在跑。發了一則訊息。沒有任何回應。

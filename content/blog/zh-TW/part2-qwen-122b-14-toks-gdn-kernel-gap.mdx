@@ -8,11 +8,11 @@ series: "Qwen3.5-122B on DGX Spark"
 part: 1
 faq:
   - q: "為什麼 Qwen3.5-122B 在 DGX Spark 上套用所有 SM121 修法後仍只有 14 tok/s？"
-    a: "Qwen3.5-122B 是混合架構，包含必須保持 BF16 的 GDN（Gated Delta Network）SSM 層。Marlin 對標準 linear/MoE 層有特化 kernel，但 GDN 沒有。每個 GDN GEMM 走 generic fallback 路徑。在 GB10（273 GB/s）上，這使吞吐量平均到 ~14 tok/s，而不是理論上限的 ~30 tok/s。"
+    a: "Qwen3.5-122B-A10B 是混合 MoE 架構，48 層裡有 36 層是 linear-attention + GDN（Gated Delta Network）SSM。Marlin 對標準 linear/MoE 層有特化 kernel，但 GDN 沒有。每個 GDN GEMM 走 generic fallback 路徑。在 GB10（273 GB/s）上，10B active 的 MoE 光看頻寬理論上限是 ~55 tok/s；GDN kernel 缺口把實測吞吐拉到 ~14 tok/s——瓶頸在計算，不在頻寬。"
   - q: "Qwen3.5-122B 在 DGX Spark 的 14 tok/s 是設定錯誤還是 kernel 缺口？"
     a: "是軟體 kernel 缺口，不是設定錯誤。如果你已設定 VLLM_MXFP4_BACKEND=marlin、--moe-backend marlin，且啟動 log 確認顯示 'Using backend: marlin'，你已到達上限。停止調整，等 Marlin 加入 GDN kernel 支援。"
   - q: "GB10 上 Qwen3.5-122B NVFP4 的理論 decode 上限是多少？"
-    a: "~30 tok/s。算法：122B × 4-bit ≈ 61 GB，273 GB/s 頻寬下搬動 61 GB 需要 ~0.22 秒。所有層都有最佳化 kernel 時，上限約 30 tok/s。目前缺少 GDN kernel，吞吐量平均到 ~14 tok/s。"
+    a: "光看頻寬約 ~55 tok/s。MoE 的正確算法是用 active params：Qwen3.5-122B-A10B 每個 token 只激活 ~10B 參數（256 個 expert 選 8 個），4-bit 量化下每步只搬 ~5 GB。273 GB/s ÷ 5 GB ≈ 55 tok/s。加上 attention/norm 的額外開銷，實際上限會低一點，但絕對遠高於現在觀察到的 14 tok/s。本文之前版本寫「122B × 4-bit = 61 GB → 30 tok/s」是把 MoE 當 dense 算，不對。"
   - q: "在 DGX Spark 上，現在應該用 gpt-oss-120B 還是 Qwen3.5-122B？"
     a: "互動式使用選 gpt-oss-120B，~59 tok/s。Qwen3.5-122B 的 14 tok/s 適合對延遲要求不高的離線批量任務。等 Marlin 加入 GDN kernel 支援後再重新評估 Qwen3.5-122B。"
 ---
@@ -21,7 +21,7 @@ faq:
 <VideoEmbed src="/videos/qwen-122b-speed.mp4" />
 
 <TLDRCard>
-Qwen3.5-122B 在套用第一篇的 SM121 修法後能在 DGX Spark（GB10）正常啟動，輸出正確。速度穩定在 14 tok/s，怎麼調都不動。根本原因：Marlin 沒有針對 GDN（Gated Delta Network）SSM 層的特化 kernel，導致這些層走 generic fallback 路徑。沒有 flag 能修它。理論上限 ~30 tok/s，目前實際上限 ~14 tok/s。等 Marlin 加入 GDN kernel 支援前，互動式任務用 gpt-oss-120B（~59 tok/s）。
+Qwen3.5-122B 在套用第一篇的 SM121 修法後能在 DGX Spark（GB10）正常啟動，輸出正確。速度穩定在 14 tok/s，怎麼調都不動。根本原因：Marlin 沒有針對 GDN（Gated Delta Network）SSM 層的特化 kernel，導致這些層走 generic fallback 路徑。沒有 flag 能修它。10B active MoE 光看頻寬的理論上限是 ~55 tok/s，實測 14——差距在計算，不在頻寬。等 Marlin 加入 GDN kernel 支援前，互動式任務用 gpt-oss-120B（~59 tok/s）。
 </TLDRCard>
 
 ## 白話版：1220 億參數的 AI 模型，為什麼只跑 14 tok/s？
@@ -84,18 +84,18 @@ Marlin 對標準 linear 層和 MoE expert GEMM 有快速的特化 kernel。對 G
 
 這也解釋了第一篇的 `SupportsQuant` 修法為什麼不能省：沒有它，vLLM 會把 GDN 層量化成 NVFP4，GDN 的遞迴 hidden state 損壞，輸出變成垃圾。修法讓 GDN 保持 BF16——正確的行為——但代價是 GDN 跑在沒有特化 kernel 的路徑上。
 
-在 GB10 的 273 GB/s 頻寬下，算法很直接：搬動 61 GB 的 weights 一次需要約 0.22 秒。GB10 上 122B NVFP4 的理論 decode 上限約 30 tok/s。要達到這個上限，每一層都需要高效的 kernel。當一半的架構（GDN）走 generic fallback，吞吐量往一半的上限平均——14 tok/s 就是這個平均的落點。
+在 GB10 的 273 GB/s 頻寬下，算法要用 MoE 的正確版本。Qwen3.5-122B-A10B 每個 token 只激活 8/256 個 expert，實際只有 ~10B 參數在跑，4-bit 量化下每步搬 ~5 GB——頻寬上限約 55 tok/s，不是 30。之前寫「每步搬 61 GB」是把總 weight 量當作每步流量，這是把 MoE 當 dense 算。一個完全最佳化的 stack 應該遠超過 14 tok/s。但當 48 層裡有 36 層（linear-attention + GDN 層）走 generic fallback 路徑，吞吐量塌到 14 tok/s——大約是頻寬上限的 1/4，代表瓶頸是計算不是記憶體頻寬。
 
 ---
 
 ## 得到了什麼
 
-結果是 14 tok/s，不是理論上限的 ~30 tok/s。但這個過程沒有白費。
+結果是 14 tok/s，遠低於一個有效率 kernel stack 應該能達到的速度。但這個過程沒有白費。
 
 **確認了：**
 - 第一篇的 SM121 fix stack 對 Qwen3.5-122B 是有效的。輸出正確。
 - `SupportsQuant` 是必須的——沒有它，GDN 層被量化，輸出垃圾。這個 bug 不直觀，從零開始診斷要花好幾個小時。
-- GB10 上 122B NVFP4 的理論 decode 上限是 ~30 tok/s。等 Marlin 加入 GDN kernel 後，這是要驗證的目標值。
+- GB10 上 10B-active MoE 的頻寬上限是 ~55 tok/s；加上 attention/norm 開銷後實際目標會低一點。等 Marlin 加入 GDN kernel 後，該對著這個值驗證，不是現在的 14。
 
 **確立了：**
 - 14 tok/s 是目前的下限，不是 bug。沒有任何設定錯誤。

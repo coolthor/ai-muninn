@@ -91,6 +91,8 @@ vllm/vllm-openai:v0.17.1-cu130
 
 This is the opposite of what the Qwen3.5 article recommends. The difference is model-specific, not hardware-specific. Nemotron's kernel path in nightly hits the SM121 `torch.compile` bug; Qwen3.5's doesn't but requires nightly for other reasons. Document your image version alongside your serve command and don't treat it as interchangeable across models.
 
+> **Update (2026-04-15):** NVIDIA's [official DGX Spark Nemotron guide](https://docs.nvidia.com/nemotron/nightly/usage-cookbook/Nemotron-3-Super/SparkDeploymentGuide/README.html) now recommends `cu130-nightly` together with a custom reasoning parser plugin (`super_v3`, shipped as `/app/super_v3_reasoning_parser.py`). Either path can work — the stable+`nemotron_v3` recipe below is what I ran and verified at the time this article was written. If you start fresh today, check both.
+
 ---
 
 ## Pitfall 2: MoE Kernel — The Env Var That Does Nothing
@@ -157,11 +159,13 @@ Nemotron uses a thinking output format. The reasoning parser flag is:
 --reasoning-parser nemotron_v3
 ```
 
-Not `super_v3`. Not `nemotron`. Not `nemotron_super`. Exactly `nemotron_v3`.
+Not `nemotron`. Not `nemotron_super`. Exactly `nemotron_v3`.
 
 If the parser name is wrong, vLLM does not error at startup. The model loads and runs. Thinking tokens get routed incorrectly — either swallowing the actual response or producing malformed output. The failure is silent until you test with a request that exercises the reasoning path.
 
 Verify by checking that a test request returns content in the correct field.
+
+> **Note:** `super_v3` is a real alternative — it's the reasoning parser NVIDIA ships as a custom plugin in their [official DGX Spark Nemotron guide](https://docs.nvidia.com/nemotron/nightly/usage-cookbook/Nemotron-3-Super/SparkDeploymentGuide/README.html) via `--reasoning-parser-plugin /app/super_v3_reasoning_parser.py --reasoning-parser super_v3`. Both work; this article uses `nemotron_v3` (built into upstream vLLM) because that's what I ran and verified.
 
 ---
 

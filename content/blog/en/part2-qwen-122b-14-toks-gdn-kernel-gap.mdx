@@ -8,11 +8,11 @@ series: "Qwen3.5-122B on DGX Spark"
 part: 1
 faq:
   - q: "Why is Qwen3.5-122B running at 14 tok/s on DGX Spark even after applying all SM121 fixes?"
-    a: "Qwen3.5-122B is a hybrid architecture with GDN (Gated Delta Network) SSM layers that must stay in BF16. Marlin has optimized kernels for standard linear/MoE layers but no specialized kernel for GDN. Every GDN GEMM falls back to a generic compute path. On GB10 (273 GB/s), this averages throughput to ~14 tok/s instead of the theoretical ~30 tok/s ceiling."
+    a: "Qwen3.5-122B-A10B is a hybrid MoE architecture where 36 of 48 layers are linear-attention + GDN (Gated Delta Network) SSM layers. Marlin has optimized kernels for standard linear/MoE layers but no specialized kernel for GDN. Every GDN GEMM falls back to a generic compute path. On GB10 (273 GB/s), a 10B-active MoE should hit ~55 tok/s on bandwidth alone; the GDN kernel gap drags actual throughput to ~14 tok/s — compute-bound, not bandwidth-bound."
   - q: "Is 14 tok/s on Qwen3.5-122B a configuration error or a kernel gap?"
     a: "A software kernel gap, not a configuration error. If you've set VLLM_MXFP4_BACKEND=marlin, --moe-backend marlin, and the startup log confirms 'Using backend: marlin', you've hit the ceiling. No flag fixes it. The bottleneck is a missing Marlin GDN kernel. Stop tuning and wait for the kernel to land."
   - q: "What is the theoretical decode ceiling for Qwen3.5-122B NVFP4 on GB10?"
-    a: "~30 tok/s. The math: 122B × 4-bit ≈ 61 GB. At 273 GB/s bandwidth, moving 61 GB takes ~0.22 seconds per decode step. With optimized kernels for all layer types, the ceiling is ~30 tok/s. Without GDN kernel support, throughput averages to ~14 tok/s."
+    a: "~55 tok/s on bandwidth alone. The correct math for MoE: only ~10B params are active per token (8 of 256 experts routed), so ~5 GB streams per decode step at 4-bit. 273 GB/s ÷ 5 GB ≈ 55 tok/s. Real-world practical ceiling is lower after attention/norm overhead but well above the 14 tok/s observed. Earlier text in this post claimed a 30 tok/s ceiling based on streaming all 61 GB of weights — that assumption is wrong for MoE."
   - q: "What is the practical choice between gpt-oss-120B and Qwen3.5-122B on DGX Spark today?"
     a: "For interactive use, gpt-oss-120B at ~59 tok/s is the correct choice. Qwen3.5-122B at 14 tok/s is usable for offline batch workloads where latency matters less. Revisit Qwen3.5-122B when Marlin adds GDN kernel support."
 ---
@@ -21,7 +21,7 @@ faq:
 <VideoEmbed src="/videos/qwen-122b-speed.mp4" />
 
 <TLDRCard>
-Qwen3.5-122B boots correctly on DGX Spark (GB10/SM121) after the Part 1 SM121 fixes — output is coherent, model works. Speed stabilizes at 14 tok/s regardless of tuning. Root cause: Marlin has no specialized kernel for GDN (Gated Delta Network) SSM layers, so they fall back to a generic compute path. No flag fixes this. Theoretical ceiling is ~30 tok/s; current ceiling is ~14 tok/s. Use gpt-oss-120B (~59 tok/s) for interactive workloads until Marlin ships GDN support.
+Qwen3.5-122B boots correctly on DGX Spark (GB10/SM121) after the Part 1 SM121 fixes — output is coherent, model works. Speed stabilizes at 14 tok/s regardless of tuning. Root cause: Marlin has no specialized kernel for GDN (Gated Delta Network) SSM layers, so they fall back to a generic compute path. No flag fixes this. Bandwidth-only ceiling for a 10B-active MoE on GB10 is ~55 tok/s; observed is 14 — the gap is compute, not bandwidth. Use gpt-oss-120B (~59 tok/s) for interactive workloads until Marlin ships GDN support.
 </TLDRCard>
 
 ## Plain-Language Version: A 122-Billion-Parameter AI Model — Why Only 14 tok/s?
@@ -84,18 +84,18 @@ Marlin has fast, optimized kernels for standard linear layers and MoE expert GEM
 
 This is also why the `SupportsQuant` fix from Part 1 is non-negotiable: without it, vLLM quantizes the GDN layers to NVFP4, which corrupts their recurrent hidden state and breaks the model entirely. The fix keeps GDN in BF16 — correct behavior, but it means GDN runs on the unoptimized path.
 
-On GB10's 273 GB/s bandwidth, the math is straightforward: moving 61 GB of weights takes ~0.22 seconds per decode step. The theoretical ceiling for 122B NVFP4 on GB10 is around 30 tok/s. To reach it, every layer needs an efficient kernel. When half the architecture (GDN) falls back to generic, the throughput averages down toward half the ceiling. 14 tok/s is where that average lands.
+On GB10's 273 GB/s bandwidth, the math needs the MoE correction. Qwen3.5-122B-A10B routes 8 of 256 experts per token, so only ~10B params are active per decode step. At 4-bit that's ~5 GB streamed per token — bandwidth ceiling of ~55 tok/s, not 30. The earlier "61 GB streamed per step" framing was wrong: that's the total weights, not the per-token active slice. A fully optimized stack should land well above 14 tok/s. When 36 of 48 layers (the linear-attention + GDN layers) fall back to a generic compute path, throughput collapses to 14 tok/s — about 4x below the bandwidth ceiling, which says compute is the bottleneck, not memory bandwidth.
 
 ---
 
 ## What Was Gained
 
-The result is 14 tok/s, not the ~30 tok/s ceiling. But the work wasn't wasted.
+The result is 14 tok/s, far below what an efficient kernel stack would deliver. But the work wasn't wasted.
 
 **Confirmed:**
 - The SM121 fix stack from Part 1 works correctly for Qwen3.5-122B. Output is coherent and accurate.
 - `SupportsQuant` is required — without it, GDN layers get quantized and output is garbage. This is a non-obvious bug that would cost hours to diagnose from scratch.
-- The theoretical decode ceiling on GB10 for 122B NVFP4 is ~30 tok/s. When Marlin adds GDN kernel support, this is the target to validate against.
+- The bandwidth ceiling on GB10 for a 10B-active MoE is ~55 tok/s; real-world targets will be lower once attention/norm overhead is included. When Marlin adds GDN kernel support, validate against this ceiling, not the 14 tok/s currently observed.
 
 **Established:**
 - 14 tok/s is the current floor, not a bug. There is nothing misconfigured.

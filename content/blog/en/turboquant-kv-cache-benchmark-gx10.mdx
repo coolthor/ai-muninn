@@ -13,9 +13,9 @@ faq:
   - q: "How much memory does TurboQuant save on Qwen3.5-35B hybrid attention models?"
     a: "Much less than for dense models. Qwen3.5-35B-A3B has only 10/40 layers with full attention (25%), each with just 2 KV heads. At 200K context, KV cache is ~2 GB in fp16, ~1 GB with fp8, and ~400 MB with TurboQuant 3-bit — saving only 600 MB. Dense models like Llama-3.1-70B with all 80 layers in full attention would see close to the paper's claimed 6x savings."
   - q: "Is TurboQuant faster than standard KV cache on GB10 (DGX Spark)?"
-    a: "No, not currently. The community PyTorch implementation has no fused CUDA kernel — inner product takes 11ms vs 0.02ms for full-precision matmul. The paper's 8x speedup was measured on H100 with optimized kernels. Memory savings are real on GB10; speed gains require upstream kernel support, expected with vLLM PR #38280."
+    a: "No, not currently. The community PyTorch implementation has no fused CUDA kernel — inner product takes 11ms vs 0.02ms for full-precision matmul on GB10. The paper reports attention speedups on GPU with optimized kernels (the specific '8x on H100' figure quoted online wasn't found in the arxiv text I checked — treat as secondary-source). Memory savings on GB10 are real; speed gains require upstream kernel support."
   - q: "When will TurboQuant be usable in production with vLLM?"
-    a: "vLLM PR #38280 is under review as of March 2026. Once merged, it would enable --kv-cache-dtype turboquant3 as a server flag. llama.cpp has community forks but nothing merged to main. Official implementation expected Q2 2026."
+    a: "vLLM PR #38280 was under review through March 2026 but **closed unmerged on 2026-04-06**. llama.cpp has community forks but nothing merged to main. Watch upstream vLLM for a follow-up PR — production usability is not there yet."
 ---
 
 <VideoEmbed src="/videos/turboquant-explainer.mp4" caption="TurboQuant in 30 seconds: PolarQuant + QJL two-stage compression" />
@@ -52,7 +52,7 @@ Apply a random rotation to each KV vector, convert to polar coordinates, then qu
 **Stage 2: QJL (Quantized Johnson-Lindenstrauss)**
 Stage 1 leaves residual error. QJL projects that residual through a random Gaussian matrix using the Johnson-Lindenstrauss transform, keeping only the sign bit (+1 or −1). This single-bit sketch makes attention score computation provably unbiased — something MSE-only quantization cannot guarantee.
 
-Paper claims: 3-bit, 6x memory, 8x attention logit speedup on H100, zero accuracy loss across LongBench/RULER/Needle-in-Haystack.
+Paper claims: ~3.5 bits/channel for quality-neutral compression, KV compression exceeding 5x, QJL-corrected attention logit speedups when run with optimized kernels, zero accuracy loss across LongBench/RULER/Needle-in-Haystack. (The "8x on H100" figure that often gets quoted alongside this paper isn't in the arxiv text I pulled — treat secondary-source performance numbers with caution.)
 
 ---
 
@@ -130,7 +130,7 @@ Full-precision matmul:        0.02 ms
 Memory: 2048 KB (fp16) → 384 KB (TQ-3bit) = 5.3x
 ```
 
-The 0.02ms vs 11ms gap matters: this PyTorch implementation has no fused CUDA kernel. The paper's 8x speedup requires optimized kernels on H100. On GB10 (SM121, non-mainstream hardware), using standard PyTorch ops, there is currently no speed advantage. **Memory savings are real. Speed gains require upstream kernel support.**
+The 0.02ms vs 11ms gap matters: this PyTorch implementation has no fused CUDA kernel. The paper reports attention-time speedups when QJL runs with optimized kernels (the specific "8x on H100" claim often attributed to this paper online wasn't in the arxiv text I checked — treat as unverified secondary-source). On GB10 (SM121, non-mainstream hardware), using standard PyTorch ops, there is currently no speed advantage. **Memory savings are real. Speed gains require upstream kernel support.**
 
 ---
 
@@ -195,7 +195,7 @@ In other words: for Qwen3.5-35B-A3B, TurboQuant's memory benefit is much smaller
 
 ## Is It Usable Now?
 
-**Not in production.** vLLM PR [#38280](https://github.com/vllm-project/vllm/issues/38171) is under review. llama.cpp has multiple community forks but nothing merged to main. Official implementation expected Q2 2026.
+**Not in production.** vLLM PR [#38280](https://github.com/vllm-project/vllm/pull/38280) was under review through late March 2026 but **closed unmerged on 2026-04-06**. llama.cpp has multiple community forks but nothing merged to main. Watch upstream vLLM for a follow-up PR.
 
 **Yes for learning and experimentation.** `pip install turboquant` or `tonbistudio/turboquant-pytorch` gets you running Python-level validation and algorithm understanding in under 10 minutes.
 

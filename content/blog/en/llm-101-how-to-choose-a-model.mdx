@@ -8,13 +8,13 @@ series: "LLM 101"
 part: 3
 faq:
   - q: "How do I know how big an AI model is?"
-    a: "Look for the B number in the name — e.g. 7B means 7 billion parameters. More parameters = smarter but more memory. 7B needs about 4-5 GB, 70B needs about 40 GB. Quick formula: parameters (B) × 0.6 = required GB of memory (at 4-bit quantization)."
+    a: "Look for the B number in the name — e.g. 7B means 7 billion parameters. More parameters = smarter but more memory. 7B needs about 4-5 GB, 70B needs about 40 GB. Quick formula: parameters (B) × 0.6 ≈ GB needed for the model weights at 4-bit quantization (leave extra headroom for context)."
   - q: "What if my computer doesn't have enough memory?"
-    a: "Three options: 1) Pick a smaller model (7B or 14B), 2) Use a quantized version (Q4 is 4x smaller than original), 3) If you have a dedicated GPU, use its VRAM instead. 8 GB RAM → 7B max, 16 GB → 14B, 32 GB → 30B."
+    a: "Three options: 1) Pick a smaller model (7B or 14B), 2) Use a quantized version (Q4 is roughly one-third the size of the original — about 3.3x smaller in real files), 3) If you have a dedicated GPU, use its VRAM instead. Rough ceilings: 8 GB RAM → 7B, 16 GB → 14B, 32 GB → 30B. These are conservative — exact fit depends on free memory and context length."
   - q: "Which is better — Gemma, Llama, or Qwen?"
     a: "Each has strengths. Google's Gemma is balanced and multilingual, Meta's Llama has the largest English ecosystem, Alibaba's Qwen is best for Chinese and strong at coding. At the same size, try Qwen (best Chinese) or Gemma (most balanced) first."
   - q: "What do Q4, Q8, FP16 mean in model names?"
-    a: "These are quantization levels — compression ratios for model files. FP16 is original quality (largest, slowest), Q8 is light compression (nearly lossless), Q4 is heavy compression (4x smaller, slight quality drop). Think MP3 128kbps vs 320kbps vs FLAC. Q4 is fine for daily use."
+    a: "These are quantization levels — compression ratios for model files. FP16 is original quality (largest, slowest), Q8 is light compression (nearly lossless), Q4 is heavy compression (~3.3x smaller in real files, slight quality drop). Think MP3 128kbps vs 320kbps vs FLAC. Q4 is fine for daily use."
 ---
 
 <VideoEmbed src="/videos/llm-101-choose-model.mp4" />
@@ -201,10 +201,10 @@ You may have noticed the same model comes in many "versions": Q4_K_M, Q8_0, FP16
 |-------|------|---------|--------------|
 | FP16 | Largest | Best | FLAC — lossless, but huge |
 | Q8 | ~Half of FP16 | Nearly lossless | MP3 320kbps — can't tell the difference |
-| Q4 | ~Quarter of FP16 | Slight loss | MP3 128kbps — good enough for daily use |
+| Q4 | ~1/3 of FP16 (≈3.3x smaller) | Slight loss | MP3 128kbps — good enough for daily use |
 | Q2 | Smallest | Noticeable loss | 64kbps — you can hear it |
 
-**Pick Q4 for daily use.** It's one-quarter the size of the original with quality loss that most users can't feel. The memory formula above already assumes Q4.
+**Pick Q4 for daily use.** Real Q4 files are roughly one-third the size of the FP16 original (the theoretical "4x smaller" doesn't quite hold because of embeddings and metadata), with quality loss that most users can't feel. The memory formula above already assumes Q4.
 
 Want better quality? Go Q8. But memory usage doubles — make sure your "parking space" can fit it.
 

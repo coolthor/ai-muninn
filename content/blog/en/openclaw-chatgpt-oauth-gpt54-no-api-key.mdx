@@ -6,6 +6,15 @@ updatedAt: "2026-04-13"
 tags: ["openclaw", "GPT-5.4", "ChatGPT", "OAuth", "AI agent"]
 series: "OpenClaw"
 part: 11
+faq:
+  - q: "How do I use GPT-5.4 in openclaw without an OpenAI API key?"
+    a: "Run `openclaw models auth login --provider openai-codex` and log in with your ChatGPT Plus account. openclaw stores the OAuth token in `~/.openclaw/openclaw.json` and uses it to call GPT-5.4 via the Codex endpoint. No separate OpenAI API billing required."
+  - q: "Does the openclaw + ChatGPT OAuth integration work with ChatGPT Plus or do I need ChatGPT Pro?"
+    a: "ChatGPT Plus is sufficient. The OAuth flow uses the same credentials as the ChatGPT website, and gives your openclaw agent the same GPT-5.4 access — including the 1,050,000-token context window."
+  - q: "Why does `openclaw models auth login` fail with 'requires an interactive TTY' over SSH?"
+    a: "The OAuth callback opens a browser on localhost, and `ssh -t` does not forward that. Run the login command directly on the machine where openclaw is installed — sit at it, or use screen sharing / VNC. Once logged in, the token persists and subsequent runs don't need a TTY."
+  - q: "After OAuth login, why does openclaw still use the old model instead of GPT-5.4?"
+    a: "Auth and default model selection are separate. After login you must restart the gateway AND set the default model explicitly: edit `~/.openclaw/openclaw.json` to point the active profile at `openai-codex/gpt-5.4`, or run `openclaw models set-default`. The release notes don't spell this out."
 ---
 
 

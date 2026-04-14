@@ -8,7 +8,7 @@ series: "DGX Spark"
 part: 14
 faq:
   - q: "Gemma 4 有幾種版本？各有什麼差別？"
-    a: "四種：E2B（2B active，手機/edge）、E4B（4B active，桌機）、26B MoE（4B active，伺服器）、31B Dense（31B active，最大但最慢）。前三個都是 MoE 或 PLE 架構，每次只激活一小部分參數；31B 是 dense，每個 token 讀全部參數。"
+    a: "四種：E2B（2.3B effective，手機/edge）、E4B（4.5B effective，桌機）、26B-A4B（3.8B active，伺服器）、31B（30.7B 參數，最大但最慢）。E2B 和 E4B 其實是 dense 模型配 PLE（Per-Layer Embedding）減少有效計算量；只有 26B-A4B 是真正的 MoE（128 個專家，每次選 8 個）；31B 是純 dense，每個 token 讀全部參數。"
   - q: "DGX Spark 上跑 Gemma 4 哪個版本最快？"
     a: "26B-A4B MoE NVFP4，52 tok/s（vLLM）。E4B NVFP4 接近，49.9 tok/s。31B Dense 只有 7 tok/s — 不推薦。E2B 用 Ollama 53 tok/s，但能力較弱。"
   - q: "MacBook Pro 32GB 能跑 Gemma 4 嗎？"
@@ -150,7 +150,7 @@ E4B NVFP4 的完整量化過程：[全球首個 E4B NVFP4 量化](/zh-TW/blog/dg
 
 **可以複用的診斷思路：** 選模型的決策樹永遠是：記憶體裝得下嗎 → 頻寬夠嗎 → MoE 有對應大小嗎 → 有 NVFP4 checkpoint 嗎。
 
-**一句話結論：** 在頻寬受限的硬體上，永遠選 MoE 而不是 Dense。參數總量不重要，active 參數才決定速度。
+**一句話結論：** 在頻寬受限的硬體上，永遠選 sparse 架構（MoE 或 E2B/E4B 這種 PLE dense），不要選全 dense 模型。參數總量不重要——每個 token 實際讀到的參數才決定速度。
 
 ---
 

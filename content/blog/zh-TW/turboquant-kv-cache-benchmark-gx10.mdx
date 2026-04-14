@@ -13,9 +13,9 @@ faq:
   - q: "TurboQuant 在 Qwen3.5-35B hybrid attention 模型上能省多少記憶體？"
     a: "比 dense 模型少很多。Qwen3.5-35B-A3B 只有 10/40 層是 full attention（25%），每層只有 2 個 KV head。200K context 下，KV cache 在 fp16 約 2 GB、fp8 約 1 GB、TurboQuant 3-bit 約 400 MB——只省了 600 MB。純 dense 模型如 Llama-3.1-70B（80 層全是 full attention）才能接近論文宣稱的 6x 節省。"
   - q: "TurboQuant 在 GB10（DGX Spark）上有速度優勢嗎？"
-    a: "目前沒有。社群 PyTorch 實作沒有 fused CUDA kernel——inner product 要 11ms，full-precision matmul 只要 0.02ms。論文的 8x 加速是在 H100 有優化 kernel 的情況下測的。記憶體節省在 GB10 上是真的；速度優勢要等 vLLM PR #38280 的上游 kernel 支援。"
+    a: "目前沒有。社群 PyTorch 實作沒有 fused CUDA kernel——在 GB10 上 inner product 要 11ms，full-precision matmul 只要 0.02ms。論文有提 optimized kernel 下的 attention 加速，但網路上常引用的「H100 8x」這個具體數字我在 arxiv 原文找不到，當作二手來源看。記憶體節省在 GB10 上是真的；速度優勢要等上游 kernel 支援。"
   - q: "TurboQuant 什麼時候可以在 vLLM production 環境使用？"
-    a: "截至 2026 年 3 月，vLLM PR #38280 仍在 review 中。合併後可以用 --kv-cache-dtype turboquant3 作為 server flag。llama.cpp 有社群 fork 但尚未合併到 main。官方實作預計 2026 年第二季。"
+    a: "vLLM PR #38280 在 2026 年 3 月下旬 review 中，但 **2026-04-06 未合併被 close 掉**。llama.cpp 有社群 fork 但尚未合併到 main。追 upstream vLLM 看有沒有後續 PR；目前還沒到 production usability。"
 ---
 
 <VideoEmbed src="/videos/turboquant-explainer.mp4" caption="TurboQuant 30 秒動畫說明：PolarQuant + QJL 兩階段壓縮" />
@@ -52,7 +52,7 @@ LLM 推理的記憶體瓶頸不在模型權重，在 KV cache。一個 8K contex
 **步驟二：QJL（Quantized Johnson-Lindenstrauss）**
 第一步會有殘差誤差。QJL 用 Johnson-Lindenstrauss 變換把殘差投影到 1-bit（只保留正負號）。數學上能保證 attention score 計算是 unbiased 的——這是 MSE-only 量化做不到的。
 
-論文數字：3-bit，6x 記憶體，H100 上 attention logit 計算快 8x，across LongBench/RULER/Needle-in-Haystack 零精度損失。
+論文數字：品質無損約 3.5 bits/channel、KV 壓縮超過 5x、配合 optimized kernel 時 attention logit 計算有加速、LongBench/RULER/Needle-in-Haystack 零精度損失。（網路上常引用的「H100 8x」這個具體數字我在 arxiv 原文找不到，二手來源的 performance 數字看看就好。）
 
 ---
 
@@ -136,7 +136,7 @@ Memory: 2048 KB (fp16) → 384 KB (TQ-3bit) = 5.3x
 
 這裡有個重要的數字：full-precision matmul 只要 0.02ms，但 TurboQuant inner product 要 11ms。
 
-**原因**：這個 PyTorch 實作沒有寫 fused CUDA kernel。論文的 8x speedup 是在 H100 上有優化 kernel 的結果。在 GB10 這個非主流硬體（SM121）上，用現成的 PyTorch ops，目前沒有速度優勢。**記憶體節省是真的，速度優勢要等上游 kernel 支援。**
+**原因**：這個 PyTorch 實作沒有寫 fused CUDA kernel。論文有提 optimized kernel 下的 attention 加速（網路上常引用的「H100 8x」具體數字我在 arxiv 原文找不到，當二手來源看）。在 GB10 這個非主流硬體（SM121）上，用現成的 PyTorch ops，目前沒有速度優勢。**記憶體節省是真的，速度優勢要等上游 kernel 支援。**
 
 ---
 
@@ -210,7 +210,7 @@ TurboQuant 3-bit → ~400MB
 
 ## 現在能用嗎？
 
-**不能在生產環境直接用。** vLLM PR [#38280](https://github.com/vllm-project/vllm/issues/38171) 還在 review，llama.cpp 有多個 fork 但尚未合併 main。官方實作預計 Q2 2026。
+**不能在生產環境直接用。** vLLM PR [#38280](https://github.com/vllm-project/vllm/pull/38280) 在 2026 年 3 月下旬 review 中，但 **2026-04-06 未合併被 close 掉**。llama.cpp 有多個 fork 但尚未合併 main。追 upstream vLLM 有沒有後續 PR。
 
 **可以學習和實驗。** `pip install turboquant` 或 `tonbistudio/turboquant-pytorch` 可以跑 Python 驗證，理解演算法。
 

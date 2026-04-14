@@ -12,7 +12,7 @@ faq:
   - q: "SWE-Bench 該用 Gemma 4 還是 Qwen 3.5？"
     a: "看框架。在 SWE-agent（文字指令格式）上，Gemma 4 26B 用 9 步解完並提交 patch。Qwen 3.5 35B 也修好了 bug 但跑了 96 步而且沒 submit。在 OpenHands（function calling 格式）上，Qwen 3.5 能用（1 個 error）但 Gemma 4 產生 40+ 個 error。選跟你框架 action 格式合的模型。"
   - q: "為什麼 Gemma 4 在 OpenHands 上失敗但在 SWE-agent 上成功？"
-    a: "OpenHands 用 OpenAI 格式的 function calling（結構化 JSON tool calls）。Gemma 4 在 11 個同時的 tools 下 function calling 不穩定 — 會漏掉必要參數。SWE-agent 用文字格式的 action（純文字指令由框架解析），Gemma 4 處理得很好。模型的 coding 能力沒問題，壞掉的是 function calling 格式。"
+    a: "OpenHands 用 OpenAI 格式的 function calling（結構化 JSON tool calls）。Gemma 4 在 11 個同時的 tools 下 function calling 不穩定 — 會漏掉必要參數。SWE-agent 預設 0.7 config 用文字格式的 action（純文字指令由框架解析），Gemma 4 處理得很好。（SWE-agent 自 0.7 之後也有 function-calling config，但這篇用的是文字預設。）模型的 coding 能力沒問題，壞掉的是 function calling 格式。"
   - q: "vLLM 跑 Gemma 4 tool calling 需要什麼設定？"
     a: "三個關鍵設定：--enable-auto-tool-choice、--tool-call-parser gemma4、以及 --chat-template tool_chat_template_gemma4.jinja（從 vLLM GitHub 下載）。Chat template 最容易漏 — 沒設的話 Gemma 4 的 tool call 會丟失參數，即使模型有正確生成。"
 ---
@@ -97,7 +97,7 @@ Qwen 3.5 用 **1 個 error** 就完成了同樣的任務 — 漏了一次 `secur
 
 ## 測試二：SWE-agent — 換個 action 格式，換個世界
 
-SWE-agent 根本不用 function calling。模型就寫純文字，框架自己解析：
+SWE-agent（預設 0.7 config，也就是這篇用的）不用 function calling。模型就寫純文字，框架自己解析：
 
 ```
 💭 THOUGHT

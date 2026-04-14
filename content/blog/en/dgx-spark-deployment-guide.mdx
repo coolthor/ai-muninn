@@ -2,6 +2,7 @@
 title: "[DGX Spark] From Unboxing to Running: Complete Deployment Guide"
 description: "Everything you need to go from a sealed DGX Spark box to serving your first local LLM. Hardware check, Ollama quickstart, vLLM production setup, model selection, and the 5 gotchas that cost hours."
 date: "2026-04-13"
+updatedAt: "2026-04-13"
 tags: ["DGX Spark", "GB10", "GX10", "vLLM", "Ollama", "deployment", "Blackwell", "SM121", "DGX Spark worth it", "DGX Spark setup 2026", "DGX Spark vs RTX 5090"]
 series: "DGX Spark"
 part: 0
@@ -11,9 +12,9 @@ faq:
   - q: "How long does it take to go from unboxing to running an LLM on DGX Spark?"
     a: "About 15 minutes with Ollama (download + one command). About 30-45 minutes with vLLM (Docker setup + model download + configuration). The hardware check takes 2 minutes."
   - q: "Is the DGX Spark worth it in 2026?"
-    a: "At $4,699, the DGX Spark is worth it if you need to run models larger than 32 GB locally (70B-120B+). Its 128 GB unified memory is unmatched at this price point. For models under 32 GB, an RTX 5090 system ($3,700+ for the GPU alone) is 6.6x faster on bandwidth. The DGX Spark's value is capacity and silence, not raw speed."
+    a: "At $4,699, the DGX Spark is worth it if you need to run models larger than 32 GB locally (70B-120B+). Its 128 GB unified memory is unmatched at this price point. For models under 32 GB, an RTX 5090 system ($3,700+ for the GPU alone at real street prices; NVIDIA's $1,999 FE listing is largely unobtainable in practice) is 6.6x faster on bandwidth. The DGX Spark's value is capacity and silence, not raw speed."
   - q: "DGX Spark vs RTX 5090 — which should I buy for local AI?"
-    a: "DGX Spark: 128 GB memory, 273 GB/s bandwidth, $4,699, runs 120B+ models. RTX 5090: 32 GB GDDR7, 1,792 GB/s bandwidth, ~$3,700+ GPU only, 6.6x faster but limited to ~30B models. Buy DGX Spark for large models and always-on serving. Buy RTX 5090 for maximum speed on smaller models."
+    a: "DGX Spark: 128 GB memory, 273 GB/s bandwidth, $4,699, runs 120B+ models. RTX 5090: 32 GB GDDR7, 1,792 GB/s bandwidth, ~$3,700+ for the GPU at real street prices (the $1,999 FE listing is largely unobtainable), 6.6x faster but limited to ~30B models. Buy DGX Spark for large models and always-on serving. Buy RTX 5090 for maximum speed on smaller models."
   - q: "Should I use Ollama or vLLM on DGX Spark?"
     a: "Start with Ollama (works in 5 minutes, great for experimentation). Move to vLLM when you need prefix caching (0.12s vs 2-4s TTFT), production stability, or NVFP4 quantization. Both can coexist on the same machine — just don't run them simultaneously."
 ---

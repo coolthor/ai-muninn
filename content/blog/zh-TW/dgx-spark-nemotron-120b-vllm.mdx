@@ -91,6 +91,8 @@ vllm/vllm-openai:v0.17.1-cu130
 
 這跟 Qwen3.5 那篇的建議相反。差異是 model-specific，不是 hardware-specific。Nemotron 的 kernel path 在 nightly 裡觸發 SM121 的 `torch.compile` bug；Qwen3.5 不會，但 Qwen3.5 因為其他原因需要 nightly。把 image 版本和 serve 指令一起記錄，不要把它當成跨 model 可以互換的東西。
 
+> **補充（2026-04-15）：** NVIDIA [官方 DGX Spark Nemotron 指南](https://docs.nvidia.com/nemotron/nightly/usage-cookbook/Nemotron-3-Super/SparkDeploymentGuide/README.html)目前推薦 `cu130-nightly` 搭配 custom reasoning parser plugin（`super_v3`，以 `/app/super_v3_reasoning_parser.py` 的方式 ship）。兩條路都會通——下面這份 stable + `nemotron_v3` 是我當時跑通且驗證過的配方。今天才開始的話，兩個都可以試。
+
 ---
 
 ## 坑二：MoE Kernel——那個沒有任何作用的環境變數
@@ -157,7 +159,9 @@ Nemotron 有 thinking 輸出格式。Reasoning parser flag 是：
 --reasoning-parser nemotron_v3
 ```
 
-不是 `super_v3`，不是 `nemotron`，不是 `nemotron_super`。就是 `nemotron_v3`。
+不是 `nemotron`，不是 `nemotron_super`。就是 `nemotron_v3`。
+
+> **Note：** `super_v3` 是一個真實的替代選項——那是 NVIDIA 在[官方 DGX Spark Nemotron 指南](https://docs.nvidia.com/nemotron/nightly/usage-cookbook/Nemotron-3-Super/SparkDeploymentGuide/README.html)裡用 custom plugin 方式 ship 的 parser（`--reasoning-parser-plugin /app/super_v3_reasoning_parser.py --reasoning-parser super_v3`）。兩個都能用；這篇用的是 `nemotron_v3`（upstream vLLM 內建），因為那是我實際跑過驗證的版本。
 
 Parser 名稱錯了，vLLM 在 startup 時不會報錯。Model 正常載入和運行。Thinking token 的 routing 會出錯——可能吞掉真正的回應，或產生格式錯誤的輸出。失敗是靜默的，直到你用會走 reasoning path 的請求去測試才會發現。
 

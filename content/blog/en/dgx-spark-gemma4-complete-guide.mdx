@@ -8,7 +8,7 @@ series: "DGX Spark"
 part: 14
 faq:
   - q: "How many Gemma 4 variants are there and what is the difference?"
-    a: "Four: E2B (2B active, phone/edge), E4B (4B active, desktop), 26B MoE (4B active, server), 31B Dense (31B active, largest but slowest). The first three use MoE or PLE architecture activating only a fraction of parameters per token. 31B is dense — reads all parameters every token."
+    a: "Four: E2B (2.3B effective, phone/edge), E4B (4.5B effective, desktop), 26B-A4B (3.8B active, server), 31B (30.7B params, largest but slowest). E2B and E4B are dense models with PLE (Per-Layer Embedding) that reduces effective compute. Only 26B-A4B is genuine MoE (128 experts, top-8 routing). 31B is plain dense — reads all parameters every token."
   - q: "Which Gemma 4 variant runs fastest on DGX Spark?"
     a: "26B-A4B MoE NVFP4, 52 tok/s (vLLM). E4B NVFP4 is close at 49.9 tok/s. 31B Dense is only 7 tok/s — not recommended. E2B on Ollama gets 53 tok/s but has weaker capabilities."
   - q: "Can a MacBook Pro 32GB run Gemma 4?"
@@ -126,7 +126,7 @@ Full E4B NVFP4 quantization walkthrough: [World-First E4B NVFP4](/en/blog/dgx-sp
 
 **Transferable diagnostics:** The model selection decision tree is always: Does it fit in memory → Is bandwidth sufficient → Is there a MoE variant at this size → Is there an NVFP4 checkpoint.
 
-**The pattern that applies everywhere:** On bandwidth-limited hardware, always choose MoE over Dense. Total parameter count does not matter — active parameters determine speed.
+**The pattern that applies everywhere:** On bandwidth-limited hardware, always choose a sparse-activation architecture (MoE, or PLE-style dense models like E2B/E4B) over a fully dense model. Total parameter count does not matter — the parameters read per token determine speed.
 
 ---
 

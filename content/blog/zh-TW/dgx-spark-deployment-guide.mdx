@@ -2,6 +2,7 @@
 title: "[DGX Spark] 從開箱到跑起來：完整部署指南"
 description: "從密封箱到跑出第一個 LLM 的所有步驟。硬體檢查、Ollama 快速上手、vLLM 正式部署、模型選擇、5 個會浪費你整天的坑。"
 date: "2026-04-13"
+updatedAt: "2026-04-15"
 tags: ["DGX Spark", "GB10", "GX10", "vLLM", "Ollama", "deployment", "Blackwell", "SM121", "DGX Spark 值得買嗎", "DGX Spark 設定 2026", "DGX Spark vs RTX 5090"]
 series: "DGX Spark"
 part: 0
@@ -11,9 +12,9 @@ faq:
   - q: "從開箱到跑 LLM 要多久？"
     a: "用 Ollama 大約 15 分鐘（安裝 + 一行指令）。用 vLLM 大約 30-45 分鐘（Docker 設定 + 模型下載 + 參數配置）。硬體檢查 2 分鐘。"
   - q: "2026 年 DGX Spark 值得買嗎？"
-    a: "$4,699 的 DGX Spark，如果你需要在本地跑 32 GB 以上的模型（70B-120B+），值得。128 GB 統一記憶體在這個價位無人能比。如果模型在 32 GB 以內，RTX 5090 整機（顯卡 ~$3,700+）頻寬快 6.6 倍。DGX Spark 的價值是容量和安靜，不是純速度。"
+    a: "$4,699 的 DGX Spark，如果你需要在本地跑 32 GB 以上的模型（70B-120B+），值得。128 GB 統一記憶體在這個價位無人能比。如果模型在 32 GB 以內，RTX 5090 整機（顯卡本身街頭實價 $3,700+，NVIDIA $1,999 的 FE 基本上買不到）頻寬快 6.6 倍。DGX Spark 的價值是容量和安靜，不是純速度。"
   - q: "DGX Spark vs RTX 5090 該買哪台？"
-    a: "DGX Spark：128 GB 記憶體、273 GB/s 頻寬、$4,699，能跑 120B+ 模型。RTX 5090：32 GB GDDR7、1,792 GB/s 頻寬、顯卡 ~$3,700+，速度快 6.6 倍但只能跑 ~30B 模型。要跑大模型和 always-on 服務選 DGX Spark。要小模型極速選 RTX 5090。"
+    a: "DGX Spark：128 GB 記憶體、273 GB/s 頻寬、$4,699，能跑 120B+ 模型。RTX 5090：32 GB GDDR7、1,792 GB/s 頻寬、顯卡本身街頭實價 $3,700+（NVIDIA $1,999 的 FE 基本上買不到），速度快 6.6 倍但只能跑 ~30B 模型。要跑大模型和 always-on 服務選 DGX Spark。要小模型極速選 RTX 5090。"
   - q: "DGX Spark 上該用 Ollama 還是 vLLM？"
     a: "先用 Ollama（5 分鐘搞定，適合實驗）。需要 prefix caching（TTFT 從 2-4s 降到 0.12s）、production 穩定性或 NVFP4 量化時再搬到 vLLM。兩者可以裝在同一台 — 不要同時跑就好。"
 ---
