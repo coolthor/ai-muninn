@@ -1,15 +1,11 @@
 import type { NextConfig } from 'next'
 import createNextIntlPlugin from 'next-intl/plugin'
-import { dirname } from 'path'
-import { fileURLToPath } from 'url'
 
 const withNextIntl = createNextIntlPlugin('./i18n/request.ts')
 
-const __dirname = dirname(fileURLToPath(import.meta.url))
-
 const nextConfig: NextConfig = {
   turbopack: {
-    root: __dirname,
+    root: process.cwd(),
   },
   // Permanent 308 redirect for legacy unprefixed /blog/* URLs that Google
   // had already indexed before next-intl middleware was introduced. Without

@@ -57,7 +57,7 @@ That's the literal "split the range into 16 buckets" implementation. Every 32 we
 
 **Failure mode**: a single outlier in those 32 weights hijacks the scale for the whole group. The other 31 small weights get crushed into a few central buckets and become indistinguishable from each other. For neural networks, the *relative* magnitudes of those 31 weights carry information — flattening them to "all the same" amputates that layer's expressive power.
 
-Q4_0 works passably on small models (<3B). Above 7B, the quality gap to FP16 is visible. Fixing this required changing the grouping strategy.
+Q4_0 works passably on small models (under 3B). Above 7B, the quality gap to FP16 is visible. Fixing this required changing the grouping strategy.
 
 ---
 
