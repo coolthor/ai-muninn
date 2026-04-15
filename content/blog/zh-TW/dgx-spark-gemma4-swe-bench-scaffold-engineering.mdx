@@ -1,0 +1,162 @@
+---
+title: "[AI Agent] Gemma 4 26B 跑通 SWE-bench Lite：兩天 28 次 run，2 次真的算數"
+description: "在 GX10 用 mini-swe-agent + vLLM 跑 SWE-bench Lite 單題，從假成功的 doc 一路修到 Gemma 4 38 步乾淨 submit 正確 patch 的 scaffold engineering 紀錄。"
+date: "2026-04-15"
+updatedAt: "2026-04-15"
+tags: ["SWE-bench", "mini-swe-agent", "Gemma 4", "vLLM", "agent scaffold", "GX10"]
+series: "DGX Spark"
+part: 16
+faqs:
+  - q: "為什麼 Gemma 4 在 mini-swe-agent 預設 config 下會撞「No tool calls found」？"
+    a: "預設 swebench.yaml 走 OpenAI tool_calls 協議，模型每步要吐結構化 JSON。Gemma 4 26B-A4B (3.8B active MoE) 對這個格式不穩，常吐空 tool_calls 觸發 harness 重試。換成 swebench_backticks.yaml（regex parse markdown bash block）就繞過這道協議。"
+  - q: "`--exit-immediately` 這個 flag 是做什麼的？"
+    a: "mini-swe-agent 的 InteractiveAgent 在模型自發 submit 後會問「Type new task or Enter to quit」。沒帶這 flag 的 batch run 會卡 EOF 變 Aborted，即使 patch 已經寫對。我前幾次以為「submit 成功」的 run 全是這樣死的。"
+  - q: "為什麼幫 Gemma 4 加 `--reasoning-parser` 跟 chat-template 後，patch 反而更差？"
+    a: "Reasoning parser 確實清掉了 content 欄位的 `<|channel>thought` 雜訊，但同時改變了模型看到的 prompt 結構。Gemma 4 在這種「乾淨」狀態反而更傾向全檔 rewrite 或亂插既有 method。實測拿掉這兩個 flag、保持 `--tool-call-parser gemma4` 裸跑，配合結構化 edit-tool 才穩。"
+  - q: "edit-tool v2 跟 Anthropic 的 text editor 是什麼關係？"
+    a: "規格幾乎一模一樣（view / str_replace / insert / create，old_str 必須正好 match 一次）。Anthropic SWE-bench blog 那個叫 `str_replace_editor`；現行 Claude API 把它升級成 `str_replace_based_edit_tool`（text_editor_20250728），4.x 版拿掉了 undo_edit。我們版本用 heredoc API 而不是 JSON tool_use，因為 mini-swe-agent 的 backticks scaffold 走 bash command。多了一個 self-verify：replace 完印 3 行 context。"
+---
+
+import { TLDRCard } from "@/components/blog/TLDRCard";
+import { VideoEmbed } from "@/components/blog/VideoEmbed";
+
+<TLDRCard>
+兩天跑了 28 次 SWE-bench Lite 單題。Gemma 4 26B-A4B FP8 第 38 步乾淨 submit 出正確 patch — 比 Qwen 3.5 35B 還早 11 步。但這 38 步背後是 4 個寫錯結論的 doc、1 個 pydantic silent drop、跟 1 個沒人提的 `--exit-immediately` flag。
+</TLDRCard>
+
+<VideoEmbed src="/videos/dgx-spark-gemma4-swe-bench-scaffold-engineering.mp4" />
+
+## 白話版：SWE-bench Lite 是什麼，為什麼這篇值得讀
+
+[SWE-bench](https://www.swebench.com/) 是一套真實 GitHub bug 的資料集，要求 AI 自己讀 repo、找問題、改 source、跑測試、最後產出 git patch。Lite 是精選 300 題的版本，常被當作「AI agent 能力」的基準。
+
+跑 SWE-bench 麻煩的不是模型本身能不能修 bug，而是**整套 scaffold（agent 框架、shell 環境、工具協議）的縫隙會放大或抹平模型的弱點**。同一個 Gemma 4 26B-A4B FP8，配錯 scaffold 連 edit 都不敢碰；配對了，會主動 submit 比 Qwen 3.5 35B 還細的 patch。
+
+我在 NVIDIA GB10（DGX Spark）上用 [mini-swe-agent](https://github.com/SWE-agent/mini-swe-agent) + vLLM，花兩天從「以為通了」修到「真的通了」。本文是這條路徑的紀錄，技術讀者可以直接抄 config，半技術讀者可以看一個工程師怎麼跟自己的舊紀錄打架。
+
+---
+
+## 從 [Part 15](/zh-TW/blog/swe-bench-local-models-framework-matters) 留下的問題說起
+
+兩天前我寫了 Gemma 4 在 SWE-agent 上 9 步修好一個簡單 bug 的故事，結語是「同一個模型換框架命運天差地遠」。那次跑的是 SWE-agent 官方 test repo 的 issue #1，bug 是 def 後面缺一個冒號 — 標準入門題。
+
+接下來自然要試真正的 SWE-bench Lite。我選 `sympy__sympy-11400` 當第一題 — `ccode(sinc(x))` 印成 "Not supported in C" 需要改成 Piecewise 形式。並換到 mini-swe-agent（SWE-agent 同團隊的輕量繼任品），因為 04-14 doc 寫「兩個本地模型都 35-56 步成功 submit」。
+
+我複製當時的 yaml 跑同題，期待看到再現的 35 步成功。結果是 32 步 EOFError 收場。
+
+## 第一個坑：我相信了自己寫的 doc
+
+掀開 trajectory 看 `exit_status`，發現上次「成功」其實是 `EOFError`，submission 長度 0。模型確實寫對 `_print_Function` 的 patch（內含 sinc → Piecewise），但 mini-swe-agent 的 InteractiveAgent 在最後一步問「Type new task or Enter to quit」沒人按 Enter，整個 process 撞 EOF 死掉。SWE-bench 評分要 `Submitted` 才算 — Aborted 不算。
+
+挖更深，發現 04-14 yaml 裡的 `agent.system_message_suffix`（含一段 phased workflow 跟答案級提示）**被 pydantic 靜默丟棄** — `DefaultAgent` 的 `AgentConfig` 只認 `system_template`，多餘 field 預設 ignore。
+
+```python
+class AgentConfig(BaseModel):
+    system_template: str    # 只有這個
+    instance_template: str
+    # 沒 system_message_suffix
+```
+
+當天用 trajectory 第一條 system message 驗證：長度 95 字元，內容只有「You are a helpful assistant that can interact with a computer shell to solve programming tasks.」。我寫的整段 phased prompt **從未進入模型 context**。
+
+這意味著兩件事：
+1. 04-14 寫 doc 的我，從沒真正驗 prompt 有沒有吃進去
+2. 那兩次「成功」都不是 scaffold 工程的勝利，是模型在裸 prompt 下硬解出來的
+
+`incident_swe_bench_answer_leak.md` 那篇 incident 紀錄因此整個因果鏈被推翻 — leak 從未到模型眼前，所以「偷塞答案導致成功」這個敘事是錯的。
+
+## 第二個坑：`--exit-immediately`，一個沒人提到的 flag
+
+修 prompt 之前，先得修「為什麼 submit 完還是 Aborted」。翻 `mini-swe-agent/run/benchmarks/swebench_single.py` 才看到：
+
+```python
+yolo: bool = typer.Option(False, "-y", "--yolo", help="Run without confirmation")
+exit_immediately: bool = typer.Option(False, "--exit-immediately",
+    help="Exit immediately when the agent wants to finish instead of prompting.")
+```
+
+`-y` 只控制每個 command 不要 confirm，**`--exit-immediately` 才是擋 finish 時 interactive prompt**。兩個是分開的選項。
+
+加上 `--exit-immediately`、step_limit 拉到 100、system_template 塞 budget prompt（「by step 60 必須 submit」），Qwen 3.5 35B 第 49 步乾淨吐出 `exit_status: Submitted` 跟 834 字元的正確 `_print_sinc` patch。**這是兩天裡第一次端到端真實 Submitted。**
+
+## 第三個坑：對 Gemma 4 加越多越糟
+
+Qwen 通了同 config 套 Gemma 4 FP8 — submit 但 patch 是 `"sinc": "sinc"` 加進 known_functions dict，C 沒這個函數。再加 `--reasoning-parser gemma4 + --chat-template tool_chat_template_gemma4.jinja`（兩個 vLLM 官方對 Gemma 4 tool use 的推薦 flag），patch **更差** — 加重複既有 method。連續 3 個 Gemma 4 變體全寫壞 patch。
+
+[Codex 跟 Gemini 在 /debate 裡都判定 reasoning-parser 是缺失件](https://www.anthropic.com/engineering/swe-bench-sonnet)，但實測剛好相反：拿掉這兩個 flag、走裸 `--tool-call-parser gemma4` 反而比較穩。
+
+真正的 unlock 來自重新讀 mini-swe-agent 的 config 目錄：
+
+```
+src/minisweagent/config/benchmarks/
+├── swebench.yaml         (我們一直用，OpenAI tool_calls)
+├── swebench_backticks.yaml   (regex parse markdown bash blocks)
+├── swebench_xml.yaml
+└── swebench_modal.yaml
+```
+
+`swebench_backticks.yaml` 的設計是模型只要寫：
+
+```
+THOUGHT: 我要 view ccode.py
+
+` ``mswea_bash_command
+edit-tool view --file /testbed/sympy/printing/ccode.py
+` ``
+```
+
+Harness 用 regex 抓 markdown code block，**整套 OpenAI tool_calls 協議完全繞過**。Gemma 4 的「No tool calls found」死結瞬間解掉。
+
+## 第四個坑：給工具還不夠，要強制用工具
+
+換 backticks 後 Gemma 4 仍寫錯 patch — 改用 `cat > /testbed/.../ccode.py <<EOF` 全檔覆寫，把既有 `_print_sign` 跟 `indent_code` method 一起刪了。
+
+這邏輯接通了：[Anthropic 的 SWE-bench writeup](https://www.anthropic.com/engineering/swe-bench-sonnet) 強調 Sonnet 跑這 benchmark 不是只有 bash，還配一個叫 `str_replace_editor` 的工具，強制 old_str 正好 match 一次否則拒絕（[現行 Claude API 把同概念升級成 `str_replace_based_edit_tool`](https://platform.claude.com/docs/en/agents-and-tools/tool-use/text-editor-tool)）。對小模型來說這個強制是救命的 — 沒有它，模型用全檔 rewrite 一定刪到不該刪的東西。
+
+我寫了 `edit-tool` v2 — Anthropic 那個工具的 shell 等價物，用 heredoc API 避開 bash 多行引號地獄：
+
+```bash
+edit-tool str_replace --file /testbed/sympy/printing/ccode.py << 'PATCH'
+---OLD---
+    def _print_NegativeInfinity(self, expr):
+        return '-HUGE_VAL'
+---NEW---
+    def _print_NegativeInfinity(self, expr):
+        return '-HUGE_VAL'
+
+    def _print_sinc(self, expr):
+        from sympy import sin, Piecewise, Ne
+        x = expr.args[0]
+        return self._print(Piecewise((sin(x)/x, Ne(x, 0)), (1, True)))
+PATCH
+```
+
+System template 加硬規定 + 1 個 few-shot example：「`/testbed/**/*.py` MUST 用 edit-tool，禁止 cat / sed」，並教模型看到 `ERROR: old text not found` 就回去 view 重複試。
+
+跑下去：
+- Step 8 第一次用 `edit-tool view`
+- Step 33 第一次 `str_replace` — 失敗，old text 找不到
+- Step 34 模型自己 `edit-tool view --lines 245:255` 重看 file
+- Step 35 重試 `str_replace` — 成功
+- Step 38 `echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT && cat patch.txt`
+
+`exit_status: Submitted`，patch 1198 字，加了正確的 `_print_Function` override，還順便把 `known_functions` 字典處理 tuple 跟 string 兩種 case。**比 Qwen 3.5 35B 早 11 步、patch 結構更通用。**
+
+## What Was Gained
+
+**最花時間的事**：信任自己 24 小時前寫的 doc。所有「scaffold 改進讓 Gemma 4 35 步通過」的記錄都是錯的，suffix 從未生效，submit 從未成立。改一個 config 的第一件事該是 dump trajectory 第一條 system message 看實際長度，而不是相信 yaml 寫了就會載入。
+
+**可以搬走的 diagnostic**：pydantic 預設 `extra = "ignore"` 是 silent failure 的溫床。任何 BaseModel-driven config 寫了不存在的 key 都不會報錯。修 config 後第一次跑必驗 runtime 實際吃到什麼。
+
+**通用原則**：**小模型不是不會 edit，是 tool-calling 協議對它太脆弱**。Anthropic 的 Sonnet 配合 `tool_calls` JSON + `str_replace_based_edit_tool` 是因為它指令遵循夠強。對 Gemma 4 26B-A4B 這種 3.8B active MoE，協議要輕量（backticks regex），編輯要結構化（edit-tool 強制 unique-match），prompt 要硬性約束（few-shot example + 禁令）。三件事齊備，能力立刻浮現。
+
+## Checklist for OS model SWE-bench
+
+1. 用 `swebench_backticks.yaml` 而不是預設 `swebench.yaml`（除非 model 像 Qwen 3.5 35B 一樣 tool_calls 穩定）
+2. Launch 必加 `-y -l 0 --exit-immediately`（沒這 flag 沒救）
+3. system_template 必含 step budget + scope discipline，避免 over-engineering
+4. 每次改 config 後 dump trajectory[0] 驗 prompt 真進去
+5. 容器內裝 `edit-tool` 等 str_replace 風格工具，prompt 強制使用、禁止 `cat > file`
+6. 評估結果看 `info.exit_status == "Submitted"` 才算數，patch 內容要肉眼驗
+
+兩天的學費換到一條穩定的本地路徑。下一步是把 Path B 推到 Lite 全 300 題，看 Gemma 4 + edit-tool 的真正 pass rate。

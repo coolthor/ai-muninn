@@ -82,6 +82,14 @@ experimentation with real hardware and production systems.
   https://ai-muninn.com/en/blog/dgx-spark-nemotron-120b-vllm
   Running 120B parameter model on single-GPU DGX Spark; NVFP4 + flashinfer.
 
+- [Part 15] Gemma 4 Went from 40 Errors to a 9-Step Bug Fix — by Switching One Thing
+  https://ai-muninn.com/en/blog/swe-bench-local-models-framework-matters
+  Same Gemma 4 model failed 40+ tool calls on OpenHands but solved a SWE-agent test issue in 9 steps. Framework choice matters more than model choice.
+
+- [Part 16] Gemma 4 26B Cleared a SWE-bench Lite Instance — After 28 Tries Across Two Days
+  https://ai-muninn.com/en/blog/dgx-spark-gemma4-swe-bench-scaffold-engineering
+  Two days of mini-swe-agent + vLLM scaffold engineering on GB10. Pydantic silent drops, --exit-immediately flag, backticks scaffold, and a custom edit-tool unlocked Gemma 4 to self-submit a correct patch in 38 steps.
+
 ### Series: NemoClaw (NVIDIA's AI agent framework on DGX Spark)
 
 - [Part 1] NemoClaw Explained: NVIDIA's All-in-One AI Agent Framework for DGX Spark

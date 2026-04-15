@@ -1,11 +1,332 @@
 # ai-muninn — Full Site Content
 # https://ai-muninn.com
-# Generated: 2026-04-14
-# Articles: 50
+# Generated: 2026-04-15
+# Articles: 52
 
 This file contains the full text of all articles on ai-muninn.com.
 It is intended for AI tools that need complete site context.
 For the article index only, see /llms.txt.
+
+---
+
+# [AI Agent] Gemma 4 26B Cleared a SWE-bench Lite Instance — After 28 Tries Across Two Days
+URL: https://ai-muninn.com/en/blog/dgx-spark-gemma4-swe-bench-scaffold-engineering
+Date: 2026-04-15
+Series: DGX Spark (Part 16)
+
+import { TLDRCard } from "@/components/blog/TLDRCard";
+import { VideoEmbed } from "@/components/blog/VideoEmbed";
+
+
+Two days, 28 SWE-bench Lite runs on the same instance. Gemma 4 26B-A4B FP8 self-submitted a clean patch in 38 steps — 11 steps faster than Qwen 3.5 35B. The 38 steps are real. The 27 runs before that include four wrong-conclusion docs, one silent pydantic field drop, and one undocumented `--exit-immediately` flag.
+
+
+## Plain-Language Version: Why this article matters
+
+[SWE-bench](https://www.swebench.com/) is a benchmark of real GitHub bugs. The AI has to read a repo, locate the issue, edit source code, run tests, and produce a git patch. The Lite split is 300 curated instances, often used as the agent-capability scoreboard.
+
+The hard part of running SWE-bench locally isn't whether the model can fix bugs. It's that the entire scaffold — the agent framework, the shell environment, the tool protocol — has gaps that amplify or mask the model's weaknesses. The same Gemma 4 26B-A4B FP8 won't even attempt edits under one config and self-submits a more general patch than Qwen 3.5 35B under another.
+
+I spent two days on a NVIDIA GB10 (DGX Spark) with [mini-swe-agent](https://github.com/SWE-agent/mini-swe-agent) + vLLM, going from "I think it works" to "it actually works". This is the path. Engineers can copy the configs. Anyone else can watch a fight between an engineer and his own old notes.
+
+---
+
+## Picking up where [Part 15](/en/blog/swe-bench-local-models-framework-matters) left off
+
+Two days ago I wrote about Gemma 4 fixing a simple bug in 9 steps on SWE-agent — issue #1 on SWE-agent's own test repo, a missing colon after a `def`. Entry-level material. The takeaway then: the framework matters more than the model.
+
+The natural next test was real SWE-bench Lite. I picked `sympy__sympy-11400` — `ccode(sinc(x))` prints "Not supported in C" and needs to emit a Piecewise instead. I switched to mini-swe-agent (the same team's lighter-weight successor) because my 04-14 notes said "both local models submitted in 35-56 steps".
+
+I copied the config and re-ran the same instance. The result was 32 steps and an EOFError.
+
+## Pit #1: I trusted my own doc
+
+Opening the trajectory file showed `exit_status: EOFError`, `submission_len: 0`. The model had written the correct `_print_Function` patch with a sinc handler, but mini-swe-agent's InteractiveAgent had hit a "Type new task or Enter to quit" prompt at the finish line. Nothing to read from stdin in a batch run, so the process died. SWE-bench grading needs `Submitted` — Aborted doesn't count.
+
+Going deeper: the `agent.system_message_suffix` field in the 04-14 yaml (containing a multi-phase workflow plus an answer-level hint) was being **silently dropped by pydantic**. `DefaultAgent`'s `AgentConfig` only declares `system_template`; extra fields are ignored by default.
+
+```python
+class AgentConfig(BaseModel):
+    system_template: str    # only this
+    instance_template: str
+    # no system_message_suffix
+```
+
+Verifying via the trajectory's first system message: 95 characters total, just the stock "You are a helpful assistant that can interact with a computer shell to solve programming tasks." Every phased prompt I'd written never reached the model.
+
+Two implications:
+1. The me from 04-14 never actually verified that the prompt was being ingested
+2. The two "successes" weren't scaffold-engineering wins — the model solved them on the bare prompt, by chance, and got killed at submit
+
+The incident memo I'd written about "answer leak causing fake success" had its causal chain inverted. The leak never reached the model. The note had to be rewritten.
+
+## Pit #2: `--exit-immediately`, the flag nobody mentions
+
+Before fixing the prompt, I had to fix "why is the run aborting after a clean submit". Reading `mini-swe-agent/run/benchmarks/swebench_single.py`:
+
+```python
+yolo: bool = typer.Option(False, "-y", "--yolo", help="Run without confirmation")
+exit_immediately: bool = typer.Option(False, "--exit-immediately",
+    help="Exit immediately when the agent wants to finish instead of prompting.")
+```
+
+`-y` only suppresses per-command confirmation. **`--exit-immediately` is the one that bypasses the finish-time prompt.** Two separate options.
+
+Adding `--exit-immediately`, raising step_limit to 100, and putting an actual budget prompt into `system_template` ("by step 60 you must submit"), Qwen 3.5 35B self-submitted at step 49 with `exit_status: Submitted` and an 834-character correct `_print_sinc` patch. **First clean end-to-end Submitted in two days.**
+
+## Pit #3: Adding more flags made Gemma 4 worse
+
+Same config worked for Qwen but not Gemma 4 FP8 — patch added `"sinc": "sinc"` to the `known_functions` dict. C has no `sinc` function. Adding `--reasoning-parser gemma4 + --chat-template tool_chat_template_gemma4.jinja` (vLLM's officially recommended flags for Gemma 4 tool use) made the patch **worse** — duplicate insertions of methods that already existed. Three Gemma 4 variants in a row, all wrong patches.
+
+[Codex and Gemini in /debate both pointed at missing reasoning-parser as the root cause](https://www.anthropic.com/engineering/swe-bench-sonnet), but the empirical result was the opposite: dropping those two flags and running with bare `--tool-call-parser gemma4` was more stable.
+
+The actual unlock came from re-reading mini-swe-agent's config tree:
+
+```
+src/minisweagent/config/benchmarks/
+├── swebench.yaml         (what I'd been using — OpenAI tool_calls)
+├── swebench_backticks.yaml   (regex-parsed markdown bash blocks)
+├── swebench_xml.yaml
+└── swebench_modal.yaml
+```
+
+`swebench_backticks.yaml` only requires the model to write:
+
+```
+THOUGHT: I'll view ccode.py
+
+` ``mswea_bash_command
+edit-tool view --file /testbed/sympy/printing/ccode.py
+` ``
+```
+
+The harness regex-extracts the markdown block. **The entire OpenAI tool_calls protocol is bypassed.** Gemma 4's "No tool calls found" deadlock disappeared.
+
+## Pit #4: Giving the tool isn't enough — you have to force its use
+
+Backticks alone wasn't sufficient — Gemma 4 went straight to `cat > /testbed/.../ccode.py <<EOF` and rewrote the whole file, deleting the existing `_print_sign` and `indent_code` methods in the process.
+
+This is why [Anthropic's SWE-bench writeup](https://www.anthropic.com/engineering/swe-bench-sonnet) gives Sonnet a `str_replace_editor` alongside bash — the editor enforces unique-match replacement and refuses anything else (the [current Claude API names this `str_replace_based_edit_tool`](https://platform.claude.com/docs/en/agents-and-tools/tool-use/text-editor-tool) and removed `undo_edit` in the 4.x version). For small models the enforcement is the whole point. Without it, whole-file rewrites destroy unrelated code.
+
+I wrote `edit-tool` v2 — the shell equivalent of Anthropic's editor, with a heredoc API that sidesteps bash multi-line quoting hell:
+
+```bash
+edit-tool str_replace --file /testbed/sympy/printing/ccode.py << 'PATCH'
+---OLD---
+    def _print_NegativeInfinity(self, expr):
+        return '-HUGE_VAL'
+---NEW---
+    def _print_NegativeInfinity(self, expr):
+        return '-HUGE_VAL'
+
+    def _print_sinc(self, expr):
+        from sympy import sin, Piecewise, Ne
+        x = expr.args[0]
+        return self._print(Piecewise((sin(x)/x, Ne(x, 0)), (1, True)))
+PATCH
+```
+
+The system_template added a hard rule plus one few-shot example: "edits to /testbed/**/*.py MUST use edit-tool — no cat, no sed", and taught the model that `ERROR: old text not found` means re-view the file and try again with the exact text.
+
+The run:
+- Step 8: first `edit-tool view`
+- Step 33: first `str_replace` — failed, old text not present
+- Step 34: model self-corrects with `edit-tool view --lines 245:255`
+- Step 35: retried str_replace — succeeded
+- Step 38: `echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT && cat patch.txt`
+
+`exit_status: Submitted`, 1198-character patch, correct `_print_Function` override, and a bonus generalization that handles `known_functions` entries as both tuple and string. **11 steps faster than Qwen 3.5 35B and a more general patch.**
+
+## What Was Gained
+
+**What cost the most time**: trusting the doc I'd written 24 hours earlier. Every "scaffold improvement let Gemma 4 pass in 35 steps" entry was wrong. The suffix never loaded, the submit never landed. The first thing to do after changing a config is dump the trajectory's first system message and check the actual length, not assume yaml will load by virtue of being written.
+
+**Transferable diagnostics**: pydantic defaults `extra = "ignore"`, which is a silent-failure factory. Any BaseModel-driven config that contains a key the schema doesn't declare just discards it. After every config edit, verify what runtime actually received.
+
+**The pattern that applies everywhere**: **small models aren't bad at editing — the tool-calling protocol is too brittle for them**. Anthropic's Sonnet uses `tool_calls` JSON + `str_replace_based_edit_tool` because Sonnet's instruction following can carry the structural overhead. For Gemma 4 26B-A4B (3.8B active MoE) the protocol needs to be lighter (regex-parsed backticks), the editor needs to be structured (unique-match enforcement), and the prompt needs hard constraints (forbidden patterns plus a few-shot example). When all three are in place, the capability shows up.
+
+## Checklist for OS-model SWE-bench
+
+1. Use `swebench_backticks.yaml` instead of the default `swebench.yaml`, unless your model handles tool_calls reliably (Qwen 3.5 35B does)
+2. Always launch with `-y -l 0 --exit-immediately`. The last flag is non-optional for batch runs
+3. Put a step budget and scope discipline into `system_template`. Without it, the model over-engineers across files and never submits
+4. After every config change, dump `trajectory.messages[0]` and verify the prompt was actually loaded
+5. Install a structured editor (`str_replace`-style) inside the container. Forbid `cat > file` for source edits in the prompt
+6. Only count `info.exit_status == "Submitted"` as a win. Sanity-check the patch by hand
+
+Two days of tuition for one stable local path. Next is pushing Path B (Gemma + edit-tool) across the full Lite 300 to see what the actual pass rate looks like.
+
+---
+
+# [LLM Deep Dive] What Quantization Algorithms Actually Do: From Q4_K_M to TurboQuant
+URL: https://ai-muninn.com/en/blog/llm-deep-dive-quantization-algorithms
+Date: 2026-04-15
+Series: LLM Deep Dive (Part 1)
+
+Q4_K_M doesn't just "throw away 75% of each weight." It's three algorithms stacked: **K-quant** binds 256 weights into a super-block with FP16 `d` / `dmin` and per-32-weight 6-bit sub-scales, giving each block tight asymmetric calibration Q4_0 couldn't reach; **PolarQuant** randomly rotates vectors so the distribution flattens; **QJL** uses a 1-bit sign sketch on the residual for unbiased correction. Each layer fixes the previous layer's failure mode — that's why 4 bits became the sweet spot.
+
+
+## Why this article exists
+
+In [LLM 101 Part 4](/en/blog/llm-101-what-is-quantization) I used the MP3 metaphor to explain why quantization works at all — neural networks are inherently noisy, weights cluster around zero, and rounding errors mostly cancel out. That article is enough to answer "which version should I download."
+
+But a reader emailed: "Is 4-bit really just rounding every weight to 16 buckets? Why doesn't that collapse the model?"
+
+The intuitive answer is "neural networks have redundancy." That's true but lazy. The real answer is that **the last decade of quantization research has done a lot of work to make 4 bits the usable sweet spot.** A naive cut from FP16 to 4 bits (the original Q4_0) loses noticeable quality. The reason Q4_K_M is "almost lossless" is the chain of clever engineering decisions behind it.
+
+This is the opening article of a new series — **LLM Deep Dive**. It's for readers who finished [Part 4](/en/blog/llm-101-what-is-quantization), want to understand the mechanism, but don't want to read the paper. I'll walk through three layers of modern quantization, from 2023's K-quant to 2025's [TurboQuant](https://arxiv.org/abs/2504.19874). Real algorithm names appear ("super-block," "Johnson-Lindenstrauss"), but no equations — I'll use geometric intuition instead.
+
+If you want the measured numbers afterward, [the TurboQuant benchmark on GX10](/en/blog/turboquant-kv-cache-benchmark-gx10) is the sister article.
+
+---
+
+## The fundamental enemy: outliers
+
+Every quantization algorithm is designed around one enemy — **outliers**.
+
+Quantization means: you have a stream of continuous floating-point numbers, and you want to approximate them using a small, fixed set of discrete levels. 4 bits = 16 levels. If your numbers sit roughly between -1 and +1, slicing that range into 16 buckets and snapping each value to the nearest bucket gives small errors.
+
+Real weights don't behave like that. Most weights do live between -1 and +1, but every few hundred entries you find a 5 or a -8. These outliers can't be discarded — they often encode important features. But if you stretch the scale to cover -8 to +8, those 16 levels now span the full range with a step size of 1. All the detail that used to live between -1 and +1 collapses into three buckets, losing 90% of the resolution.
+
+This is why naive quantization fails. Every generation of algorithm tackles outliers differently.
+
+---
+
+## Layer one: why legacy quantization (Q4_0) isn't enough
+
+The earliest llama.cpp scheme is Q4_0. The algorithm fits in a single sentence:
+
+> For each group of 32 weights, find the maximum absolute value `max_abs`, set scale = `max_abs / 7`, then round each weight to `round(weight / scale)` and store as a 4-bit signed integer (range -8 to +7).
+
+That's the literal "split the range into 16 buckets" implementation. Every 32 weights share one scale.
+
+**Failure mode**: a single outlier in those 32 weights hijacks the scale for the whole group. The other 31 small weights get crushed into a few central buckets and become indistinguishable from each other. For neural networks, the *relative* magnitudes of those 31 weights carry information — flattening them to "all the same" amputates that layer's expressive power.
+
+Q4_0 works passably on small models (under 3B). Above 7B, the quality gap to FP16 is visible. Fixing this required changing the grouping strategy.
+
+---
+
+## Layer two: K-quant — super-blocks plus per-block scales
+
+In June 2023, [ikawrakow opened llama.cpp PR #1684](https://github.com/ggml-org/llama.cpp/pull/1684), introducing Q2_K, Q3_K, Q4_K, Q5_K, and Q6_K. That's the K in Q4_K_M.
+
+The core idea: **two-tier grouping.**
+
+Take Q4_K:
+- **Super-block** = 256 weights sharing a pair of high-precision values, `d` and `dmin`, both stored as `ggml_half` (FP16 half precision)
+- **Block** = the super-block is split into 8 sub-blocks of 32 weights each; every sub-block carries a **6-bit quantized** sub-scale and sub-min (packed inside `block_q4_K.scales` per the `ggml-common.h` struct)
+- Each weight is stored in 4 bits; dequantization combines "super-block `d` × dequantized sub-scale + `dmin` × dequantized sub-min"
+
+Convoluted to describe, but the upgrade over Q4_0 isn't "shrinking the contamination radius" — both still use 32-weight blocks. The real gains are two: (1) **asymmetric quantization** via `dmin` lets K-quant handle distributions that aren't centered on zero, which Q4_0's symmetric scheme simply can't; (2) the **super-block hierarchy** lets 8 blocks share a pair of FP16 `d` / `dmin` while each block still carries its own 6-bit sub-scale and sub-min — each block calibrates itself far more precisely than Q4_0 could, while the metadata overhead grows only modestly. An outlier in one block pushes its own sub-scale; its 7 neighbors share the same super-block `d` but calibrate independently and stay unaffected.
+
+Super-block layouts for each K-quant level (clearly listed in [ikawrakow's PR description](https://github.com/ggml-org/llama.cpp/pull/1684)):
+
+| Level | Super-block layout | bits/weight |
+|-------|-------------------|------------|
+| Q2_K | 16 blocks × 16 weights = 256 | 2.5625 |
+| Q3_K | 16 blocks × 16 weights = 256 | 3.4375 |
+| Q4_K | 8 blocks × 32 weights = 256 | 4.5 |
+| Q5_K | 8 blocks × 32 weights = 256 | 5.5 |
+| Q6_K | 16 blocks × 16 weights = 256 | 6.5625 |
+
+Super-block size is always 256 weights, but block granularity changes with bit width. The fewer bits, the finer the slicing — because outlier impact is more catastrophic and you need smaller quarantine zones.
+
+The fractional bits (the `.5625` and `.4375`) are metadata amortized across the weights — sub-scales and sub-mins also take space. That's why Q4_K is 4.5 bits/weight, not exactly 4.
+
+K-quant's success directly produced the "just use Q4_K_M" consensus. From that moment, 4 bits stopped being a tradeoff and became the default.
+
+---
+
+## Layer three: TurboQuant — rotate, flatten, then record direction
+
+K-quant pushed weight quantization to a sweet spot using asymmetric quantization plus two-tier metadata. But it still assumes that each 32-weight block fits a single scale/min well and that one FP16 `d` per super-block covers all its blocks. For weights those assumptions hold; for the **KV cache**, where distributions are more skewed and outliers concentrate more sharply, they don't.
+
+The KV cache is the key/value pair the model accumulates across long conversations to compute attention. Its distribution is even more skewed than weights: a few channels carry extreme outliers, most channels are tightly clustered. Traditional quantization performs poorly here, so [Google Research published TurboQuant in April 2025](https://research.google/blog/turboquant-redefining-ai-efficiency-with-extreme-compression/) ([arxiv 2504.19874](https://arxiv.org/abs/2504.19874)).
+
+TurboQuant is a two-stage algorithm. I'll use the naming from the existing [benchmark article](/en/blog/turboquant-kv-cache-benchmark-gx10) — PolarQuant + QJL.
+
+### Stage one: PolarQuant — flatten the distribution
+
+You can't quantize KV vectors directly because the distribution is so skewed. PolarQuant's move: **rotate first.**
+
+Picture a 128-dimensional vector where a few dimensions (say 17 and 53) hold extreme values. Multiply by a random rotation matrix `R` to get `Rv`. **Rotation preserves vector length but redistributes the energy that was concentrated in a few dimensions across all dimensions evenly.**
+
+After rotation, every component looks similar. More precisely: for a fixed-norm vector under a uniformly random rotation, the *square* of each coordinate follows a concentrated Beta distribution — and in high dimensions the coordinate itself approaches a Gaussian (Maxwell-Poincaré). Either framing leads to the same point: there are no outlier dimensions anymore; every dimension's values live in the same range.
+
+The elegance: **you don't need to know the weight distribution in advance** (unlike GPTQ-style methods that require calibration data). Random rotation works for any distribution, because its job is precisely to destroy the original distribution. Lloyd-Max can then find globally optimal quantization points on the resulting Beta distribution.
+
+> Rotation = spreading outliers across all dimensions. With no outliers, quantization is easy.
+
+### Stage two: QJL — 1-bit sign sketch for unbiased correction
+
+After PolarQuant there's still residual error. For weight quantization that residual is usually negligible; for attention score computation it isn't — MSE-only quantization introduces **systematic bias**, not random error. The [benchmark verified this](/en/blog/turboquant-kv-cache-benchmark-gx10): MSE-only at 3-bit shows bias = +0.000191; QJL correction brings it to -0.000317 (≈0).
+
+QJL = Quantized Johnson-Lindenstrauss. The Johnson-Lindenstrauss lemma is a classic result: **random projection into a lower-dimensional space approximately preserves inner products between vectors.** QJL applies this to the residual — project the residual through another random rotation, but keep only the sign bit (1 bit) of each component.
+
+Why is 1 bit enough? Because this stage isn't recording how big the residual is, only which direction it leans. Combined with the magnitude already captured by PolarQuant, that direction is enough to correct the systematic bias and turn attention score computation into an unbiased estimator.
+
+The paper phrases it as "MSE quantizer followed by 1-bit Quantized JL transform on the residual" — the two stages together yield "unbiased and high compression simultaneously." In practice it achieves quality-neutral KV cache compression at 3.5 bits/channel.
+
+---
+
+## Mathematical intuition: why this works
+
+No equations, but I want you to leave with two pictures:
+
+**Picture one: rotation flattens.** Imagine a sheet of paper covered with stars, but 90% of them are crammed into the upper-right corner and only a sparse few in the lower-left. Now rotate the sheet randomly — 30 degrees, then 47, then 13. The relative positions of the stars haven't changed, but their distribution along "horizontal vs vertical" axes is much more even. Random rotation does exactly that — it spins the coordinate axes into an orientation that distributes the information uniformly.
+
+**Picture two: direction vs length.** The inner product of two vectors equals the product of their lengths times cos(angle between them). What we usually care about isn't how long they are, but how aligned they are. If the magnitude is already preserved by the main quantization, all that's left to correct is the angle — and angle correction only needs the sign of the residual. That's why a 1-bit sign sketch suffices.
+
+The two pictures together: **quantization isn't "discarding information," it's reorganizing information so the limited bits land where they matter most.**
+
+---
+
+## What three layers of algorithm have solved
+
+Looking back at the progression:
+
+| Algorithm | Year | Problem solved | Failure mode |
+|-----------|------|---------------|-------------|
+| Q4_0 (legacy) | 2022 | Squeezing 16 bits down to 4 at all | Symmetric-only (no min), each 32-weight block isolated — outlier in a block crushes its 31 neighbors |
+| K-quant (Q4_K) | 2023-06 | Super-blocks limit outlier blast radius to 32 weights | Assumes symmetric distribution; fails for KV cache |
+| TurboQuant | 2025-04 | Rotation + 1-bit sign sketch handle any distribution, guarantee unbiasedness | No fused CUDA kernel yet, so no speedup advantage |
+
+K-quant was a "topology win" — changing the grouping structure solved 80% of the problem. TurboQuant is a "geometry win" — changing the coordinate system solved the remaining 20%. Neither generation reached for "use more bits." The bottleneck was never bit count — it was algorithmic cleverness.
+
+This is also why LLM quantization research is still active: each new algorithm exposes failure modes the previous one didn't notice. Q4_0 → K-quant's roughly 7x quality improvement didn't come from adding bits; it came from changing strategy.
+
+---
+
+## What you can do with this
+
+Three concrete things:
+
+**1. Reading `Q4_K_M` you know what's hiding in the default**: 8 blocks × 32 weights super-block, plus the M variant (medium — K-quant adds extra bits to the sub-scale to trade size for quality).
+
+**2. Reading `--kv-cache-dtype turboquant3` you know how 3-bit KV cache stays lossless**: rotation flattens, sign sketch corrects — it's not "just slash bits."
+
+**3. Reading new papers you'll ask the right question**: the next generation of quantization algorithms won't be "fewer bits" — it'll be "smarter coordinate systems" or "smaller contamination radius." See "rotation," "sketch," "super-block," "block-wise" in a paper and you can immediately classify what problem it's solving.
+
+---
+
+## Cross-references
+
+- ← Not familiar with Q4_K_M? Back to [LLM 101 Part 4: What Is Quantization?](/en/blog/llm-101-what-is-quantization)
+- → Want measured TurboQuant numbers on GB10? [TurboQuant KV Cache Benchmark](/en/blog/turboquant-kv-cache-benchmark-gx10)
+- → Curious why memory bandwidth matters more than FLOPS? [DGX Spark series](/en/blog)
+
+---
+
+## Further reading
+
+- [TurboQuant: Online Vector Quantization with Near-Optimal Distortion Rate](https://arxiv.org/abs/2504.19874) — Zandieh, Daliri, Hadian, Mirrokni (2025)
+- [Google Research blog: TurboQuant](https://research.google/blog/turboquant-redefining-ai-efficiency-with-extreme-compression/)
+- [llama.cpp PR #1684: k-quants](https://github.com/ggml-org/llama.cpp/pull/1684) — ikawrakow's PR description lists every Q2_K through Q8_K layout
+- [bartowski's GGUF repo](https://huggingface.co/bartowski) — the full quantization ladder (Ollama only ships three tags per model)
+
+---
+
+*This is the first article in the **LLM Deep Dive** series — for readers who've finished [LLM 101](/en/blog/llm-101-ollama-vs-vllm) and want to understand the mechanism. Next planned topic: the attention mechanism itself — what Q/K/V actually do, and why softmax is the heart of attention rather than a decoration.*
 
 ---
 
@@ -273,7 +594,7 @@ Series: LLM 101 (Part 5)
 <VideoEmbed src="/videos/llm-101-context-window.mp4" />
 
 
-A context window is **how much text an AI can see at once** — think of it as the size of its desk. GPT-4o's desk holds ~96K words, Claude's holds ~150K words (up to 750K in extended mode), and Gemini's holds ~1.5M words. When the desk is full, older messages **fall off** and the AI can't see them anymore. It's not forgetting — it literally can't read what's no longer on the desk. To work around this: start fresh conversations, break big tasks into pieces, and paste key context at the top.
+A context window is **how much text an AI can see at once** — think of it as the size of its desk. In 2026, mainstream cloud models (GPT-5.4, Claude 4.6, Gemini 2.5 Pro) all have desks holding **~750K-787K words**. Meta's Llama 4 Scout goes to 7.5M words. When the desk is full, older messages **fall off** and the AI can't see them anymore. It's not forgetting — it literally can't read what's no longer on the desk. To work around this: start fresh conversations, break big tasks into pieces, and paste key context at the top.
 
 
 ## Plain-Language Version: Why AI loses track of your conversation
@@ -326,20 +647,21 @@ For the rest of this article, I'll use "words" loosely, but know that the actual
 
 Here are the context window sizes for popular models as of early 2026:
 
-| Model | Context window | Roughly how many words |
-|-------|---------------|----------------------|
-| **GPT-4o** (OpenAI) | 128K tokens | ~96,000 words |
-| **Claude Sonnet/Opus** (Anthropic) | 200K tokens | ~150,000 words |
-| **Claude** (extended) | 1M tokens | ~750,000 words |
-| **Gemini 2.5 Pro** (Google) | 1M tokens | ~750,000 words |
-| **Gemini 2.5 Pro** (extended) | 2M tokens | ~1,500,000 words |
-| **Llama 4 Scout** (Meta, local) | 10M tokens | ~7,500,000 words |
-| **Qwen3 14B** (local via Ollama) | 32K-128K tokens | ~24,000-96,000 words |
-| **Smaller local models** (7B-8B) | 8K-32K tokens | ~6,000-24,000 words |
+| Model | Context window | Roughly how many words | Notes |
+|-------|---------------|----------------------|-------|
+| **Llama 4 Scout** (Meta) | 10M tokens | ~7,500,000 words | Local, needs 128GB+ RAM |
+| **GPT-5.4** (OpenAI) | 1.05M tokens | ~787,500 words | Cloud, 2x pricing past 272K |
+| **Claude Opus/Sonnet 4.6** (Anthropic) | 1M tokens | ~750,000 words | Cloud, no long-context surcharge |
+| **Llama 4 Maverick** (Meta) | 1M tokens | ~750,000 words | Local or cloud |
+| **Gemini 2.5 Pro** (Google) | 1M tokens | ~750,000 words | Cloud |
+| **Qwen3.5-122B** (Alibaba) | 262K tokens | ~196,000 words | Local, extendable to 1M |
+| **GPT-4o** (OpenAI) | 128K tokens | ~96,000 words | Previous gen, still available |
+| **Qwen3 14B** (local via Ollama) | 32K-128K tokens | ~24,000-96,000 words | Depends on RAM |
+| **Smaller local models** (7B-8B) | 8K-32K tokens | ~6,000-24,000 words | Most memory-efficient |
 
 A few things stand out:
 
-1. **Cloud models have much bigger desks than local ones.** Running a model on your laptop typically gives you 8K-128K tokens. Cloud services offer 128K to 2M.
+1. **Cloud models now start at 1M tokens.** Running locally typically gives you 32K-262K. Llama 4 Scout is the exception — 10M, but you need 128GB+ RAM to use the full window.
 2. **The numbers keep growing.** Two years ago, 4K was standard. Now 128K is the baseline for major cloud models.
 3. **Bigger isn't always better.** We'll get to why in a moment.
 
@@ -906,7 +1228,7 @@ Series: AI Workflow (Part 1)
 Claude Code's context fills up because every message carries invisible overhead — rules, tool definitions, conversation history. The biggest waste: Claude re-reading the same files over and over. Quick fixes: /compact between tasks, /clear for fresh starts, describe the problem instead of naming files, trim unused MCP tools, keep CLAUDE.md lean, use Sonnet for daily work. Deeper fix: give Claude a search engine (QMD) + knowledge graph (Musubi) so it finds answers in 2-3 files instead of 10.
 
 
-## You Just Started Using Claude Code. It's Amazing. Then It Slows Down.
+## Plain-Language Version: You Just Started Using Claude Code. It's Amazing. Then It Slows Down.
 
 You install Claude Code. You ask it to fix a bug. It reads your files, understands the problem, writes a fix. Magic.
 
@@ -1645,7 +1967,7 @@ Full E4B NVFP4 quantization walkthrough: [World-First E4B NVFP4](/en/blog/dgx-sp
 
 **Transferable diagnostics:** The model selection decision tree is always: Does it fit in memory → Is bandwidth sufficient → Is there a MoE variant at this size → Is there an NVFP4 checkpoint.
 
-**The pattern that applies everywhere:** On bandwidth-limited hardware, always choose MoE over Dense. Total parameter count does not matter — active parameters determine speed.
+**The pattern that applies everywhere:** On bandwidth-limited hardware, always choose a sparse-activation architecture (MoE, or PLE-style dense models like E2B/E4B) over a fully dense model. Total parameter count does not matter — the parameters read per token determine speed.
 
 ---
 
@@ -2381,10 +2703,10 @@ You may have noticed the same model comes in many "versions": Q4_K_M, Q8_0, FP16
 |-------|------|---------|--------------|
 | FP16 | Largest | Best | FLAC — lossless, but huge |
 | Q8 | ~Half of FP16 | Nearly lossless | MP3 320kbps — can't tell the difference |
-| Q4 | ~Quarter of FP16 | Slight loss | MP3 128kbps — good enough for daily use |
+| Q4 | ~1/3 of FP16 (≈3.3x smaller) | Slight loss | MP3 128kbps — good enough for daily use |
 | Q2 | Smallest | Noticeable loss | 64kbps — you can hear it |
 
-**Pick Q4 for daily use.** It's one-quarter the size of the original with quality loss that most users can't feel. The memory formula above already assumes Q4.
+**Pick Q4 for daily use.** Real Q4 files are roughly one-third the size of the FP16 original (the theoretical "4x smaller" doesn't quite hold because of embeddings and metadata), with quality loss that most users can't feel. The memory formula above already assumes Q4.
 
 Want better quality? Go Q8. But memory usage doubles — make sure your "parking space" can fit it.
 
@@ -5122,7 +5444,7 @@ Apply a random rotation to each KV vector, convert to polar coordinates, then qu
 **Stage 2: QJL (Quantized Johnson-Lindenstrauss)**
 Stage 1 leaves residual error. QJL projects that residual through a random Gaussian matrix using the Johnson-Lindenstrauss transform, keeping only the sign bit (+1 or −1). This single-bit sketch makes attention score computation provably unbiased — something MSE-only quantization cannot guarantee.
 
-Paper claims: 3-bit, 6x memory, 8x attention logit speedup on H100, zero accuracy loss across LongBench/RULER/Needle-in-Haystack.
+Paper claims: ~3.5 bits/channel for quality-neutral compression, KV compression exceeding 5x, QJL-corrected attention logit speedups when run with optimized kernels, zero accuracy loss across LongBench/RULER/Needle-in-Haystack. (The "8x on H100" figure that often gets quoted alongside this paper isn't in the arxiv text I pulled — treat secondary-source performance numbers with caution.)
 
 ---
 
@@ -5200,7 +5522,7 @@ Full-precision matmul:        0.02 ms
 Memory: 2048 KB (fp16) → 384 KB (TQ-3bit) = 5.3x
 ```
 
-The 0.02ms vs 11ms gap matters: this PyTorch implementation has no fused CUDA kernel. The paper's 8x speedup requires optimized kernels on H100. On GB10 (SM121, non-mainstream hardware), using standard PyTorch ops, there is currently no speed advantage. **Memory savings are real. Speed gains require upstream kernel support.**
+The 0.02ms vs 11ms gap matters: this PyTorch implementation has no fused CUDA kernel. The paper reports attention-time speedups when QJL runs with optimized kernels (the specific "8x on H100" claim often attributed to this paper online wasn't in the arxiv text I checked — treat as unverified secondary-source). On GB10 (SM121, non-mainstream hardware), using standard PyTorch ops, there is currently no speed advantage. **Memory savings are real. Speed gains require upstream kernel support.**
 
 ---
 
@@ -5265,7 +5587,7 @@ In other words: for Qwen3.5-35B-A3B, TurboQuant's memory benefit is much smaller
 
 ## Is It Usable Now?
 
-**Not in production.** vLLM PR [#38280](https://github.com/vllm-project/vllm/issues/38171) is under review. llama.cpp has multiple community forks but nothing merged to main. Official implementation expected Q2 2026.
+**Not in production.** vLLM PR [#38280](https://github.com/vllm-project/vllm/pull/38280) was under review through late March 2026 but **closed unmerged on 2026-04-06**. llama.cpp has multiple community forks but nothing merged to main. Watch upstream vLLM for a follow-up PR.
 
 **Yes for learning and experimentation.** `pip install turboquant` or `tonbistudio/turboquant-pytorch` gets you running Python-level validation and algorithm understanding in under 10 minutes.
 
@@ -6626,6 +6948,23 @@ Date: 2026-03-19
 Series: OpenClaw (Part 8)
 
 <VideoEmbed src="/videos/telegram-routing.mp4" />
+
+
+An openclaw Telegram bot went silent while looking perfectly healthy: process running, token valid, messages received, no errors. Root cause: Tailscale injects IPv6 routes via utun interfaces that look valid but have no internet reachability. Node.js undici (Happy Eyeballs, RFC 8305) tries IPv6 first, hits EHOSTUNREACH, and fails without falling back to IPv4. Fix: set `OPENCLAW_TELEGRAM_DISABLE_AUTO_SELECT_FAMILY=1` in the launchd plist environment.
+
+
+## Plain-Language Version: When "Running" Doesn't Mean "Working"
+
+Your Telegram bot appears to be working: the process is alive, the login token is fine, and your messages reach the server. But no replies come back. The bot went silent without crashing — the worst category of failure, because every diagnostic tool says everything is fine.
+
+This one turned out to have three actors: Tailscale (the VPN that lets your devices talk to each other), IPv6 (the newer internet addressing scheme that's slowly replacing IPv4), and Node.js's network library choosing the "wrong" one first.
+
+The short version: Tailscale creates network routes that claim to handle IPv6 traffic but actually go nowhere. Node.js trusts the route table, tries IPv6, fails, and gives up — it doesn't fall back to IPv4 even though IPv4 would work. The fix is one environment variable that tells Node.js to skip IPv6 entirely.
+
+If you run Node.js services on a machine with Tailscale installed — Telegram bots, web scrapers, anything that talks to external APIs — this article shows the full debug trail and the one-line fix.
+
+---
+
 ## Preface
 
 The bot was online. The process was running. I sent a message. Nothing came back.
@@ -7303,7 +7642,7 @@ Series: Qwen3.5-122B on DGX Spark (Part 1)
 <VideoEmbed src="/videos/qwen-122b-speed.mp4" />
 
 
-Qwen3.5-122B boots correctly on DGX Spark (GB10/SM121) after the Part 1 SM121 fixes — output is coherent, model works. Speed stabilizes at 14 tok/s regardless of tuning. Root cause: Marlin has no specialized kernel for GDN (Gated Delta Network) SSM layers, so they fall back to a generic compute path. No flag fixes this. Theoretical ceiling is ~30 tok/s; current ceiling is ~14 tok/s. Use gpt-oss-120B (~59 tok/s) for interactive workloads until Marlin ships GDN support.
+Qwen3.5-122B boots correctly on DGX Spark (GB10/SM121) after the Part 1 SM121 fixes — output is coherent, model works. Speed stabilizes at 14 tok/s regardless of tuning. Root cause: Marlin has no specialized kernel for GDN (Gated Delta Network) SSM layers, so they fall back to a generic compute path. No flag fixes this. Bandwidth-only ceiling for a 10B-active MoE on GB10 is ~55 tok/s; observed is 14 — the gap is compute, not bandwidth. Use gpt-oss-120B (~59 tok/s) for interactive workloads until Marlin ships GDN support.
 
 
 ## Plain-Language Version: A 122-Billion-Parameter AI Model — Why Only 14 tok/s?
@@ -7366,18 +7705,18 @@ Marlin has fast, optimized kernels for standard linear layers and MoE expert GEM
 
 This is also why the `SupportsQuant` fix from Part 1 is non-negotiable: without it, vLLM quantizes the GDN layers to NVFP4, which corrupts their recurrent hidden state and breaks the model entirely. The fix keeps GDN in BF16 — correct behavior, but it means GDN runs on the unoptimized path.
 
-On GB10's 273 GB/s bandwidth, the math is straightforward: moving 61 GB of weights takes ~0.22 seconds per decode step. The theoretical ceiling for 122B NVFP4 on GB10 is around 30 tok/s. To reach it, every layer needs an efficient kernel. When half the architecture (GDN) falls back to generic, the throughput averages down toward half the ceiling. 14 tok/s is where that average lands.
+On GB10's 273 GB/s bandwidth, the math needs the MoE correction. Qwen3.5-122B-A10B routes 8 of 256 experts per token, so only ~10B params are active per decode step. At 4-bit that's ~5 GB streamed per token — bandwidth ceiling of ~55 tok/s, not 30. The earlier "61 GB streamed per step" framing was wrong: that's the total weights, not the per-token active slice. A fully optimized stack should land well above 14 tok/s. When 36 of 48 layers (the linear-attention + GDN layers) fall back to a generic compute path, throughput collapses to 14 tok/s — about 4x below the bandwidth ceiling, which says compute is the bottleneck, not memory bandwidth.
 
 ---
 
 ## What Was Gained
 
-The result is 14 tok/s, not the ~30 tok/s ceiling. But the work wasn't wasted.
+The result is 14 tok/s, far below what an efficient kernel stack would deliver. But the work wasn't wasted.
 
 **Confirmed:**
 - The SM121 fix stack from Part 1 works correctly for Qwen3.5-122B. Output is coherent and accurate.
 - `SupportsQuant` is required — without it, GDN layers get quantized and output is garbage. This is a non-obvious bug that would cost hours to diagnose from scratch.
-- The theoretical decode ceiling on GB10 for 122B NVFP4 is ~30 tok/s. When Marlin adds GDN kernel support, this is the target to validate against.
+- The bandwidth ceiling on GB10 for a 10B-active MoE is ~55 tok/s; real-world targets will be lower once attention/norm overhead is included. When Marlin adds GDN kernel support, validate against this ceiling, not the 14 tok/s currently observed.
 
 **Established:**
 - 14 tok/s is the current floor, not a bug. There is nothing misconfigured.
@@ -8074,6 +8413,8 @@ vllm/vllm-openai:v0.17.1-cu130
 
 This is the opposite of what the Qwen3.5 article recommends. The difference is model-specific, not hardware-specific. Nemotron's kernel path in nightly hits the SM121 `torch.compile` bug; Qwen3.5's doesn't but requires nightly for other reasons. Document your image version alongside your serve command and don't treat it as interchangeable across models.
 
+> **Update (2026-04-15):** NVIDIA's [official DGX Spark Nemotron guide](https://docs.nvidia.com/nemotron/nightly/usage-cookbook/Nemotron-3-Super/SparkDeploymentGuide/README.html) now recommends `cu130-nightly` together with a custom reasoning parser plugin (`super_v3`, shipped as `/app/super_v3_reasoning_parser.py`). Either path can work — the stable+`nemotron_v3` recipe below is what I ran and verified at the time this article was written. If you start fresh today, check both.
+
 ---
 
 ## Pitfall 2: MoE Kernel — The Env Var That Does Nothing
@@ -8140,11 +8481,13 @@ Nemotron uses a thinking output format. The reasoning parser flag is:
 --reasoning-parser nemotron_v3
 ```
 
-Not `super_v3`. Not `nemotron`. Not `nemotron_super`. Exactly `nemotron_v3`.
+Not `nemotron`. Not `nemotron_super`. Exactly `nemotron_v3`.
 
 If the parser name is wrong, vLLM does not error at startup. The model loads and runs. Thinking tokens get routed incorrectly — either swallowing the actual response or producing malformed output. The failure is silent until you test with a request that exercises the reasoning path.
 
 Verify by checking that a test request returns content in the correct field.
+
+> **Note:** `super_v3` is a real alternative — it's the reasoning parser NVIDIA ships as a custom plugin in their [official DGX Spark Nemotron guide](https://docs.nvidia.com/nemotron/nightly/usage-cookbook/Nemotron-3-Super/SparkDeploymentGuide/README.html) via `--reasoning-parser-plugin /app/super_v3_reasoning_parser.py --reasoning-parser super_v3`. Both work; this article uses `nemotron_v3` (built into upstream vLLM) because that's what I ran and verified.
 
 ---
 

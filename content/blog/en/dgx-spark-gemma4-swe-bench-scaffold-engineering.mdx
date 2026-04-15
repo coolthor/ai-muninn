@@ -1,0 +1,162 @@
+---
+title: "[AI Agent] Gemma 4 26B Cleared a SWE-bench Lite Instance — After 28 Tries Across Two Days"
+description: "Two days running mini-swe-agent + vLLM on a GB10. From wrong doc conclusions to Gemma 4 self-submitting a clean patch in 38 steps — what actually unlocked it."
+date: "2026-04-15"
+updatedAt: "2026-04-15"
+tags: ["SWE-bench", "mini-swe-agent", "Gemma 4", "vLLM", "agent scaffold", "GX10"]
+series: "DGX Spark"
+part: 16
+faqs:
+  - q: "Why does Gemma 4 hit 'No tool calls found' on the default mini-swe-agent config?"
+    a: "Default swebench.yaml uses the OpenAI tool_calls protocol — every response must contain structured JSON tool calls. Gemma 4 26B-A4B (3.8B active MoE) emits empty tool_calls intermittently, triggering harness retries. Switching to swebench_backticks.yaml (regex-parsed markdown bash blocks) bypasses the protocol entirely."
+  - q: "What does the `--exit-immediately` flag actually do?"
+    a: "After the model self-submits, mini-swe-agent's InteractiveAgent prompts 'Type new task or Enter to quit'. Without `--exit-immediately`, batch runs hit EOF on stdin and abort — even though the patch is already correct. My earlier 'submit successes' all died this way."
+  - q: "Why did adding `--reasoning-parser` and the chat-template make Gemma 4 worse, not better?"
+    a: "The reasoning parser does strip `<|channel>thought` markers from the content field, but the chat template also reshapes the prompt the model sees. Empirically Gemma 4 in this 'cleaner' state is more likely to whole-file rewrite or duplicate existing methods. Stripping these flags and running with bare `--tool-call-parser gemma4` plus a structured edit-tool turned out more stable."
+  - q: "How does our edit-tool relate to Anthropic's text editor?"
+    a: "Same spec — view / str_replace / insert / create, with str_replace requiring exactly-one-match. The Anthropic SWE-bench blog calls it `str_replace_editor`; the current Claude API ships it as `str_replace_based_edit_tool` (text_editor_20250728), with `undo_edit` removed since the 4.x version. Ours uses a heredoc API instead of JSON tool_use, because mini-swe-agent's backticks scaffold passes commands through bash. We also print a 3-line context window after replace for self-verification."
+---
+
+import { TLDRCard } from "@/components/blog/TLDRCard";
+import { VideoEmbed } from "@/components/blog/VideoEmbed";
+
+<TLDRCard>
+Two days, 28 SWE-bench Lite runs on the same instance. Gemma 4 26B-A4B FP8 self-submitted a clean patch in 38 steps — 11 steps faster than Qwen 3.5 35B. The 38 steps are real. The 27 runs before that include four wrong-conclusion docs, one silent pydantic field drop, and one undocumented `--exit-immediately` flag.
+</TLDRCard>
+
+<VideoEmbed src="/videos/dgx-spark-gemma4-swe-bench-scaffold-engineering.mp4" />
+
+## Plain-Language Version: Why this article matters
+
+[SWE-bench](https://www.swebench.com/) is a benchmark of real GitHub bugs. The AI has to read a repo, locate the issue, edit source code, run tests, and produce a git patch. The Lite split is 300 curated instances, often used as the agent-capability scoreboard.
+
+The hard part of running SWE-bench locally isn't whether the model can fix bugs. It's that the entire scaffold — the agent framework, the shell environment, the tool protocol — has gaps that amplify or mask the model's weaknesses. The same Gemma 4 26B-A4B FP8 won't even attempt edits under one config and self-submits a more general patch than Qwen 3.5 35B under another.
+
+I spent two days on a NVIDIA GB10 (DGX Spark) with [mini-swe-agent](https://github.com/SWE-agent/mini-swe-agent) + vLLM, going from "I think it works" to "it actually works". This is the path. Engineers can copy the configs. Anyone else can watch a fight between an engineer and his own old notes.
+
+---
+
+## Picking up where [Part 15](/en/blog/swe-bench-local-models-framework-matters) left off
+
+Two days ago I wrote about Gemma 4 fixing a simple bug in 9 steps on SWE-agent — issue #1 on SWE-agent's own test repo, a missing colon after a `def`. Entry-level material. The takeaway then: the framework matters more than the model.
+
+The natural next test was real SWE-bench Lite. I picked `sympy__sympy-11400` — `ccode(sinc(x))` prints "Not supported in C" and needs to emit a Piecewise instead. I switched to mini-swe-agent (the same team's lighter-weight successor) because my 04-14 notes said "both local models submitted in 35-56 steps".
+
+I copied the config and re-ran the same instance. The result was 32 steps and an EOFError.
+
+## Pit #1: I trusted my own doc
+
+Opening the trajectory file showed `exit_status: EOFError`, `submission_len: 0`. The model had written the correct `_print_Function` patch with a sinc handler, but mini-swe-agent's InteractiveAgent had hit a "Type new task or Enter to quit" prompt at the finish line. Nothing to read from stdin in a batch run, so the process died. SWE-bench grading needs `Submitted` — Aborted doesn't count.
+
+Going deeper: the `agent.system_message_suffix` field in the 04-14 yaml (containing a multi-phase workflow plus an answer-level hint) was being **silently dropped by pydantic**. `DefaultAgent`'s `AgentConfig` only declares `system_template`; extra fields are ignored by default.
+
+```python
+class AgentConfig(BaseModel):
+    system_template: str    # only this
+    instance_template: str
+    # no system_message_suffix
+```
+
+Verifying via the trajectory's first system message: 95 characters total, just the stock "You are a helpful assistant that can interact with a computer shell to solve programming tasks." Every phased prompt I'd written never reached the model.
+
+Two implications:
+1. The me from 04-14 never actually verified that the prompt was being ingested
+2. The two "successes" weren't scaffold-engineering wins — the model solved them on the bare prompt, by chance, and got killed at submit
+
+The incident memo I'd written about "answer leak causing fake success" had its causal chain inverted. The leak never reached the model. The note had to be rewritten.
+
+## Pit #2: `--exit-immediately`, the flag nobody mentions
+
+Before fixing the prompt, I had to fix "why is the run aborting after a clean submit". Reading `mini-swe-agent/run/benchmarks/swebench_single.py`:
+
+```python
+yolo: bool = typer.Option(False, "-y", "--yolo", help="Run without confirmation")
+exit_immediately: bool = typer.Option(False, "--exit-immediately",
+    help="Exit immediately when the agent wants to finish instead of prompting.")
+```
+
+`-y` only suppresses per-command confirmation. **`--exit-immediately` is the one that bypasses the finish-time prompt.** Two separate options.
+
+Adding `--exit-immediately`, raising step_limit to 100, and putting an actual budget prompt into `system_template` ("by step 60 you must submit"), Qwen 3.5 35B self-submitted at step 49 with `exit_status: Submitted` and an 834-character correct `_print_sinc` patch. **First clean end-to-end Submitted in two days.**
+
+## Pit #3: Adding more flags made Gemma 4 worse
+
+Same config worked for Qwen but not Gemma 4 FP8 — patch added `"sinc": "sinc"` to the `known_functions` dict. C has no `sinc` function. Adding `--reasoning-parser gemma4 + --chat-template tool_chat_template_gemma4.jinja` (vLLM's officially recommended flags for Gemma 4 tool use) made the patch **worse** — duplicate insertions of methods that already existed. Three Gemma 4 variants in a row, all wrong patches.
+
+[Codex and Gemini in /debate both pointed at missing reasoning-parser as the root cause](https://www.anthropic.com/engineering/swe-bench-sonnet), but the empirical result was the opposite: dropping those two flags and running with bare `--tool-call-parser gemma4` was more stable.
+
+The actual unlock came from re-reading mini-swe-agent's config tree:
+
+```
+src/minisweagent/config/benchmarks/
+├── swebench.yaml         (what I'd been using — OpenAI tool_calls)
+├── swebench_backticks.yaml   (regex-parsed markdown bash blocks)
+├── swebench_xml.yaml
+└── swebench_modal.yaml
+```
+
+`swebench_backticks.yaml` only requires the model to write:
+
+```
+THOUGHT: I'll view ccode.py
+
+` ``mswea_bash_command
+edit-tool view --file /testbed/sympy/printing/ccode.py
+` ``
+```
+
+The harness regex-extracts the markdown block. **The entire OpenAI tool_calls protocol is bypassed.** Gemma 4's "No tool calls found" deadlock disappeared.
+
+## Pit #4: Giving the tool isn't enough — you have to force its use
+
+Backticks alone wasn't sufficient — Gemma 4 went straight to `cat > /testbed/.../ccode.py <<EOF` and rewrote the whole file, deleting the existing `_print_sign` and `indent_code` methods in the process.
+
+This is why [Anthropic's SWE-bench writeup](https://www.anthropic.com/engineering/swe-bench-sonnet) gives Sonnet a `str_replace_editor` alongside bash — the editor enforces unique-match replacement and refuses anything else (the [current Claude API names this `str_replace_based_edit_tool`](https://platform.claude.com/docs/en/agents-and-tools/tool-use/text-editor-tool) and removed `undo_edit` in the 4.x version). For small models the enforcement is the whole point. Without it, whole-file rewrites destroy unrelated code.
+
+I wrote `edit-tool` v2 — the shell equivalent of Anthropic's editor, with a heredoc API that sidesteps bash multi-line quoting hell:
+
+```bash
+edit-tool str_replace --file /testbed/sympy/printing/ccode.py << 'PATCH'
+---OLD---
+    def _print_NegativeInfinity(self, expr):
+        return '-HUGE_VAL'
+---NEW---
+    def _print_NegativeInfinity(self, expr):
+        return '-HUGE_VAL'
+
+    def _print_sinc(self, expr):
+        from sympy import sin, Piecewise, Ne
+        x = expr.args[0]
+        return self._print(Piecewise((sin(x)/x, Ne(x, 0)), (1, True)))
+PATCH
+```
+
+The system_template added a hard rule plus one few-shot example: "edits to /testbed/**/*.py MUST use edit-tool — no cat, no sed", and taught the model that `ERROR: old text not found` means re-view the file and try again with the exact text.
+
+The run:
+- Step 8: first `edit-tool view`
+- Step 33: first `str_replace` — failed, old text not present
+- Step 34: model self-corrects with `edit-tool view --lines 245:255`
+- Step 35: retried str_replace — succeeded
+- Step 38: `echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT && cat patch.txt`
+
+`exit_status: Submitted`, 1198-character patch, correct `_print_Function` override, and a bonus generalization that handles `known_functions` entries as both tuple and string. **11 steps faster than Qwen 3.5 35B and a more general patch.**
+
+## What Was Gained
+
+**What cost the most time**: trusting the doc I'd written 24 hours earlier. Every "scaffold improvement let Gemma 4 pass in 35 steps" entry was wrong. The suffix never loaded, the submit never landed. The first thing to do after changing a config is dump the trajectory's first system message and check the actual length, not assume yaml will load by virtue of being written.
+
+**Transferable diagnostics**: pydantic defaults `extra = "ignore"`, which is a silent-failure factory. Any BaseModel-driven config that contains a key the schema doesn't declare just discards it. After every config edit, verify what runtime actually received.
+
+**The pattern that applies everywhere**: **small models aren't bad at editing — the tool-calling protocol is too brittle for them**. Anthropic's Sonnet uses `tool_calls` JSON + `str_replace_based_edit_tool` because Sonnet's instruction following can carry the structural overhead. For Gemma 4 26B-A4B (3.8B active MoE) the protocol needs to be lighter (regex-parsed backticks), the editor needs to be structured (unique-match enforcement), and the prompt needs hard constraints (forbidden patterns plus a few-shot example). When all three are in place, the capability shows up.
+
+## Checklist for OS-model SWE-bench
+
+1. Use `swebench_backticks.yaml` instead of the default `swebench.yaml`, unless your model handles tool_calls reliably (Qwen 3.5 35B does)
+2. Always launch with `-y -l 0 --exit-immediately`. The last flag is non-optional for batch runs
+3. Put a step budget and scope discipline into `system_template`. Without it, the model over-engineers across files and never submits
+4. After every config change, dump `trajectory.messages[0]` and verify the prompt was actually loaded
+5. Install a structured editor (`str_replace`-style) inside the container. Forbid `cat > file` for source edits in the prompt
+6. Only count `info.exit_status == "Submitted"` as a win. Sanity-check the patch by hand
+
+Two days of tuition for one stable local path. Next is pushing Path B (Gemma + edit-tool) across the full Lite 300 to see what the actual pass rate looks like.
