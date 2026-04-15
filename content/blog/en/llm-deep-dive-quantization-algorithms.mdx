@@ -10,7 +10,7 @@ faq:
   - q: "Why doesn't 4-bit quantization break the model?"
     a: "Because modern quantization isn't 'one scale per tensor.' K-quant groups every 256 weights into a super-block with a shared scale; TurboQuant goes further — it randomly rotates vectors so outliers spread across all dimensions, then uses a 1-bit sign sketch on the residual for unbiased correction. Each layer fixes the previous layer's failure mode."
   - q: "How does K-quant differ from the older Q4_0?"
-    a: "Q4_0 used one scale factor per tensor, so a single outlier could collapse all the normal weights into two or three distinct values. K-quant (llama.cpp PR #1684, June 2023) introduced super-blocks: Q4_K groups 8 blocks × 32 weights = 256 weights sharing a top-level scale, and each block has its own sub-scale. An outlier only contaminates its own block, not the whole layer."
+    a: "Q4_0 already uses per-32-weight blocks with one FP16 scale each, but it's symmetric (no min offset) and each block stands alone. A single outlier in a block collapses its 31 neighbors into two or three distinct values. K-quant (llama.cpp PR #1684, June 2023) keeps the 32-weight block size but adds (a) asymmetric quantization with a `dmin` companion to the `d` scale, and (b) a super-block layer — every 256 weights share a pair of FP16 `d` and `dmin`, while each 32-weight block carries its own 6-bit quantized sub-scale and sub-min. Each block now calibrates itself far more precisely at small metadata cost."
   - q: "Why does TurboQuant rotate before quantizing?"
     a: "Because raw KV cache vectors are unevenly distributed — a few dimensions hold extreme outliers, the rest cluster tightly. MSE quantization on this distribution always leaves systematic bias. Random rotation (PolarQuant stage) flattens the distribution toward Beta, giving every dimension a similar profile so Lloyd-Max can find globally optimal quantization points without calibration data."
   - q: "Why is 1 bit enough for QJL?"
@@ -18,7 +18,7 @@ faq:
 ---
 
 <TLDRCard>
-Q4_K_M doesn't just "throw away 75% of each weight." It's three algorithms stacked: **K-quant** binds 256 weights into a super-block sharing a scale, stopping outliers from poisoning the whole tensor; **PolarQuant** randomly rotates vectors so the distribution flattens; **QJL** uses a 1-bit sign sketch on the residual for unbiased correction. Each layer fixes the previous layer's failure mode — that's why 4 bits became the sweet spot.
+Q4_K_M doesn't just "throw away 75% of each weight." It's three algorithms stacked: **K-quant** binds 256 weights into a super-block with FP16 `d` / `dmin` and per-32-weight 6-bit sub-scales, giving each block tight asymmetric calibration Q4_0 couldn't reach; **PolarQuant** randomly rotates vectors so the distribution flattens; **QJL** uses a 1-bit sign sketch on the residual for unbiased correction. Each layer fixes the previous layer's failure mode — that's why 4 bits became the sweet spot.
 </TLDRCard>
 
 ## Why this article exists
@@ -68,11 +68,11 @@ In June 2023, [ikawrakow opened llama.cpp PR #1684](https://github.com/ggml-org/
 The core idea: **two-tier grouping.**
 
 Take Q4_K:
-- **Super-block** = 256 weights sharing a high-precision scale (called `d`, stored in 6 bits)
-- **Block** = the super-block is split into 8 sub-blocks of 32 weights each, and every sub-block has its own 4-bit sub-scale and sub-min
-- Each weight is stored in 4 bits, but dequantization combines "super-block d × sub-scale + sub-min"
+- **Super-block** = 256 weights sharing a pair of high-precision values, `d` and `dmin`, both stored as `ggml_half` (FP16 half precision)
+- **Block** = the super-block is split into 8 sub-blocks of 32 weights each; every sub-block carries a **6-bit quantized** sub-scale and sub-min (packed inside `block_q4_K.scales` per the `ggml-common.h` struct)
+- Each weight is stored in 4 bits; dequantization combines "super-block `d` × dequantized sub-scale + `dmin` × dequantized sub-min"
 
-Convoluted to describe, but the effect is direct. When an outlier appears in one block, only that block's sub-scale gets stretched — the other 7 blocks are untouched. **Outlier contamination radius shrinks from "the whole tensor" to 32 weights.**
+Convoluted to describe, but the upgrade over Q4_0 isn't "shrinking the contamination radius" — both still use 32-weight blocks. The real gains are two: (1) **asymmetric quantization** via `dmin` lets K-quant handle distributions that aren't centered on zero, which Q4_0's symmetric scheme simply can't; (2) the **super-block hierarchy** lets 8 blocks share a pair of FP16 `d` / `dmin` while each block still carries its own 6-bit sub-scale and sub-min — each block calibrates itself far more precisely than Q4_0 could, while the metadata overhead grows only modestly. An outlier in one block pushes its own sub-scale; its 7 neighbors share the same super-block `d` but calibrate independently and stay unaffected.
 
 Super-block layouts for each K-quant level (clearly listed in [ikawrakow's PR description](https://github.com/ggml-org/llama.cpp/pull/1684)):
 
@@ -94,7 +94,7 @@ K-quant's success directly produced the "just use Q4_K_M" consensus. From that m
 
 ## Layer three: TurboQuant — rotate, flatten, then record direction
 
-K-quant solved "outliers contaminate the whole group," but it still assumes the underlying distribution is roughly symmetric. For weights, that assumption holds. For another increasingly important target — **the KV cache** — it doesn't.
+K-quant pushed weight quantization to a sweet spot using asymmetric quantization plus two-tier metadata. But it still assumes that each 32-weight block fits a single scale/min well and that one FP16 `d` per super-block covers all its blocks. For weights those assumptions hold; for the **KV cache**, where distributions are more skewed and outliers concentrate more sharply, they don't.
 
 The KV cache is the key/value pair the model accumulates across long conversations to compute attention. Its distribution is even more skewed than weights: a few channels carry extreme outliers, most channels are tightly clustered. Traditional quantization performs poorly here, so [Google Research published TurboQuant in April 2025](https://research.google/blog/turboquant-redefining-ai-efficiency-with-extreme-compression/) ([arxiv 2504.19874](https://arxiv.org/abs/2504.19874)).
 
@@ -106,7 +106,7 @@ You can't quantize KV vectors directly because the distribution is so skewed. Po
 
 Picture a 128-dimensional vector where a few dimensions (say 17 and 53) hold extreme values. Multiply by a random rotation matrix `R` to get `Rv`. **Rotation preserves vector length but redistributes the energy that was concentrated in a few dimensions across all dimensions evenly.**
 
-After rotation, every component looks similar — mathematically the distribution converges toward a Beta distribution. Quantize *now* and outliers no longer dominate the scale, because outliers no longer exist; every dimension lives in the same range.
+After rotation, every component looks similar. More precisely: for a fixed-norm vector under a uniformly random rotation, the *square* of each coordinate follows a concentrated Beta distribution — and in high dimensions the coordinate itself approaches a Gaussian (Maxwell-Poincaré). Either framing leads to the same point: there are no outlier dimensions anymore; every dimension's values live in the same range.
 
 The elegance: **you don't need to know the weight distribution in advance** (unlike GPTQ-style methods that require calibration data). Random rotation works for any distribution, because its job is precisely to destroy the original distribution. Lloyd-Max can then find globally optimal quantization points on the resulting Beta distribution.
 
@@ -142,7 +142,7 @@ Looking back at the progression:
 
 | Algorithm | Year | Problem solved | Failure mode |
 |-----------|------|---------------|-------------|
-| Q4_0 (legacy) | 2022 | Squeezing 16 bits down to 4 at all | One outlier ruins the whole tensor |
+| Q4_0 (legacy) | 2022 | Squeezing 16 bits down to 4 at all | Symmetric-only (no min), each 32-weight block isolated — outlier in a block crushes its 31 neighbors |
 | K-quant (Q4_K) | 2023-06 | Super-blocks limit outlier blast radius to 32 weights | Assumes symmetric distribution; fails for KV cache |
 | TurboQuant | 2025-04 | Rotation + 1-bit sign sketch handle any distribution, guarantee unbiasedness | No fused CUDA kernel yet, so no speedup advantage |
 
