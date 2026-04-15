@@ -1,0 +1,184 @@
+---
+title: "[LLM 深水區] 量化演算法在做什麼？從 Q4_K_M 到 TurboQuant 的三層拆解"
+description: "Q4_K_M 用 4 bit 怎麼裝得下 14B 模型？答案不是「切掉 75%」，而是 K-quant 的 super-block 分組、TurboQuant 的隨機旋轉、跟 QJL 的 1-bit sign sketch 三層演算法。一篇講清楚機制，但不推公式。"
+date: "2026-04-15"
+updatedAt: "2026-04-15"
+tags: ["LLM", "量化", "Quantization", "K-quant", "TurboQuant", "PolarQuant", "QJL", "演算法"]
+series: "LLM 深水區"
+part: 1
+faq:
+  - q: "為什麼 4 bit 量化不會把模型搞壞？"
+    a: "因為現代量化不是「整個模型一個 scale」。K-quant 把每 256 個權重分成一個 super-block，每組共享自己的 scale；TurboQuant 更進一步，先把向量隨機旋轉讓 outlier 攤平到所有維度，再對殘差用 1-bit sign sketch 做無偏校正。每一層都在解決上一層的失敗模式。"
+  - q: "K-quant 跟舊的 Q4_0 差在哪？"
+    a: "Q4_0 對整個 tensor 用一個 scale factor，遇到 outlier 會把所有正常值壓到只剩兩三個離散值。K-quant（llama.cpp PR #1684, 2023-06-05）改成 super-block 結構：Q4_K 是 8 個 block × 32 weights = 256 個 weights 共享一組 scale，每個 block 內部再有自己的小 scale。outlier 只污染它自己那一塊，不再毀掉整個層。"
+  - q: "TurboQuant 為什麼要先旋轉再量化？"
+    a: "因為原始 KV cache 向量分布不均勻 — 少數維度有 outlier，剩下都很集中。對這種分布做 MSE 量化必定有系統性偏差。隨機旋轉（PolarQuant 階段）會把分布壓成接近 Beta 分布，每個維度長相都差不多，這時候量化點才能用 Lloyd-Max 找到全域最佳解，不需要 calibration data。"
+  - q: "QJL 為什麼只用 1 bit 就夠？"
+    a: "因為它不是在量化向量本身，而是在量化「殘差的方向」。Johnson-Lindenstrauss 引理保證隨機投影能近似保留向量內積。先用 MSE 量化拿到主體值，剩下的小殘差只需要記方向（正或負）就能做 unbiased 校正。這是 attention score 計算能保持正確的關鍵。"
+---
+
+<TLDRCard>
+Q4_K_M 不是把每個權重「切掉 75%」就交差。實際上是三層演算法：**K-quant** 把 256 個權重綁成 super-block 共享 scale、阻止 outlier 污染整層；**PolarQuant** 用隨機旋轉把向量分布攤平、消除系統性偏差；**QJL** 用 1-bit sign sketch 對殘差做無偏校正。每一層解決前一層的失敗模式 — 這是 4 bit 還能用的真正原因。
+</TLDRCard>
+
+## 為什麼要寫這篇
+
+[LLM 101 Part 4](/zh-TW/blog/llm-101-what-is-quantization) 裡我用 MP3 比喻講了為什麼量化能成功 — 神經網路本來就吵、權重分布集中、誤差會互相抵消。那篇文章對「我該下載哪個版本」夠用。
+
+但有讀者寫信來問：「4 bit 真的就是把每個數字四捨五入到 16 個值嗎？那為什麼不會崩？」
+
+直覺答案是「神經網路本來就有冗餘」。這個答案沒錯，但偷懶。真正的答案是：**過去十年量化演算法做了很多事讓 4 bit 變成可用的甜蜜點。** 如果只是把 FP16 直接砍到 4 bit（早期的 Q4_0），品質會明顯掉。Q4_K_M 之所以「幾乎無損」，是因為它背後一連串聰明的工程決策。
+
+這篇是新系列「LLM 深水區」的開篇 — 給已經看過 [Part 4](/zh-TW/blog/llm-101-what-is-quantization)、想懂機制但不想讀 paper 的人。我會用三層拆解的方式講清楚現代量化在做什麼，從 2023 年的 K-quant 一路講到 2025 年的 [TurboQuant](https://arxiv.org/abs/2504.19874)。會用真實演算法名字，會看到「super-block」「Johnson-Lindenstrauss」這種詞，但不推公式 — 我會用幾何直覺取代數學。
+
+如果讀完還想看實測數據，[TurboQuant 在 GX10 上的 benchmark](/zh-TW/blog/turboquant-kv-cache-benchmark-gx10) 是這篇的姊妹篇。
+
+---
+
+## 量化的根本問題：outlier
+
+任何量化演算法的設計都圍繞一個敵人 — **outlier**。
+
+量化的本質是：你有一堆連續的浮點數，要用有限個離散等級去近似它們。4 bit = 16 個等級。如果你的數字大致分布在 -1 到 +1 之間，把這個區間切成 16 等分，每個值對應到最近的等級，誤差很小。
+
+問題是現實的權重不長那樣。多數權重確實落在 -1 到 +1 之間，但每隔幾百個就會冒出一個 5、一個 -8。這些 outlier 不能丟（它們通常編碼了重要的特徵），但如果你為了涵蓋它們把 scale 拉大到 -8 ~ +8，那 16 個等級就要橫跨這整個範圍 — 每兩個等級之間相差 1。原本在 -1 ~ +1 之間的細節全部被壓到三個等級裡，等於失去 90% 的資訊。
+
+這就是為什麼直接量化不夠。每一代演算法都在用不同方法處理 outlier。
+
+---
+
+## 第一層：Legacy quantization（Q4_0）為什麼不夠好
+
+最早的 llama.cpp 量化叫 Q4_0。它的演算法簡單到一行能說完：
+
+> 對每一組 32 個權重，找出最大絕對值 `max_abs`，scale = `max_abs / 7`，每個權重四捨五入到 `round(weight / scale)`，存成 4 bit 整數（範圍 -8 ~ +7）。
+
+這就是「把區間切 16 等分」的字面實作。每 32 個權重共享一個 scale factor。
+
+**它的失敗模式**：只要這 32 個權重裡有一個 outlier，整組的 scale 就被它綁架。剩下 31 個小權重都被擠到中間幾個離散值，互相之間幾乎無法分辨。對神經網路來說，這 31 個權重的相對大小才是有資訊的東西 — 把它們壓成「都差不多」就等於把這層的表達能力砍掉一截。
+
+Q4_0 在小模型（<3B）上勉強堪用，到 7B 以上品質肉眼可見地比 FP16 差。要修這個問題，第一步是改變「分組策略」。
+
+---
+
+## 第二層：K-quant — super-block + per-block scale
+
+2023 年 6 月，[ikawrakow 在 llama.cpp 提了 PR #1684](https://github.com/ggml-org/llama.cpp/pull/1684)，引入了 Q2_K、Q3_K、Q4_K、Q5_K、Q6_K 一整套新格式。這就是 Q4_K_M 名字裡那個 K。
+
+它的核心想法：**兩層分組**。
+
+以 Q4_K 為例：
+- **Super-block** = 256 個權重一組，共享一個高精度 scale（叫做 `d`，用 6 bit 存）
+- **Block** = super-block 裡再切 8 個小 block，每個 block 32 個權重，每個 block 自己有一個 4-bit 的 sub-scale 和 sub-min
+- 每個權重存成 4 bit，但實際反量化時要用「super-block 的 d × block 自己的 sub-scale + sub-min」
+
+聽起來很繞，但效果很直接。當一個 outlier 出現在某個 block 裡，它只會把那個 block 的 sub-scale 拉大 — 旁邊的 7 個 block 完全不受影響。**outlier 的污染半徑從 32 個權重變成 32 個權重**（同一個 block 內），而不是「整個 tensor」或「整個 256-block」。
+
+各 K-quant 等級的 super-block 結構（[ikawrakow 在 PR 描述裡列得很清楚](https://github.com/ggml-org/llama.cpp/pull/1684)）：
+
+| 等級 | super-block 結構 | bits/weight |
+|------|----------------|------------|
+| Q2_K | 16 blocks × 16 weights = 256 | 2.5625 |
+| Q3_K | 16 blocks × 16 weights = 256 | 3.4375 |
+| Q4_K | 8 blocks × 32 weights = 256 | 4.5 |
+| Q5_K | 8 blocks × 32 weights = 256 | 5.5 |
+| Q6_K | 16 blocks × 16 weights = 256 | 6.5625 |
+
+注意 super-block 永遠是 256 個權重，但 block 內的權重數隨 bit 寬度變化。bit 越少，block 切得越細 — 因為 outlier 的影響更致命，需要更小的隔離區。
+
+「平均每個權重幾個 bit」那個小數點下面的 0.5625 是 metadata 攤銷下來的 — sub-scale 和 sub-min 也要佔空間。這是為什麼 Q4_K 不是剛好 4 bit/weight 而是 4.5 bit/weight。
+
+K-quant 的成功直接創造了「Q4_K_M 就好了」這個共識。從此 4 bit 不再是取捨，而是預設。
+
+---
+
+## 第三層：TurboQuant — 旋轉、攤平、再記方向
+
+K-quant 解決了「outlier 污染整組」的問題，但它仍然假設原始分布大致對稱。對權重來說這個假設成立。但對另一個越來越重要的東西 — **KV cache** — 就沒這麼幸運。
+
+KV cache 是模型在跑長對話時記下來的 attention 鍵值。它的分布比權重更不均勻：少數 channel 有極端 outlier，多數 channel 很集中。傳統量化在這上面表現很差，於是 [Google Research 在 2025 年 4 月發了 TurboQuant](https://research.google/blog/turboquant-redefining-ai-efficiency-with-extreme-compression/)（[arxiv 2504.19874](https://arxiv.org/abs/2504.19874)）。
+
+TurboQuant 是兩階段的演算法。我用既有 [benchmark 文章](/zh-TW/blog/turboquant-kv-cache-benchmark-gx10) 的命名法 — PolarQuant + QJL — 來講。
+
+### 階段一：PolarQuant — 把分布攤平
+
+直接量化 KV 向量行不通，因為分布很歪。PolarQuant 的做法是：**先做隨機旋轉**。
+
+想像你有一個 128 維的向量，少數維度（比如第 17、第 53）有極端大的值。你用一個隨機的旋轉矩陣 `R` 去乘它，得到 `Rv`。**旋轉不會改變向量的長度，但會把原本集中在幾個維度的能量平均分散到所有維度。**
+
+旋轉後，向量的每個分量都長得差不多 — 數學上會收斂到 Beta 分布。這時候你對它做量化，就不會被 outlier 綁架，因為已經沒有 outlier 了，所有維度的值都在同一個範圍。
+
+這一步的精妙在於：**你不需要事先知道權重分布**（不像 GPTQ 那種要 calibration data 的方法）。隨機旋轉對任何分布都有效，因為它本來就是要破壞分布的。Lloyd-Max 演算法可以對 Beta 分布找到全域最優的量化點。
+
+> 旋轉 = 把 outlier 攤平到所有維度。沒有 outlier，量化就簡單。
+
+### 階段二：QJL — 1-bit sign sketch 做無偏校正
+
+PolarQuant 量化完之後還是會有殘差誤差。對 weight 量化來說，這個殘差通常可以忽略；但對 attention score 計算來說不行 — MSE-only 量化會引入**系統性偏差**（bias），不是隨機誤差。論文的 [benchmark 也驗證了這點](/zh-TW/blog/turboquant-kv-cache-benchmark-gx10#mse-only-vs-qjl-bias-差異確認)：MSE-only 在 3-bit 有 +0.000191 的 bias，QJL 校正後降到 -0.000317（≈0）。
+
+QJL = Quantized Johnson-Lindenstrauss。Johnson-Lindenstrauss 引理是經典結果：**隨機投影到低維空間能近似保留向量間的內積。** QJL 把這個引理用在殘差上 — 對殘差再做一次隨機投影，但只保留每個分量的正負號（1 bit）。
+
+為什麼 1 bit 就夠？因為這個階段不在記錄殘差有多大，而在記錄殘差「往哪個方向偏」。配合 PolarQuant 已經做掉的主體量化，這個方向資訊就足夠校正掉系統性偏差，讓 attention score 計算變成 unbiased estimator。
+
+論文用的詞是「MSE quantizer followed by 1-bit Quantized JL transform on the residual」 — 兩階段組合的結果是「同時無偏 + 高壓縮率」。實測在 KV cache 上 3.5 bit/channel 達到品質中性（quality-neutral）。
+
+---
+
+## 數學直覺：為什麼這幾招會 work
+
+不推公式，但我希望離開的時候你心裡有兩張圖：
+
+**圖一：旋轉攤平。** 想像你有一張紙，上面點滿了星星，但 90% 的星星擠在右上角，左下角只有零星幾個。你把這張紙隨機旋轉 30 度、再 47 度、再 13 度。星星在紙上的相對位置沒變，但它們在「水平 vs 垂直」這個座標系下的分布變得均勻多了。隨機旋轉就在做這件事 — 把座標軸轉到一個讓資訊均勻分布的方向。
+
+**圖二：方向 vs 長度。** 兩個向量的內積 = 長度乘積 × cos(夾角)。多數時候我們關心的不是它們有多長，而是它們有多「同向」。如果主體值已經量化好（長度資訊保留），剩下要校正的就是夾角的微調 — 而夾角的微調只需要知道「殘差往哪個方向偏」，這就是為什麼 1 bit sign sketch 夠用。
+
+這兩個直覺串起來：**量化不是「丟資訊」，而是「重新組織資訊讓有限的 bit 用在最有效的地方」。**
+
+---
+
+## 三層演算法解決了什麼
+
+回頭看這三層的演進：
+
+| 演算法 | 出現年份 | 解決什麼問題 | 失敗模式 |
+|--------|---------|-------------|---------|
+| Q4_0 (legacy) | 2022 | 把 16 bit 砍到 4 bit 還能跑 | outlier 毀整個 tensor |
+| K-quant (Q4_K) | 2023-06 | super-block 把 outlier 污染半徑限縮到 32 個權重 | 假設分布對稱，對 KV cache 不夠 |
+| TurboQuant | 2025-04 | 旋轉 + 1-bit sign sketch 處理任意分布、保證 unbiased | 目前缺 fused CUDA kernel，速度還沒贏 |
+
+K-quant 是「拓樸的勝利」 — 改變分組結構就解決了 80% 問題。TurboQuant 是「幾何的勝利」 — 改變座標系就解決了剩下的 20%。中間都沒人去碰「用更多 bit」這個方向 — 因為瓶頸從來不在 bit 數，在演算法的聰明程度。
+
+這也是為什麼 LLM 量化研究一直很活躍：每一代新演算法都揭示前一代沒注意到的失敗模式。Q4_0 → K-quant 的 7 倍品質提升不是因為加 bit，是因為換策略。
+
+---
+
+## 你現在能做什麼
+
+知道這些有什麼用？三件事：
+
+**1. 看到 `Q4_K_M` 你知道在預設裡藏了什麼**：8 個 block × 32 weights 的 super-block 結構，加上 medium 變體（M 是中等版本，K-quant 額外多了一些 bit 給 sub-scale，換取品質）。
+
+**2. 看到 `--kv-cache-dtype turboquant3` 你知道 3-bit KV cache 怎麼做到品質無損**：旋轉攤平 + sign sketch 校正，不是「直接砍 bit」。
+
+**3. 看新 paper 你會問對問題**：下一代量化演算法的設計重點，不會是「更少 bit」，而是「更聰明的座標系」或「更小的污染半徑」。看到「rotation」「sketch」「super-block」「block-wise」這些詞，你能立刻分類它在解什麼問題。
+
+---
+
+## 串接
+
+- ← 還不熟 Q4_K_M 是什麼？回 [LLM 101 Part 4：什麼是量化？](/zh-TW/blog/llm-101-what-is-quantization)
+- → 想看 TurboQuant 在 GB10 上的實測數據？看 [TurboQuant KV Cache Benchmark](/zh-TW/blog/turboquant-kv-cache-benchmark-gx10)
+- → 想知道我為什麼覺得記憶體頻寬比 FLOPS 重要？看 [DGX Spark 系列](/zh-TW/blog)
+
+---
+
+## 延伸閱讀
+
+- [TurboQuant: Online Vector Quantization with Near-Optimal Distortion Rate](https://arxiv.org/abs/2504.19874) — Zandieh, Daliri, Hadian, Mirrokni (2025)
+- [Google Research blog: TurboQuant](https://research.google/blog/turboquant-redefining-ai-efficiency-with-extreme-compression/)
+- [llama.cpp PR #1684: k-quants](https://github.com/ggml-org/llama.cpp/pull/1684) — ikawrakow 的原始 PR 描述把 Q2_K~Q8_K 的結構列得最清楚
+- [bartowski 的 GGUF repo](https://huggingface.co/bartowski) — 想看完整量化 ladder（Ollama 只收三個 tag）
+
+---
+
+*這是「LLM 深水區」系列的第一篇 — 給看完 [LLM 101](/zh-TW/blog/llm-101-ollama-vs-vllm) 想懂機制的讀者。下一篇預計拆解 attention 機制本身：Q/K/V 在做什麼，為什麼 softmax 是 attention 的核心而不是裝飾。*

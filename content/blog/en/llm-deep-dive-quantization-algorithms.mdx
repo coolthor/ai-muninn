@@ -1,0 +1,184 @@
+---
+title: "[LLM Deep Dive] What Quantization Algorithms Actually Do: From Q4_K_M to TurboQuant"
+description: "How does Q4_K_M fit a 14B model into 4 bits without ruining it? Not by 'cutting off 75%' — but through three layers: K-quant super-blocks, TurboQuant random rotation, and a 1-bit JL sign sketch. A mechanism walkthrough without the equations."
+date: "2026-04-15"
+updatedAt: "2026-04-15"
+tags: ["LLM", "Quantization", "K-quant", "TurboQuant", "PolarQuant", "QJL", "Algorithms"]
+series: "LLM Deep Dive"
+part: 1
+faq:
+  - q: "Why doesn't 4-bit quantization break the model?"
+    a: "Because modern quantization isn't 'one scale per tensor.' K-quant groups every 256 weights into a super-block with a shared scale; TurboQuant goes further — it randomly rotates vectors so outliers spread across all dimensions, then uses a 1-bit sign sketch on the residual for unbiased correction. Each layer fixes the previous layer's failure mode."
+  - q: "How does K-quant differ from the older Q4_0?"
+    a: "Q4_0 used one scale factor per tensor, so a single outlier could collapse all the normal weights into two or three distinct values. K-quant (llama.cpp PR #1684, June 2023) introduced super-blocks: Q4_K groups 8 blocks × 32 weights = 256 weights sharing a top-level scale, and each block has its own sub-scale. An outlier only contaminates its own block, not the whole layer."
+  - q: "Why does TurboQuant rotate before quantizing?"
+    a: "Because raw KV cache vectors are unevenly distributed — a few dimensions hold extreme outliers, the rest cluster tightly. MSE quantization on this distribution always leaves systematic bias. Random rotation (PolarQuant stage) flattens the distribution toward Beta, giving every dimension a similar profile so Lloyd-Max can find globally optimal quantization points without calibration data."
+  - q: "Why is 1 bit enough for QJL?"
+    a: "QJL doesn't quantize the vector itself — it quantizes the direction of the residual. The Johnson-Lindenstrauss lemma guarantees that random projections approximately preserve inner products. After MSE quantization captures the magnitude, recording just the sign of each residual component is enough to restore unbiased estimation of the attention score."
+---
+
+<TLDRCard>
+Q4_K_M doesn't just "throw away 75% of each weight." It's three algorithms stacked: **K-quant** binds 256 weights into a super-block sharing a scale, stopping outliers from poisoning the whole tensor; **PolarQuant** randomly rotates vectors so the distribution flattens; **QJL** uses a 1-bit sign sketch on the residual for unbiased correction. Each layer fixes the previous layer's failure mode — that's why 4 bits became the sweet spot.
+</TLDRCard>
+
+## Why this article exists
+
+In [LLM 101 Part 4](/en/blog/llm-101-what-is-quantization) I used the MP3 metaphor to explain why quantization works at all — neural networks are inherently noisy, weights cluster around zero, and rounding errors mostly cancel out. That article is enough to answer "which version should I download."
+
+But a reader emailed: "Is 4-bit really just rounding every weight to 16 buckets? Why doesn't that collapse the model?"
+
+The intuitive answer is "neural networks have redundancy." That's true but lazy. The real answer is that **the last decade of quantization research has done a lot of work to make 4 bits the usable sweet spot.** A naive cut from FP16 to 4 bits (the original Q4_0) loses noticeable quality. The reason Q4_K_M is "almost lossless" is the chain of clever engineering decisions behind it.
+
+This is the opening article of a new series — **LLM Deep Dive**. It's for readers who finished [Part 4](/en/blog/llm-101-what-is-quantization), want to understand the mechanism, but don't want to read the paper. I'll walk through three layers of modern quantization, from 2023's K-quant to 2025's [TurboQuant](https://arxiv.org/abs/2504.19874). Real algorithm names appear ("super-block," "Johnson-Lindenstrauss"), but no equations — I'll use geometric intuition instead.
+
+If you want the measured numbers afterward, [the TurboQuant benchmark on GX10](/en/blog/turboquant-kv-cache-benchmark-gx10) is the sister article.
+
+---
+
+## The fundamental enemy: outliers
+
+Every quantization algorithm is designed around one enemy — **outliers**.
+
+Quantization means: you have a stream of continuous floating-point numbers, and you want to approximate them using a small, fixed set of discrete levels. 4 bits = 16 levels. If your numbers sit roughly between -1 and +1, slicing that range into 16 buckets and snapping each value to the nearest bucket gives small errors.
+
+Real weights don't behave like that. Most weights do live between -1 and +1, but every few hundred entries you find a 5 or a -8. These outliers can't be discarded — they often encode important features. But if you stretch the scale to cover -8 to +8, those 16 levels now span the full range with a step size of 1. All the detail that used to live between -1 and +1 collapses into three buckets, losing 90% of the resolution.
+
+This is why naive quantization fails. Every generation of algorithm tackles outliers differently.
+
+---
+
+## Layer one: why legacy quantization (Q4_0) isn't enough
+
+The earliest llama.cpp scheme is Q4_0. The algorithm fits in a single sentence:
+
+> For each group of 32 weights, find the maximum absolute value `max_abs`, set scale = `max_abs / 7`, then round each weight to `round(weight / scale)` and store as a 4-bit signed integer (range -8 to +7).
+
+That's the literal "split the range into 16 buckets" implementation. Every 32 weights share one scale.
+
+**Failure mode**: a single outlier in those 32 weights hijacks the scale for the whole group. The other 31 small weights get crushed into a few central buckets and become indistinguishable from each other. For neural networks, the *relative* magnitudes of those 31 weights carry information — flattening them to "all the same" amputates that layer's expressive power.
+
+Q4_0 works passably on small models (<3B). Above 7B, the quality gap to FP16 is visible. Fixing this required changing the grouping strategy.
+
+---
+
+## Layer two: K-quant — super-blocks plus per-block scales
+
+In June 2023, [ikawrakow opened llama.cpp PR #1684](https://github.com/ggml-org/llama.cpp/pull/1684), introducing Q2_K, Q3_K, Q4_K, Q5_K, and Q6_K. That's the K in Q4_K_M.
+
+The core idea: **two-tier grouping.**
+
+Take Q4_K:
+- **Super-block** = 256 weights sharing a high-precision scale (called `d`, stored in 6 bits)
+- **Block** = the super-block is split into 8 sub-blocks of 32 weights each, and every sub-block has its own 4-bit sub-scale and sub-min
+- Each weight is stored in 4 bits, but dequantization combines "super-block d × sub-scale + sub-min"
+
+Convoluted to describe, but the effect is direct. When an outlier appears in one block, only that block's sub-scale gets stretched — the other 7 blocks are untouched. **Outlier contamination radius shrinks from "the whole tensor" to 32 weights.**
+
+Super-block layouts for each K-quant level (clearly listed in [ikawrakow's PR description](https://github.com/ggml-org/llama.cpp/pull/1684)):
+
+| Level | Super-block layout | bits/weight |
+|-------|-------------------|------------|
+| Q2_K | 16 blocks × 16 weights = 256 | 2.5625 |
+| Q3_K | 16 blocks × 16 weights = 256 | 3.4375 |
+| Q4_K | 8 blocks × 32 weights = 256 | 4.5 |
+| Q5_K | 8 blocks × 32 weights = 256 | 5.5 |
+| Q6_K | 16 blocks × 16 weights = 256 | 6.5625 |
+
+Super-block size is always 256 weights, but block granularity changes with bit width. The fewer bits, the finer the slicing — because outlier impact is more catastrophic and you need smaller quarantine zones.
+
+The fractional bits (the `.5625` and `.4375`) are metadata amortized across the weights — sub-scales and sub-mins also take space. That's why Q4_K is 4.5 bits/weight, not exactly 4.
+
+K-quant's success directly produced the "just use Q4_K_M" consensus. From that moment, 4 bits stopped being a tradeoff and became the default.
+
+---
+
+## Layer three: TurboQuant — rotate, flatten, then record direction
+
+K-quant solved "outliers contaminate the whole group," but it still assumes the underlying distribution is roughly symmetric. For weights, that assumption holds. For another increasingly important target — **the KV cache** — it doesn't.
+
+The KV cache is the key/value pair the model accumulates across long conversations to compute attention. Its distribution is even more skewed than weights: a few channels carry extreme outliers, most channels are tightly clustered. Traditional quantization performs poorly here, so [Google Research published TurboQuant in April 2025](https://research.google/blog/turboquant-redefining-ai-efficiency-with-extreme-compression/) ([arxiv 2504.19874](https://arxiv.org/abs/2504.19874)).
+
+TurboQuant is a two-stage algorithm. I'll use the naming from the existing [benchmark article](/en/blog/turboquant-kv-cache-benchmark-gx10) — PolarQuant + QJL.
+
+### Stage one: PolarQuant — flatten the distribution
+
+You can't quantize KV vectors directly because the distribution is so skewed. PolarQuant's move: **rotate first.**
+
+Picture a 128-dimensional vector where a few dimensions (say 17 and 53) hold extreme values. Multiply by a random rotation matrix `R` to get `Rv`. **Rotation preserves vector length but redistributes the energy that was concentrated in a few dimensions across all dimensions evenly.**
+
+After rotation, every component looks similar — mathematically the distribution converges toward a Beta distribution. Quantize *now* and outliers no longer dominate the scale, because outliers no longer exist; every dimension lives in the same range.
+
+The elegance: **you don't need to know the weight distribution in advance** (unlike GPTQ-style methods that require calibration data). Random rotation works for any distribution, because its job is precisely to destroy the original distribution. Lloyd-Max can then find globally optimal quantization points on the resulting Beta distribution.
+
+> Rotation = spreading outliers across all dimensions. With no outliers, quantization is easy.
+
+### Stage two: QJL — 1-bit sign sketch for unbiased correction
+
+After PolarQuant there's still residual error. For weight quantization that residual is usually negligible; for attention score computation it isn't — MSE-only quantization introduces **systematic bias**, not random error. The [benchmark verified this](/en/blog/turboquant-kv-cache-benchmark-gx10): MSE-only at 3-bit shows bias = +0.000191; QJL correction brings it to -0.000317 (≈0).
+
+QJL = Quantized Johnson-Lindenstrauss. The Johnson-Lindenstrauss lemma is a classic result: **random projection into a lower-dimensional space approximately preserves inner products between vectors.** QJL applies this to the residual — project the residual through another random rotation, but keep only the sign bit (1 bit) of each component.
+
+Why is 1 bit enough? Because this stage isn't recording how big the residual is, only which direction it leans. Combined with the magnitude already captured by PolarQuant, that direction is enough to correct the systematic bias and turn attention score computation into an unbiased estimator.
+
+The paper phrases it as "MSE quantizer followed by 1-bit Quantized JL transform on the residual" — the two stages together yield "unbiased and high compression simultaneously." In practice it achieves quality-neutral KV cache compression at 3.5 bits/channel.
+
+---
+
+## Mathematical intuition: why this works
+
+No equations, but I want you to leave with two pictures:
+
+**Picture one: rotation flattens.** Imagine a sheet of paper covered with stars, but 90% of them are crammed into the upper-right corner and only a sparse few in the lower-left. Now rotate the sheet randomly — 30 degrees, then 47, then 13. The relative positions of the stars haven't changed, but their distribution along "horizontal vs vertical" axes is much more even. Random rotation does exactly that — it spins the coordinate axes into an orientation that distributes the information uniformly.
+
+**Picture two: direction vs length.** The inner product of two vectors equals the product of their lengths times cos(angle between them). What we usually care about isn't how long they are, but how aligned they are. If the magnitude is already preserved by the main quantization, all that's left to correct is the angle — and angle correction only needs the sign of the residual. That's why a 1-bit sign sketch suffices.
+
+The two pictures together: **quantization isn't "discarding information," it's reorganizing information so the limited bits land where they matter most.**
+
+---
+
+## What three layers of algorithm have solved
+
+Looking back at the progression:
+
+| Algorithm | Year | Problem solved | Failure mode |
+|-----------|------|---------------|-------------|
+| Q4_0 (legacy) | 2022 | Squeezing 16 bits down to 4 at all | One outlier ruins the whole tensor |
+| K-quant (Q4_K) | 2023-06 | Super-blocks limit outlier blast radius to 32 weights | Assumes symmetric distribution; fails for KV cache |
+| TurboQuant | 2025-04 | Rotation + 1-bit sign sketch handle any distribution, guarantee unbiasedness | No fused CUDA kernel yet, so no speedup advantage |
+
+K-quant was a "topology win" — changing the grouping structure solved 80% of the problem. TurboQuant is a "geometry win" — changing the coordinate system solved the remaining 20%. Neither generation reached for "use more bits." The bottleneck was never bit count — it was algorithmic cleverness.
+
+This is also why LLM quantization research is still active: each new algorithm exposes failure modes the previous one didn't notice. Q4_0 → K-quant's roughly 7x quality improvement didn't come from adding bits; it came from changing strategy.
+
+---
+
+## What you can do with this
+
+Three concrete things:
+
+**1. Reading `Q4_K_M` you know what's hiding in the default**: 8 blocks × 32 weights super-block, plus the M variant (medium — K-quant adds extra bits to the sub-scale to trade size for quality).
+
+**2. Reading `--kv-cache-dtype turboquant3` you know how 3-bit KV cache stays lossless**: rotation flattens, sign sketch corrects — it's not "just slash bits."
+
+**3. Reading new papers you'll ask the right question**: the next generation of quantization algorithms won't be "fewer bits" — it'll be "smarter coordinate systems" or "smaller contamination radius." See "rotation," "sketch," "super-block," "block-wise" in a paper and you can immediately classify what problem it's solving.
+
+---
+
+## Cross-references
+
+- ← Not familiar with Q4_K_M? Back to [LLM 101 Part 4: What Is Quantization?](/en/blog/llm-101-what-is-quantization)
+- → Want measured TurboQuant numbers on GB10? [TurboQuant KV Cache Benchmark](/en/blog/turboquant-kv-cache-benchmark-gx10)
+- → Curious why memory bandwidth matters more than FLOPS? [DGX Spark series](/en/blog)
+
+---
+
+## Further reading
+
+- [TurboQuant: Online Vector Quantization with Near-Optimal Distortion Rate](https://arxiv.org/abs/2504.19874) — Zandieh, Daliri, Hadian, Mirrokni (2025)
+- [Google Research blog: TurboQuant](https://research.google/blog/turboquant-redefining-ai-efficiency-with-extreme-compression/)
+- [llama.cpp PR #1684: k-quants](https://github.com/ggml-org/llama.cpp/pull/1684) — ikawrakow's PR description lists every Q2_K through Q8_K layout
+- [bartowski's GGUF repo](https://huggingface.co/bartowski) — the full quantization ladder (Ollama only ships three tags per model)
+
+---
+
+*This is the first article in the **LLM Deep Dive** series — for readers who've finished [LLM 101](/en/blog/llm-101-ollama-vs-vllm) and want to understand the mechanism. Next planned topic: the attention mechanism itself — what Q/K/V actually do, and why softmax is the heart of attention rather than a decoration.*
