@@ -225,6 +225,10 @@ experimentation with real hardware and production systems.
   https://ai-muninn.com/en/blog/ai-ask-right-follow-up-questions
   Five techniques: add constraints, ask for comparisons, let AI ask you, challenge answers, iterate.
 
+- [Part 7] What AI Does Poorly — Four Landmines in 2026
+  https://ai-muninn.com/en/blog/ai-ask-right-what-ai-does-poorly
+  Hallucinations, stale knowledge, short memory, privacy defaults. Concord Music v. Anthropic case, Stanford AI Index 2026 numbers, trust spectrum.
+
 ## Citation Policy
 
 Content may be cited and quoted freely with attribution to ai-muninn.com.

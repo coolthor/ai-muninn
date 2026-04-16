@@ -1,11 +1,248 @@
 # ai-muninn — Full Site Content
 # https://ai-muninn.com
-# Generated: 2026-04-15
-# Articles: 52
+# Generated: 2026-04-16
+# Articles: 53
 
 This file contains the full text of all articles on ai-muninn.com.
 It is intended for AI tools that need complete site context.
 For the article index only, see /llms.txt.
+
+---
+
+# [Ask AI Right] What AI Does Poorly — Four Landmines to Know Before Using ChatGPT or Claude in 2026
+URL: https://ai-muninn.com/en/blog/ai-ask-right-what-ai-does-poorly
+Date: 2026-04-16
+Series: Ask AI Right (Part 7)
+
+<VideoEmbed src="/videos/ai-ask-right-what-ai-does-poorly.mp4" />
+
+
+AI still stumbles in four predictable places in 2026: hallucinations (confidently making things up), stale knowledge (doesn't know what's recent), short memory (loses the thread on long chats), and privacy defaults (your chats train the model unless you opt out). In May 2025, Anthropic's own lawyer used Claude to format a legal citation and got caught filing a fabricated source. This guide shows you how to spot each landmine, plus a trust spectrum for when to believe an AI answer and when to verify.
+
+
+## Plain-Language Version: Why Does AI Make Things Up?
+
+AI isn't lying to you. It doesn't know it's lying.
+
+What AI actually does is guess the next word. Most of the time those guesses are accurate, because it has read enormous amounts of text. But when you ask about a topic where its training is thin — niche, local, or specific down to the date and section number — it keeps guessing with the same confident tone. Sometimes the answer is right. Sometimes it's invented. The model can't tell you which is which.
+
+Why does this matter? Because the fabricated answer wears the same clothes as the true one — correct format, confident voice, plausible-looking links. You won't notice without checking.
+
+In May 2025, one of the best-documented examples hit the legal system. During the [Concord Music Group v. Anthropic](https://techcrunch.com/2025/05/15/anthropics-lawyer-was-forced-to-apologize-after-claude-hallucinated-a-legal-citation/) lawsuit, Anthropic's own outside counsel asked Claude to format a legal citation for an expert declaration. Claude produced a perfectly-formatted reference — right volume, right page numbers, right year. Only the article title and authors were pure invention. The judge struck the paragraph. Anthropic's lawyer apologized for "an embarrassing and unintentional mistake." The company that makes Claude, using Claude for their most important legal filings, still got burned.
+
+This article walks through the four landmines AI still hits in 2026 — hallucination, stale knowledge, short memory, and privacy — and gives you the signals to spot each one, plus a trust spectrum for when to accept an answer and when to stop and verify.
+
+---
+
+## Preface
+
+Imagine a very articulate friend who helps you research things. He answers everything with the same confident voice, whether he knows the topic or not. The problem isn't that he's wrong — most of the time he's right. The problem is he never says "I'm not sure about this one."
+
+Most of the time he's fine. But occasionally — and you don't know which times — he didn't actually know, and he made something up. You believed him. You used it in a work email, a client deck, a homework assignment.
+
+AI is that friend. Capable, but not honest about the edges of its capability.
+
+The previous article covered [how to follow up and extract better answers from AI](/en/blog/ai-ask-right-follow-up-questions). This one goes the other direction: even with perfect follow-ups, there are four things AI genuinely can't do well. You need to know where it falls short, so you can judge when to accept its answer and when to stop and check.
+
+Four landmines: hallucinations, stale knowledge, short memory, privacy defaults.
+
+---
+
+## Landmine 1: AI Confidently Makes Things Up (Hallucinations)
+
+### What a hallucination is
+
+Ask an AI "what are some notable Taiwanese design books?" and it might reply with a plausible-sounding title — author, publisher, year, all filled in. It sounds legitimate. But the book doesn't exist.
+
+That's a hallucination: the model produces a confident answer about something that isn't real. It's not lying in any intentional sense. The model can't tell you "I don't know this one." It's guessing a string of text that looks like a real answer.
+
+### The 2026 state of play: better, but not solved
+
+Good news first: hallucination rates on general questions are meaningfully lower than two years ago. Mainstream models ([GPT-5](https://openai.com/gpt-5), [Claude Opus 4.6](https://www.anthropic.com/claude/opus), [Gemini 3.1](https://gemini.google.com)) default to web search on — ask "who is Isaac Newton" or "what's the latest iPhone" and you'll almost never get a hallucination.
+
+But it isn't gone. [Stanford AI Index 2026](https://hai.stanford.edu/ai-index/2026-ai-index-report/responsible-ai) tested 26 top models on a new accuracy benchmark and found hallucination rates ranging from **22% to 94%**. OpenAI's own [GPT-5 system card](https://cdn.openai.com/gpt-5-system-card.pdf) reports that `gpt-5-main` with web search off hits a **47% hallucination rate on [SimpleQA](https://openai.com/index/introducing-simpleqa)** — nearly half wrong. The reasoning-focused variants don't help uniformly; the 2026 Index specifically calls out that "reasoning" modes sometimes hallucinate *more*, because they over-extrapolate from internal logic.
+
+Where AI still slips in 2026:
+- **Specific people, books, citations**: who wrote what, exact ISBNs, what a paper actually says
+- **Specific numbers**: section numbers, version numbers, dates (often off by a year)
+- **Niche, local, or obscure topics**: specific shops in a specific neighborhood, small-brand history, obscure regulations
+- **"Formatting a polished-looking citation"**: the most dangerous one — see below
+
+### Case study: Concord Music v. Anthropic
+
+In May 2025, music publishers sued Anthropic over training data. During the discovery phase, Anthropic's outside counsel — Ivana Dukanovic of Latham & Watkins — submitted an expert declaration from their data scientist, Ms. Chen. Paragraph 9 cited an academic article.
+
+The attorney had asked **Claude** to format the citation in proper legal style. Claude produced something that looked flawless — correct link, correct journal, correct volume, correct page numbers, correct year. Only the article title and the two authors were pure fabrication. Opposing counsel discovered this at the [May 13 discovery hearing](https://techcrunch.com/2025/05/15/anthropics-lawyer-was-forced-to-apologize-after-claude-hallucinated-a-legal-citation/). The court struck paragraph 9 of the declaration. Dukanovic apologized for an "embarrassing and unintentional mistake."
+
+This is the worst kind of hallucination: **citation drift**. The format is perfect. The link often works. But the content being described doesn't exist in the source. You have no red flag to warn you.
+
+Similar pattern showed up in academia: Springer Nature published a $169 machine learning textbook in April 2025 called *Mastering Machine Learning: From Basics to Advanced*. [Retraction Watch](https://retractionwatch.com/2025/06/30/springer-nature-book-on-machine-learning-is-full-of-made-up-citations/) checked 18 of its 46 citations and found **two-thirds didn't exist or were substantially wrong**. Researchers confirmed papers attributed to them under titles they never used. Springer retracted the book.
+
+Two cases, same mechanism: AI helping "polish" or "format" references, inventing the substance while perfecting the form.
+
+### How to spot it and what to do
+
+When AI gives you one of these, pause:
+
+- **Specific name + specific citation**: "Professor X showed in a 2021 paper that..." — find the paper
+- **Specific number + specific reference**: "Section 12(b) of the Copyright Act states..." — check the actual code
+- **Specific book + ISBN**: search your local ISBN database
+- **Polished quote + link**: the link might be real, but click through and read the paragraph yourself
+
+The mitigation is the same "does-it-exist?" research pattern we covered in [an earlier article](/en/blog/ai-ask-right-does-it-exist), applied in reverse — not checking whether something exists before you start, but checking whether the AI's answer matches reality before you use it. Thirty seconds of Googling catches most of them.
+
+---
+
+## Landmine 2: AI Has a Knowledge Cutoff
+
+### The friend who hibernated
+
+Imagine a friend who hibernated for a year and just woke up. You ask "who won the latest election?" or "what's the newest iPhone?" — they have no idea, or they give you the answer from the last thing they remember.
+
+That's every AI model. Each one trained up to a specific cutoff date, after which nothing exists in its knowledge. As of April 2026:
+
+- **[ChatGPT GPT-5](https://platform.openai.com/docs/models/gpt-5/)**: September 2024 (official knowledge cutoff)
+- **[Claude Opus 4.6](https://platform.claude.com/docs/en/about-claude/models/overview)**: May 2025 (reliable knowledge cutoff; training data extends to August but accuracy isn't guaranteed past May)
+- **[Gemini 3.1](https://ai.google.dev/gemini-api/docs/gemini-3)**: January 2025
+
+These cutoffs move forward every few months as new models release. But any question about "recent," "latest," or "right now" is a question you're asking a friend who just woke up from hibernation.
+
+### Good news: web search rescues most of this
+
+Mainstream AI in 2026 ships with web search, usually on by default. Ask "what's the hottest café in downtown right now" and the model will search first, then summarize. Two catches:
+
+1. **Confirm web search is actually on**: The web versions of ChatGPT, Claude, and Gemini usually show a "searching the web..." message. If you're using an API, a third-party app, or an older model, it may be off.
+2. **Web search doesn't eliminate misreading**: The model might find the right page but still summarize it wrong. Search reduces hallucination; it doesn't eliminate it.
+
+### What to do
+
+- On time-sensitive questions ("current," "latest," "2026"), confirm the "searching..." indicator
+- For critical recent info (stock prices, regulatory changes, version numbers), **click through to the source** — don't rely on the summary
+- If the answer feels stale (recommending a shop that closed), follow up: "please verify this with a current web search"
+
+---
+
+## Landmine 3: AI Forgets What You Said Earlier
+
+This topic gets the full treatment in [LLM 101 Part 5 — Context Window](/en/blog/llm-101-context-window). Here's the short version.
+
+### The desk-size metaphor
+
+An AI can only "see" a limited amount of text at once. Think of it as a desk. Your full conversation — every turn from both sides, plus any documents you pasted — sits on that desk. Desks are big, but not infinite. When the conversation gets long, the earliest material falls off the edge.
+
+You notice when:
+- Around turn 30-40, the AI starts looping, repeating questions you already answered
+- The role you set at the start ("you are my copy editor") is gone
+- A long document you pasted early is no longer referenced
+- Answers get generic and safe — because it forgot the specifics you gave earlier
+
+### What to do
+
+- **Restate key context at the top of long threads**: who you are, what tone you want, what you already tried. One sentence is enough.
+- **Start a new chat when it gets too long**: past 30-40 turns, paste the important context into a fresh conversation.
+- **Chunk big documents**: don't paste a 50-page PDF then chat for an hour. Work through it section by section.
+
+(Want to understand why the desk fills up and how to pick a model with a bigger desk? See [LLM 101 Part 5](/en/blog/llm-101-context-window).)
+
+---
+
+## Landmine 4: Your Chats Now Train the Model by Default
+
+### The late-2025 policy shift
+
+[Anthropic announced in August 2025](https://www.anthropic.com/news/updates-to-our-consumer-terms) that Claude consumer users (Free / Pro / Max) would have to make a one-time choice by October 8, 2025 — opt in or opt out of having their conversations used for training. Previously Claude defaulted to "don't train." The new forced-choice flow means anyone who clicked through without reading is now opted in. Retention: 5 years if you agree, 30 days if you don't.
+
+[OpenAI's ChatGPT](https://openai.com/policies/privacy-policy) consumer tiers (Free / Plus / Pro) already had training on by default — that hasn't changed; personal accounts have to opt out manually in Settings.
+
+What this affects:
+
+| Tier | 2026 Status |
+|---|---|
+| ChatGPT Free / Plus / Pro | ON by default (opt out manually) |
+| Claude Free / Pro / Max | Forced choice in Oct 2025; on unless you picked "no" |
+| Gemini Free | ON by default |
+| ChatGPT Team / Enterprise | OFF by default |
+| Claude for Work / Enterprise / API / Gov / Education | OFF by default |
+
+Easy rule: **individual plans opt you in, business plans don't**. Paying for ChatGPT Plus does not automatically buy you privacy.
+
+### How to turn it off
+
+- **ChatGPT**: Settings → Data Controls → "Improve the model for everyone" → off. For extra safety, use Temporary Chat (no history, no training).
+- **Claude**: Settings → Privacy → "Help improve Claude" → off. Note: opting out means 30-day retention; the 5-year retention only applies if you agreed to training.
+- **Gemini**: activity.google.com → Gemini Apps Activity
+
+### Three tiers of caution
+
+Not every message needs paranoia. Simple triage:
+
+- 🔴 **Never paste**: company secrets, client data, salaries, national IDs, medical records, banking credentials
+- 🟡 **Consider carefully**: active negotiations, non-public meeting notes, unreleased design work
+- 🟢 **Paste freely**: general questions, public-data summaries, brainstorming, practice, miscellany
+
+For red-tier content:
+1. Turn off training defaults (see above)
+2. Use Temporary Chat
+3. Or switch to Enterprise / Team tier (contractual protection + off by default)
+4. Safest: run a local AI (see [LLM 101 Ollama vs vLLM](/en/blog/llm-101-ollama-vs-vllm))
+
+---
+
+## The Trust Spectrum: When to Believe, When to Check
+
+Four landmines down. Here's the cheat sheet. When you get any AI answer, ask which tier it falls into.
+
+### 🟢 Trust it directly
+
+- Code examples (you can run them to verify)
+- Proofreading, rewording, translation
+- Format conversion (list to table, change voice)
+- Brainstorming (you want variety, not a single truth)
+- Organizing what you already know
+
+### 🟡 Trust but verify (30 seconds is enough)
+
+- Specific names, book titles, citations — find the original
+- Specific numbers, percentages, version numbers, dates
+- Legal or regulatory section numbers
+- Niche API / function names
+- Time-sensitive questions ("the latest...")
+- Shop / location / business-hours recommendations
+
+### 🔴 Don't rely on AI alone
+
+- **Legal advice** — see a lawyer; AI can help you frame the question
+- **Medical advice** — see a doctor; same pattern
+- **Financial / investment advice** — no one underwrites the AI's answer; losses are yours
+- **Major life decisions** — career, relationships, health, finances; AI doesn't have your full context
+- **Company secrets** — default goes to the training set
+
+The rule behind the spectrum is simple: **don't depend on AI for the things it does poorly; use it freely for the things it does well**. Three of the four landmines are fixed by "pause and check." The fourth is fixed once, in settings. Do those two things and AI's downsides drop to a manageable level.
+
+---
+
+## Try One Thing Today
+
+Pull up a recent AI conversation. Pick one specific fact from its answers — a name, a book title, a number, a section reference. Google it. Thirty seconds.
+
+You'll land on one of two outcomes:
+
+1. The AI got it right — next time you can trust it a little more in that scenario
+2. The AI quietly made something up — you almost used wrong information for a real decision
+
+Either way, you shift from "guessing whether AI got it right" to "knowing whether AI got it right." That shift matters more than any prompting trick.
+
+While you're at it: spend two minutes in your preferred AI's settings and check whether training is on or off. If you haven't touched it since October 2025, it's almost certainly on.
+
+---
+
+## The One-Liner
+
+**AI isn't an answer machine. It's a collaborator that sometimes makes things up. People who use it well treat doubt as a habit — half trust, half verify.**
+
+Next: you have 100 notes and never noticed that note 3 and note 87 are about the same thing. We'll talk about letting AI cross-reference your own knowledge — not just organize it, but connect the dots you missed.
+
+*This is Part 7 of the "[Ask AI Right](/en/blog/ai-ask-right-which-ai-to-use-2026)" series. Previous: [The Art of Follow-Up — What to Do When the First Answer Is Shallow](/en/blog/ai-ask-right-follow-up-questions). Related: [Before You Build, Ask: Does This Already Exist?](/en/blog/ai-ask-right-does-it-exist), [LLM 101 Part 5: Context Window](/en/blog/llm-101-context-window).*
 
 ---
 
@@ -20,6 +257,8 @@ import { VideoEmbed } from "@/components/blog/VideoEmbed";
 
 Two days, 28 SWE-bench Lite runs on the same instance. Gemma 4 26B-A4B FP8 self-submitted a clean patch in 38 steps — 11 steps faster than Qwen 3.5 35B. The 38 steps are real. The 27 runs before that include four wrong-conclusion docs, one silent pydantic field drop, and one undocumented `--exit-immediately` flag.
 
+
+<VideoEmbed src="/videos/dgx-spark-gemma4-swe-bench-scaffold-engineering.mp4" />
 
 ## Plain-Language Version: Why this article matters
 
