@@ -10,6 +10,7 @@ import type { Metadata } from 'next'
 import TLDRCard from '@/components/TLDRCard'
 import VideoEmbed from '@/components/VideoEmbed'
 import ShareButtons from '@/components/ShareButtons'
+import CoffeeCard from '@/components/CoffeeCard'
 import TocSidebar from '@/components/TocSidebar'
 
 const BASE_URL = 'https://ai-muninn.com'
@@ -303,6 +304,9 @@ export default async function BlogPost({
       <div className="mt-12 pt-6 border-t" style={{ borderColor: 'var(--border)' }}>
         <ShareButtons url={url} title={post.title} />
       </div>
+
+      {/* coffee */}
+      <CoffeeCard locale={l} />
 
       {/* footer nav */}
       <div className="mt-6 text-sm">

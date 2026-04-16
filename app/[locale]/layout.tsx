@@ -70,6 +70,8 @@ export default async function LocaleLayout({
             <span>·</span>
             <a href="https://bpstracker.com" target="_blank" rel="noopener noreferrer" className="hover:text-[var(--cyan)] transition-colors">bpstracker</a>
             <span>·</span>
+            <a href="https://ko-fi.com/coolthor" target="_blank" rel="noopener noreferrer" className="hover:text-[var(--cyan)] transition-colors">sponsor</a>
+            <span>·</span>
             <a href={`/${locale}/feed.xml`} className="hover:text-[var(--cyan)] transition-colors">rss</a>
             <span>·</span>
             <span>built in public · {new Date().getFullYear()}</span>
