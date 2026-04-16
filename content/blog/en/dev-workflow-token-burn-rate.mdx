@@ -14,7 +14,7 @@ faq:
   - q: "How do I make my Claude Code sessions last longer?"
     a: "Quick wins: use /compact when switching tasks (or /clear if the new task is unrelated), describe problems instead of naming files, disable unused MCP tools, keep CLAUDE.md under 2000 tokens, and use Sonnet or Haiku for simple tasks instead of Opus. For a deeper fix, use QMD or Musubi so Claude finds your notes instantly."
   - q: "What is a knowledge graph and how does it help with tokens?"
-    a: "A knowledge graph is a map of how your notes connect to each other. Instead of Claude reading 10 files to find an answer, it checks the map and reads only 2-3. Fewer files = fewer tokens. It also surfaces related notes that keyword search would miss."
+    a: "A knowledge graph is a map of how your notes connect to each other. Claude checks the map to find relevant files instead of reading everything. On real corpora (~50+ notes) we've measured ~36% token savings vs plain grep, but the wins are concentrated on cross-domain and exploration queries — for simple lookups, grep is often still cheapest. The bigger value: surfaces related notes that keyword search would miss."
 ---
 
 <TLDRCard>
@@ -308,17 +308,18 @@ Imagine you have 400 notes about different topics. Some of them are related, but
 
 A knowledge graph pre-computes these connections. It scans all your notes, finds shared concepts, and draws lines between related documents — even when they use completely different vocabulary.
 
-**The result:**
+**Measured comparison** (52 notes, 10 tasks, Claude Sonnet 4.5):
 
-| How Claude finds information | Files it reads | Tokens spent |
-|------------------------------|---------------|-------------|
-| Reads everything that might be relevant | 10-20 files | ~40,000 |
-| Keyword search (QMD) | 3-5 files | ~10,000 |
-| Knowledge graph search | 2-3 files | ~4,000 |
+| How Claude finds information | Task type | Result |
+|------------------------------|---------|--------|
+| Grep (keyword match) | Lookup by known topic | **Often cheapest** — two steps and you're there |
+| Knowledge graph search | Cross-domain connections | **Saves 17-25%** |
+| Knowledge graph search | "What else is related?" | **Saves 35-65%** |
+| Knowledge graph search | "Which notes are stale?" | **Saves 80%+** (grep literally can't do this) |
 
-Same answer. 10x fewer tokens.
+**Overall: 36% savings — with preconditions.** That number came from a 52-note corpus. On the bundled 20-note demo, grep actually wins by ~73% because when the corpus is small enough, two `grep -l` hops already find the file. Below ~30 notes, don't expect savings.
 
-The knowledge graph doesn't just save tokens — it finds notes you wouldn't have searched for. That's the real magic: **connections you didn't know existed in your own notes.**
+The knowledge graph's real value isn't pure token savings — it's finding **cross-domain connections keyword search can't reach** and answering questions **grep fundamentally can't**, like "which notes might be stale?" or "what else have I written on this theme?" That's the real magic: **connections you didn't know existed in your own notes.**
 
 ### Musubi: A Knowledge Graph for Your Notes
 
@@ -344,7 +345,7 @@ The second and third results are notes that keyword search would **never** find 
 
 Musubi itself uses **zero LLM tokens** — the graph is built with deterministic concept matching, not an AI service. The README is honest about this: [they don't claim "saves 40% tokens" without data](https://github.com/coolthor/musubi#measure-your-token-savings). The tool includes a built-in benchmark (`musubi benchmark`) so you can measure your actual savings on your own notes.
 
-When integrated with Claude Code, Musubi runs automatically before Claude searches the web or reads files. If the answer already exists in your notes, Claude reads that instead of starting from scratch. Fewer files read, fewer tokens burned, better answers.
+When integrated with Claude Code, Musubi runs automatically before Claude searches the web or reads files. If the answer already exists in your notes, Claude can locate the right file in a few calls instead of hunting. In practice the biggest wins are on "find the related stuff" and "check what's stale"; for straight "find that note about X" lookups, plain grep often does the job too. **It doesn't save tokens in every scenario — it finds connections grep can never reach.**
 
 ---
 
