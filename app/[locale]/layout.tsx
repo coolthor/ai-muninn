@@ -61,7 +61,7 @@ export default async function LocaleLayout({
 
           <main className="flex-1 py-10">{children}</main>
 
-          <footer className="py-6 border-t text-xs flex items-center gap-3" style={{ borderColor: 'var(--border)', color: 'var(--text-dim)' }}>
+          <footer className="py-6 border-t text-xs flex flex-wrap items-center gap-x-3 gap-y-2" style={{ borderColor: 'var(--border)', color: 'var(--text-dim)' }}>
             <span style={{ color: 'var(--cyan)' }}>coolthor</span>
             <span>·</span>
             <a href="https://github.com/coolthor" target="_blank" rel="noopener noreferrer" className="hover:text-[var(--cyan)] transition-colors">github</a>
@@ -72,9 +72,11 @@ export default async function LocaleLayout({
             <span>·</span>
             <a href="https://ko-fi.com/coolthor" target="_blank" rel="noopener noreferrer" className="hover:text-[var(--cyan)] transition-colors">sponsor</a>
             <span>·</span>
+            <Link href={`/${locale}/methodology`} className="hover:text-[var(--cyan)] transition-colors">methodology</Link>
+            <span>·</span>
             <a href={`/${locale}/feed.xml`} className="hover:text-[var(--cyan)] transition-colors">rss</a>
             <span>·</span>
-            <span>built in public · {new Date().getFullYear()}</span>
+            <span className="whitespace-nowrap">built in public · {new Date().getFullYear()}</span>
           </footer>
         </div>
     </>
