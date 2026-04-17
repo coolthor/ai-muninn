@@ -90,6 +90,10 @@ experimentation with real hardware and production systems.
   https://ai-muninn.com/en/blog/dgx-spark-gemma4-swe-bench-scaffold-engineering
   Two days of mini-swe-agent + vLLM scaffold engineering on GB10. Pydantic silent drops, --exit-immediately flag, backticks scaffold, and a custom edit-tool unlocked Gemma 4 to self-submit a correct patch in 38 steps.
 
+- [Part 17] SWE-bench Lite 38.67% with a 26B Local Model — 0.33% from Claude 3.5 Sonnet Scaffolds
+  https://ai-muninn.com/en/blog/swe-bench-lite-gemma4-26b-38-percent
+  Gemma 4 26B-A4B FP8 scored 116/300 on SWE-bench Lite (ranking #16) running entirely on a DGX Spark GB10. Zero API cost. Scaffold design (backticks + edit-tool v2 + budget prompt) was the differentiator, not model size.
+
 ### Series: NemoClaw (NVIDIA's AI agent framework on DGX Spark)
 
 - [Part 1] NemoClaw Explained: NVIDIA's All-in-One AI Agent Framework for DGX Spark

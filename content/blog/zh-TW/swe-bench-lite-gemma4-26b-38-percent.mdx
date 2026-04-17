@@ -1,0 +1,265 @@
+---
+title: "[Benchmark] 26B 地端模型在 SWE-bench Lite 拿到 38.67% — 差 Claude 3.5 Sonnet 系統 0.33%"
+description: "Gemma 4 26B-A4B FP8 在 SWE-bench Lite 解了 116/300 題，全球排名 #16。跑在 DGX Spark 上，零 API 費。差距在 scaffold 設計，不是模型大小。"
+date: "2026-04-17"
+updatedAt: "2026-04-17"
+tags: ["SWE-bench", "Gemma 4", "mini-swe-agent", "vLLM", "DGX Spark", "benchmark", "開源模型", "scaffold", "edit-tool"]
+series: "DGX Spark"
+part: 17
+faq:
+  - q: "26B 開源模型真的能跟 Claude 3.5 Sonnet 比 SWE-bench？"
+    a: "可以，前提是 scaffold 要對。Gemma 4 26B-A4B FP8 在 SWE-bench Lite 拿 38.67%，差 Moatless Tools + Claude 3.5 Sonnet（39.00%）只有 0.33%。同樣的模型在爛 scaffold 上分數接近零。"
+  - q: "SWE-bench 用地端模型跑要花多少錢？"
+    a: "API 費用 $0。DGX Spark 跑 19 小時的電費。做比較：Claude 3.5 Sonnet 在 leaderboard 上每題平均 $0.66，300 題要 ~$200。"
+  - q: "跑完 SWE-bench Lite 300 題要多久？"
+    a: "在 DGX Spark（ARM64 GB10）上約 19 小時，2 個 worker 並行。ARM64 用 QEMU 跑 x86 container 有額外開銷。提前 pre-pull 全部 172 個 Docker image 後速度大約翻倍。"
+  - q: "Scaffold 改了什麼讓分數從接近零到 38.67%？"
+    a: "三件事：(1) 從 OpenAI tool_calls 換成 backticks regex 解析——Gemma 4 沒辦法穩定輸出 JSON tool calls，但 markdown code block 沒問題；(2) 自製 edit-tool 強制 exactly-one-match 取代，不允許 cat 整個檔案覆蓋；(3) 預算 prompt 叫模型 100 步內要 submit，不然會探索到天荒地老。"
+---
+
+import { TLDRCard } from "@/components/blog/TLDRCard";
+
+<TLDRCard>
+Gemma 4 26B-A4B FP8 在 SWE-bench Lite 拿到 **38.67%**（116/300），全球排名 #16，差 Moatless Tools + Claude 3.5 Sonnet（39.00%）僅 0.33%。零 API 費，全跑在 DGX Spark GB10 上。關鍵差異是 scaffold 設計（backticks + edit-tool v2 + budget prompt），不是模型大小。
+</TLDRCard>
+
+<VideoEmbed src="/videos/swe-bench-lite-gemma4-26b-38-percent.mp4" />
+
+## 白話版：讓本地 AI 修真實的 bug
+
+[SWE-bench](https://www.swebench.com/) 是一個讓 AI 修真實 GitHub bug 的測試。不是選擇題。AI 拿到 bug 報告跟整個 repo 的程式碼，要自己看懂問題、找到要改的檔案、改對、然後交出一個能通過測試的 patch。一般工程師每題也要花幾個小時。
+
+我們用 [Gemma 4 26B](https://huggingface.co/RedHatAI/gemma-4-26B-A4B-it-FP8-Dynamic)——Google 的 260 億參數開源模型——在一台桌上型 [NVIDIA DGX Spark](https://www.nvidia.com/en-us/products/dgx/spark/) 工作站上跑完全部 300 題。不用雲端 API，不用按次付費。模型修好了其中 116 題（38.67%），跟用 Anthropic 的 Claude 3.5 Sonnet（當時 Anthropic 的旗艦模型，需要付費 API）搭配的系統只差一題。
+
+結論：我們跟模型「說話的方式」比模型本身更重要。
+
+---
+
+## 前言
+
+[Part 15](/zh-TW/blog/swe-bench-local-models-framework-matters) 問「地端模型能不能跑 SWE-bench」，得到第一個乾淨 patch。[Part 16](/zh-TW/blog/dgx-spark-gemma4-swe-bench-scaffold-engineering) 花兩天拆光 scaffold 配置，從假成功中爬出來。這篇是收穫——完整 300 題的結果和數字說了什麼。
+
+---
+
+## 數字
+
+```
+Resolved: 116 / 300 = 38.67%
+Run ID:   gemma26b-full-300
+Date:     2026-04-17
+```
+
+### Leaderboard 上的位置
+
+SWE-bench Lite 排行榜（2026-04-16 快照，[swebench.com](https://www.swebench.com/)）：
+
+| # | 系統 | 模型 | % Resolved |
+|---|------|------|-----------|
+| 1 | ExpeRepair v1.0 | Claude 4 Sonnet | 60.33 |
+| 5 | EntroPO + R2E | Qwen3-Coder-30B | 49.67 |
+| 7 | SWE-agent | Claude 3.7 Sonnet | 48.00 |
+| 13 | OpenHands CodeAct v2.1 | Claude 3.5 Sonnet | 41.67 |
+| 15 | Moatless Tools | Claude 3.5 Sonnet | 39.00 |
+| **16** | **mini-swe-agent + edit-tool v2** | **Gemma 4 26B-A4B FP8** | **38.67** |
+| 17 | Patched.Codes Patchwork | — | 37.00 |
+| — | SWE-Fixer | Qwen 2.5 72B | 24.67 |
+
+看兩件事。第一：Moatless Tools 用的是 Claude 3.5 Sonnet——參數量大約是我們的 10 倍、而且要付 API 費——贏我們剛好一題（0.33%）。第二：SWE-Fixer 用 Qwen 2.5 72B——參數量是我們的 3 倍——只拿到 24.67%。Scaffold 比模型大小重要。
+
+---
+
+## 完整配置
+
+### 模型
+
+[RedHatAI/gemma-4-26B-A4B-it-FP8-Dynamic](https://huggingface.co/RedHatAI/gemma-4-26B-A4B-it-FP8-Dynamic)。Google 的 Gemma 4，MoE 架構。25.2B 參數裡每次推理只啟用約 3.8B。FP8 動態量化，不需校準資料。磁碟佔約 27GB。
+
+### vLLM 啟動指令
+
+```bash
+vllm serve /models/gemma4 \
+  --served-model-name gemma-4-26b-fp8 \
+  --host 0.0.0.0 --port 8000 \
+  --max-model-len 96000 \
+  --gpu-memory-utilization 0.85 \
+  --enable-auto-tool-choice \
+  --tool-call-parser gemma4
+```
+
+跑在 NVIDIA GB10（128GB unified memory）上。跑起來模型吃 ~27GB，KV cache 吃 ~100GB——因為 SWE-bench 的 trajectory 很長（100 步的讀檔改碼），context window 需要大量空間。
+
+**不要**加 `--reasoning-parser gemma4` 或自訂 `--chat-template`。兩個都測過，兩個都讓 patch 品質變差——模型會開始整個檔案重寫、複製已經存在的 method。
+
+### Agent 框架
+
+[mini-swe-agent](https://github.com/SWE-agent/mini-swe-agent) v2.2.8，stock `default.py`（155 行，沒改）。唯一一個 patch：`interactive.py` 的 `LimitsExceeded` handler 在 `confirm_exit=False` 時改成 `raise`，不然 batch 會卡在互動 prompt。
+
+### 跑批次的指令
+
+```bash
+mini-extra swebench --subset lite --split test --workers 2 \
+  -c swebench_backticks.yaml \
+  -c gemma4-bt-edittool.yaml \
+  -c environment.pull_timeout=1800 \
+  -c environment.container_timeout=4h \
+  -o ~/swe-bench-runs/gemma26b-path-b-full-300
+```
+
+總耗時約 19 小時。2 個 worker 並行。API 費用 $0。
+
+---
+
+## Scaffold 的三個關鍵設計
+
+### 1. Backticks 取代 tool_calls
+
+Gemma 4 26B 沒辦法穩定輸出 OpenAI 格式的 JSON tool calls。有 10 個以上工具時，`tool_calls` 欄位會間歇性回空，框架進入重試迴圈，步數預算白燒。
+
+解法：`swebench_backticks.yaml` 把動作格式換成 markdown code block：
+
+````
+```mswea_bash_command
+grep -rn "def _print_sinc" /testbed/sympy/
+```
+````
+
+框架用 regex 解析，不依賴 JSON。同一個模型、同樣的智力——唯一改的是怎麼讀它的輸出。
+
+### 2. edit-tool v2（heredoc API）
+
+不加限制的話，Gemma 4 會 `cat > 整個檔案` 從記憶裡重寫。它會忘記 method、發明不存在的 import、順便把不相關的程式碼砍了。每個認真的 SWE-bench 系統都解決這個問題——Anthropic 的 [Claude 系統用 `str_replace_based_edit_tool`](https://docs.anthropic.com/en/docs/agents-and-tools/built-in-tools/text-editor)，我們做了一個相容版放在 Docker container 裡：
+
+```bash
+edit-tool str_replace --file /testbed/sympy/printing/ccode.py << 'PATCH'
+---OLD---
+    def _print_NegativeInfinity(self, expr):
+        return '-HUGE_VAL'
+---NEW---
+    def _print_NegativeInfinity(self, expr):
+        return '-HUGE_VAL'
+
+    def _print_sinc(self, expr):
+        from sympy import sin, Piecewise, Ne
+        x = expr.args[0]
+        return self._print(Piecewise((sin(x)/x, Ne(x, 0)), (1, True)))
+PATCH
+```
+
+核心限制：`str_replace` 要求舊文字**正好出現一次**。0 次或多次都回報明確錯誤，引導模型 `view` 後重試。這一條限制消滅了整類「改一個地方砍掉半個 codebase」的失敗。
+
+### 3. 預算 prompt
+
+```
+BUDGET
+You have ~100 steps. Aim to:
+- steps 1-15: explore + reproduce the issue
+- steps 15-40: locate target file + edit with edit-tool
+- steps 40-60: verify the fix and submit
+```
+
+沒有這個的話 Gemma 4 會無限探索。它找到 bug、修好了、然後開始想「`fcode.py` 是不是也要改」、「`jscode.py` 呢」、「`octave.py` 呢」——100 步燒光沒 submit。預算 prompt 製造時間壓力。搭配 `step_limit: 100`（比預設 250 砍半），模型學會果斷。
+
+---
+
+## 各 Repo 命中率
+
+| Repo | 解了 | 總共 | 命中率 |
+|------|------|------|--------|
+| mwaskom/seaborn | 3 | 4 | **75%** |
+| psf/requests | 4 | 6 | **67%** |
+| pylint-dev/pylint | 3 | 6 | 50% |
+| django/django | 52 | 113 | **46%** |
+| scikit-learn | 10 | 23 | 43% |
+| pydata/xarray | 2 | 5 | 40% |
+| matplotlib | 8 | 23 | 35% |
+| astropy | 2 | 6 | 33% |
+| sphinx-doc | 5 | 16 | 31% |
+| sympy | 23 | 77 | 30% |
+| pytest-dev | 4 | 17 | 24% |
+| pallets/flask | 0 | 3 | **0%** |
+
+Django 佔了 300 題裡的 113 題，模型表現不錯——46% 高於整體平均。seaborn 75% 亮眼但樣本太小（4 題）。Flask 全軍覆沒（3 題全敗）——模型沒搞懂 Flask 的 extension 註冊邏輯。
+
+sympy 那欄看得出衰退曲線：前 171 題（包含比較簡單的 sympy）命中率 45%，後 129 題（難題集中）掉到 30%。
+
+---
+
+## 走錯的路
+
+| 嘗試 | 為什麼失敗 |
+|------|----------|
+| `tool_calls` 協議 | `tool_calls` 欄位間歇性空白 → 格式重試迴圈 → 步數白燒 |
+| `--reasoning-parser gemma4` | 應該清理內部 thought token，實際上讓模型傾向全檔重寫 |
+| `--chat-template` 自訂模板 | 改了 prompt 結構 → patch 品質下降 |
+| NVFP4 量化 | 4-bit 權重量化破壞了 tool call token |
+| `step_limit: 250`（預設） | 模型過度工程化，永遠不 submit |
+| `step_limit: 30` | 太緊——edit 階段被砍掉 |
+| `cat > file` 全檔覆寫（無 edit-tool） | 模型從記憶裡重寫時會刪掉既有 method |
+| `system_message_suffix` YAML key | **被 pydantic 靜默丟棄**——prompt 根本沒送到模型 |
+| OpenHands 框架 | Function calling 有 11 個工具 → 每題 40+ 個錯誤 |
+
+每一個紙上都看起來合理。其中 `system_message_suffix` 最痛——YAML 語法完全合法、框架沒警告、但 Agent 的 pydantic model 靜默丟掉了那個 key。我們以為在跑的 prompt 從來沒跑過。這一個 bug 浪費了整整一天。
+
+---
+
+## 基礎設施：ARM64 QEMU 與 image 大戰
+
+GB10 是 ARM64 機器。SWE-bench 的 Docker image 是 x86_64。Docker 在 ARM 上用 QEMU 模擬跑 x86 container——能跑，但什麼都慢 2-3 倍。
+
+真正的瓶頸是拉 image。每個 repo 版本都有獨立的 Docker image（光 matplotlib 就有 16 個）。每個 1-5GB。在 QEMU 模擬下解壓要 30 分鐘以上。
+
+修法：跑 batch 之前先把全部 172 個 image 預拉到本地。一個 `xargs -P 2 docker pull` 背景 job 大約跑一小時就拉完。之後每個 `docker run` 直接從本地快取啟動——每題的等待時間從「幾分鐘拉 image」變成「幾秒鐘啟動 container」。
+
+---
+
+## 三天時間軸
+
+**4 月 14 日：** 用看似正常的 scaffold 跑了第一批。寫了文件宣稱「35 步 submit 成功」跟「分階段 prompt 是關鍵」。兩個都錯——`system_message_suffix` 被靜默丟掉，模型其實每一題都在 abort。一整天的工作建立在錯誤前提上。
+
+**4 月 15 日：** 發現 pydantic 靜默丟棄的 bug。把 scaffold 拆光重建。用 `system_template` 完整 override。Gemma 4 第一次真正在 step 38 submit 正確 patch——這次確認過 exit status。當晚啟動 300 題 batch。
+
+**4 月 16-17 日：** 監控 batch、pre-pull Docker image、修 ARM64 QEMU 瓶頸。Batch 約 19 小時跑完。sb-cli 評估結果：38.67%。
+
+---
+
+## 學到什麼
+
+### 花最多時間的事
+
+不是調模型，不是設計 scaffold。**是相信了一份沒驗過的文件。** 4 月 14 日的「成功」文件是一個被當成事實寫的推測。隔天的 debug 全部在這個前提下進行——每次失敗都被解讀為「分階段 prompt 昨天有用，所以一定是其他東西壞了」。真正的答案是：分階段 prompt 從來沒跑過。
+
+這就是為什麼我們在這個專案期間幫知識圖譜工具 [Musubi](https://github.com/coolthor/musubi) 加了 [`confidence: verified | hypothesis | superseded`](https://github.com/coolthor/musubi#memory-quality-confidence--staleness) 標記。筆記現在帶著驗證狀態，搜尋結果會顯示那份資料是確認過的還是只是推測。
+
+### 可以帶走的診斷模式
+
+1. **改完 config 先 dump runtime state，不要相信 YAML 檔本身。** 跑完第一條 trajectory 立刻看 system prompt 長度有沒有變。沒變就是 config 沒載入。
+
+2. **action format 配合模型的強項。** 大模型用 tool_calls（JSON），小/MoE 模型用文字格式（backticks、XML tag）更穩。先在 10-tool 場景測過模型的 tool calling 穩定度再選協議。
+
+3. **跨架構 batch run 要先 pre-pull image。** 只要你在 ARM64 跑 x86 container（或反過來），QEMU 模擬下的 image 解壓是隱藏瓶頸。Pre-pull 把每題 30 分鐘的稅變成一次性前置成本。
+
+### 通用原則
+
+Gemma 4 26B（38.67%）跟 SWE-Fixer 用 Qwen 72B（24.67%）差 14 個百分點——小模型贏。我們的 scaffold 跟 Moatless Tools + Claude 3.5 Sonnet 的差距是 0.33%。**在開源模型已經到達的能力區間裡，scaffold 設計是比模型選擇更大的槓桿。**
+
+---
+
+## 結論
+
+完整配置——YAML 檔案、edit-tool source、vLLM 指令、batch 啟動命令——都在 [artifact record](https://github.com/coolthor/musubi) 裡。任何有 GB10（或其他能跑 Gemma 4 26B vLLM 的機器）的人都能重現這個結果。
+
+**重現 38.67% 的 checklist：**
+
+1. 用 vLLM serve `RedHatAI/gemma-4-26B-A4B-it-FP8-Dynamic`，加 `--tool-call-parser gemma4`（不要 reasoning parser、不要 chat template）
+2. 用 `swebench_backticks.yaml` base config（text-based action，不是 tool_calls）
+3. Override `system_template`：edit-tool v2 指令 + budget prompt
+4. `step_limit: 100`，`temperature: 0.3`
+5. Batch 指令加 `--exit-immediately`
+6. 跑之前先 pre-pull 全部 172 個 SWE-bench Lite Docker image
+7. `--workers 2`，`container_timeout=4h`，`pull_timeout=1800`
+
+**接下來：** Gemma 4 E4B（4B，最小的版本）正在同 scaffold 上跑。看 4B 的天花板在哪。結果出來會更新這裡。
+
+---
+
+*同系列：[Part 15 — 可行性測試](/zh-TW/blog/swe-bench-local-models-framework-matters) | [Part 16 — Scaffold 工程](/zh-TW/blog/dgx-spark-gemma4-swe-bench-scaffold-engineering)*

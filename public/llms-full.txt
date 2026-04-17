@@ -1,11 +1,265 @@
 # ai-muninn — Full Site Content
 # https://ai-muninn.com
-# Generated: 2026-04-16
-# Articles: 53
+# Generated: 2026-04-17
+# Articles: 54
 
 This file contains the full text of all articles on ai-muninn.com.
 It is intended for AI tools that need complete site context.
 For the article index only, see /llms.txt.
+
+---
+
+# [Benchmark] SWE-bench Lite 38.67% with a 26B Local Model — 0.33% from Claude 3.5 Sonnet Scaffolds
+URL: https://ai-muninn.com/en/blog/swe-bench-lite-gemma4-26b-38-percent
+Date: 2026-04-17
+Series: DGX Spark (Part 17)
+
+import { TLDRCard } from "@/components/blog/TLDRCard";
+
+
+Gemma 4 26B-A4B FP8 scored **38.67%** (116/300) on SWE-bench Lite — ranking #16 globally, within 0.33% of Moatless Tools + Claude 3.5 Sonnet (39.00%). Zero API cost, running entirely on a DGX Spark GB10. The differentiator was scaffold design (backticks protocol + edit-tool v2 + budget prompt), not model size.
+
+
+<VideoEmbed src="/videos/swe-bench-lite-gemma4-26b-38-percent.mp4" />
+
+## Plain-Language Version: Local AI fixing real bugs
+
+[SWE-bench](https://www.swebench.com/) is a benchmark where an AI agent has to fix real bugs from open-source GitHub projects — Django, scikit-learn, matplotlib, sympy, and others. It's not a toy test. The agent gets a bug report, the full repository code, and has to figure out what file to edit, what to change, and submit a working patch. Most humans would take hours per bug.
+
+We ran all 300 tasks from SWE-bench Lite using [Gemma 4 26B](https://huggingface.co/RedHatAI/gemma-4-26B-A4B-it-FP8-Dynamic) — a 26-billion-parameter open-source model from Google — running locally on a single [NVIDIA DGX Spark](https://www.nvidia.com/en-us/products/dgx/spark/) desktop workstation. No cloud APIs, no per-query charges. The model fixed 116 out of 300 bugs (38.67%), landing within 1 solved bug of systems using Claude 3.5 Sonnet — Anthropic's flagship model at the time, accessed via paid API.
+
+The punchline: how we talked to the model mattered more than which model we used.
+
+---
+
+## Preface
+
+[Part 15](/en/blog/swe-bench-local-models-framework-matters) asked "can we run SWE-bench locally at all?" and got a single clean patch. [Part 16](/en/blog/dgx-spark-gemma4-swe-bench-scaffold-engineering) documented two days of debugging false positives and scaffold failures. This article is the payoff — the full 300-task run and what the numbers actually say.
+
+---
+
+## The number
+
+```
+Resolved: 116 / 300 = 38.67%
+Run ID:   gemma26b-full-300
+Date:     2026-04-17
+```
+
+### Where that lands on the leaderboard
+
+SWE-bench Lite leaderboard (snapshot 2026-04-16, [swebench.com](https://www.swebench.com/)):
+
+| # | System | Model | % Resolved |
+|---|--------|-------|-----------|
+| 1 | ExpeRepair v1.0 | Claude 4 Sonnet | 60.33 |
+| 5 | EntroPO + R2E | Qwen3-Coder-30B | 49.67 |
+| 7 | SWE-agent | Claude 3.7 Sonnet | 48.00 |
+| 13 | OpenHands CodeAct v2.1 | Claude 3.5 Sonnet | 41.67 |
+| 15 | Moatless Tools | Claude 3.5 Sonnet | 39.00 |
+| **16** | **mini-swe-agent + edit-tool v2** | **Gemma 4 26B-A4B FP8** | **38.67** |
+| 17 | Patched.Codes Patchwork | — | 37.00 |
+| — | SWE-Fixer | Qwen 2.5 72B | 24.67 |
+
+Two observations. First: Moatless Tools uses Claude 3.5 Sonnet — a model roughly 10x larger and accessed via paid API — and beats us by exactly one solved instance (0.33%). Second: SWE-Fixer uses Qwen 2.5 72B — nearly 3x our parameter count — and lands at 24.67%. Scaffold matters.
+
+---
+
+## What actually ran
+
+### Model
+
+[RedHatAI/gemma-4-26B-A4B-it-FP8-Dynamic](https://huggingface.co/RedHatAI/gemma-4-26B-A4B-it-FP8-Dynamic) — Google's Gemma 4, Mixture-of-Experts architecture. 25.2B total parameters, approximately 3.8B active per token. FP8 dynamic quantization (per-channel, no calibration data needed). ~27GB on disk.
+
+### Serving
+
+```bash
+vllm serve /models/gemma4 \
+  --served-model-name gemma-4-26b-fp8 \
+  --host 0.0.0.0 --port 8000 \
+  --max-model-len 96000 \
+  --gpu-memory-utilization 0.85 \
+  --enable-auto-tool-choice \
+  --tool-call-parser gemma4
+```
+
+Running inside `vllm-node-tf5` (a custom container built for SM121 / GB10 compatibility) on an NVIDIA GB10 with 128GB unified memory. At runtime the model takes ~27GB for weights and ~100GB for KV cache — SWE-bench trajectories are long (100 steps of reading files and editing code), so the KV cache pool needs to be generous.
+
+Do **not** add `--reasoning-parser gemma4` or a custom `--chat-template`. Both were tested and both degraded patch quality — the model starts doing whole-file rewrites and duplicating existing methods.
+
+### Agent
+
+[mini-swe-agent](https://github.com/SWE-agent/mini-swe-agent) v2.2.8, stock `default.py` (155 lines, unmodified). One patch to `interactive.py`: the `LimitsExceeded` handler calls `raise` instead of `input()` when `confirm_exit=False`, so batch runs don't hang on an interactive prompt.
+
+### Batch command
+
+```bash
+mini-extra swebench --subset lite --split test --workers 2 \
+  -c swebench_backticks.yaml \
+  -c gemma4-bt-edittool.yaml \
+  -c environment.pull_timeout=1800 \
+  -c environment.container_timeout=4h \
+  -o ~/swe-bench-runs/gemma26b-path-b-full-300
+```
+
+Total wall time: ~19 hours. 2 workers in parallel. Zero API cost.
+
+---
+
+## The scaffold — three things that actually mattered
+
+### 1. Backticks protocol instead of tool_calls
+
+Gemma 4 26B cannot reliably produce OpenAI-style JSON tool calls when there are 10+ tools registered. The `tool_calls` field comes back empty intermittently, the harness retries, and the model burns its step budget on format errors.
+
+The fix: `swebench_backticks.yaml` switches the action format to markdown code blocks:
+
+````
+```mswea_bash_command
+grep -rn "def _print_sinc" /testbed/sympy/
+```
+````
+
+The framework parses these with a regex instead of expecting JSON. Same model, same intelligence — the only change is how we read its output.
+
+### 2. edit-tool v2 (heredoc API)
+
+Without guardrails, Gemma 4 will `cat > /testbed/sympy/printing/ccode.py << 'EOF'` and rewrite the entire file from memory. It forgets methods, invents imports, and breaks unrelated code. Every competitive SWE-bench system addresses this — Anthropic's [Claude system uses `str_replace_based_edit_tool`](https://docs.anthropic.com/en/docs/agents-and-tools/built-in-tools/text-editor), and we built a compatible version that runs inside the Docker container:
+
+```bash
+edit-tool str_replace --file /testbed/sympy/printing/ccode.py << 'PATCH'
+---OLD---
+    def _print_NegativeInfinity(self, expr):
+        return '-HUGE_VAL'
+---NEW---
+    def _print_NegativeInfinity(self, expr):
+        return '-HUGE_VAL'
+
+    def _print_sinc(self, expr):
+        from sympy import sin, Piecewise, Ne
+        x = expr.args[0]
+        return self._print(Piecewise((sin(x)/x, Ne(x, 0)), (1, True)))
+PATCH
+```
+
+Key constraint: `str_replace` requires the old text to appear **exactly once** in the file. Zero matches or multiple matches produce an explicit error that guides the model to `view` the file and retry with a more specific snippet. This one constraint eliminates the entire class of "rewrote the file and deleted half the codebase" failures.
+
+### 3. Budget prompt
+
+```
+BUDGET
+You have ~100 steps. Aim to:
+- steps 1-15: explore + reproduce the issue
+- steps 15-40: locate target file + edit with edit-tool
+- steps 40-60: verify the fix and submit
+```
+
+Without this, Gemma 4 explores indefinitely. It finds the bug, fixes it, then wonders if maybe `fcode.py` and `jscode.py` need the same fix, then wonders about `octave.py`, and burns 100 steps without ever submitting. The budget prompt creates time pressure. Combined with a `step_limit: 100` (down from the default 250), the model learns to be decisive.
+
+---
+
+## Per-repo breakdown
+
+| Repo | Resolved | Total | Rate |
+|------|---------|-------|------|
+| mwaskom/seaborn | 3 | 4 | **75%** |
+| psf/requests | 4 | 6 | **67%** |
+| pylint-dev/pylint | 3 | 6 | 50% |
+| django/django | 52 | 113 | **46%** |
+| scikit-learn | 10 | 23 | 43% |
+| pydata/xarray | 2 | 5 | 40% |
+| matplotlib | 8 | 23 | 35% |
+| astropy | 2 | 6 | 33% |
+| sphinx-doc | 5 | 16 | 31% |
+| sympy | 23 | 77 | 30% |
+| pytest-dev | 4 | 17 | 24% |
+| pallets/flask | 0 | 3 | **0%** |
+
+Django dominates the corpus (113 of 300 tasks) and the model handles it well — 46% is above the overall average. seaborn at 75% stands out, though the sample is small (4 tasks). Flask at 0% (3 tasks) is a complete miss — the model didn't understand Flask's extension registration pattern in any of the three bugs.
+
+The sympy column tells the real story of diminishing returns: the first 171 instances (which included easier sympy tasks) resolved at 45%, but the remaining 129 (harder, later-sequenced sympy) dropped to 30%.
+
+---
+
+## What didn't work
+
+| Attempt | Why it failed |
+|---------|-------------|
+| `tool_calls` protocol with Gemma 4 | Empty `tool_calls` field intermittently → format retry loop → step budget wasted |
+| `--reasoning-parser gemma4` | Supposed to clean up internal thought tokens; in practice made the model do whole-file rewrites |
+| `--chat-template tool_chat_template_gemma4.jinja` | Changed the prompt structure the model sees; patch quality dropped |
+| NVFP4 quantization | 4-bit weight quantization broke the tool calling tokens entirely |
+| `step_limit: 250` (default) | Model over-engineers, never submits |
+| `step_limit: 30` | Too tight — edit phase gets cut short |
+| `cat > file` rewrites (no edit-tool) | Model deletes existing methods when rewriting from memory |
+| `system_message_suffix` YAML key | Silently dropped by pydantic — the prompt never reached the model |
+| OpenHands framework | Function calling with 11 concurrent tools → 40+ errors per instance |
+
+Each of these looked reasonable on paper. The `system_message_suffix` one cost a full day — the YAML key was valid syntax, the harness didn't warn, but the agent's pydantic model silently dropped the field. The prompt we thought was running never was.
+
+---
+
+## Infrastructure: ARM64 QEMU and the image problem
+
+The GB10 is an ARM64 machine. SWE-bench Docker images are x86_64. Docker on ARM runs x86 containers via QEMU user-mode emulation — it works, but everything is 2-3x slower than native x86.
+
+The real bottleneck was image pulls. Each SWE-bench repo version has its own Docker image (matplotlib alone has 16 variants). These are 1-5GB each. Pulling them through QEMU's emulated decompression was taking 30+ minutes per image.
+
+The fix: pre-pull all 172 unique images in a background job before starting the batch run. One shuffled `xargs -P 2 docker pull` session pulled everything in about an hour. After that, every `docker run` started from local cache — the per-instance overhead dropped from "minutes waiting for pull" to "seconds for container startup."
+
+---
+
+## The three-day timeline
+
+**April 14:** Ran the first batch with what seemed like a working scaffold. Wrote documentation claiming "35-step submit success" and "phased prompting is the key insight." Neither was true — `system_message_suffix` was silently dropped, and the model was actually aborting on every instance. A full day of work based on a false premise.
+
+**April 15:** Discovered the pydantic silent-drop bug. Tore apart the scaffold config. Rebuilt from scratch with `system_template` override. Got Gemma 4 to genuinely submit a correct patch at step 38 — and verified the exit status this time. Started the 300-task batch that night.
+
+**April 16–17:** Monitored the batch. Pre-pulled Docker images. Fixed ARM64 QEMU bottlenecks. The batch completed after ~19 hours. sb-cli evaluation: 38.67%.
+
+---
+
+## What was gained
+
+### What cost the most time
+
+Not model tuning. Not scaffold design. **Trusting a document that hadn't been verified.** The April 14 "success" documentation was a hypothesis written as fact. It shaped the next day's debugging — every failure was interpreted through the lens of "the phased prompt worked yesterday, so something else must have broken." The real answer was: the phased prompt never ran.
+
+This is why we added [`confidence: verified | hypothesis | superseded`](https://github.com/coolthor/musubi#memory-quality-confidence--staleness) tags to our knowledge graph tool (Musubi) during this project. Notes now carry their verification status, and search results show whether the source material has been checked or is just a best guess.
+
+### Transferable diagnostics
+
+1. **Dump the runtime state, don't trust the config file.** After any YAML/config change, verify by inspecting the actual system prompt in the first trajectory: `python3 -c "import json; t=json.load(open('traj.json')); print(len(t['messages'][0]['content']))"`. If the length doesn't change, your config isn't loading.
+
+2. **Match the action format to the model's strengths.** Tool calling (JSON) is great for large frontier models. For smaller/MoE models, text-based action formats (backticks, XML tags) are more robust. Check the model's tool calling fidelity on a 10-tool setup before committing to a protocol.
+
+3. **Pre-pull container images for cross-architecture batch runs.** Any time you're running x86 containers on ARM64 (or vice versa), image decompression under QEMU is the hidden bottleneck. Pre-pulling turns a 30-minute-per-instance tax into a one-time upfront cost.
+
+### The pattern that applies everywhere
+
+The gap between Gemma 4 26B (38.67%) and SWE-Fixer with Qwen 72B (24.67%) is 14 percentage points — in favor of the smaller model. The gap between our scaffold and Moatless Tools + Claude 3.5 Sonnet is 0.33%. **Scaffold design is a larger lever than model selection**, at least in the range where open-weight models have reached.
+
+---
+
+## Conclusion
+
+The full configuration — YAML files, edit-tool source, vLLM serving command, and batch invocation — is documented in the [artifact record](https://github.com/coolthor/musubi). Anyone with a GB10 (or any machine that can serve Gemma 4 26B via vLLM) can reproduce this run.
+
+**Checklist for reproducing 38.67%:**
+
+1. Serve `RedHatAI/gemma-4-26B-A4B-it-FP8-Dynamic` via vLLM with `--tool-call-parser gemma4` (no reasoning parser, no chat template)
+2. Use `swebench_backticks.yaml` base config (text-based actions, not tool_calls)
+3. Override `system_template` with edit-tool v2 instructions + budget prompt
+4. Set `step_limit: 100`, `temperature: 0.3`
+5. Add `--exit-immediately` to the batch command
+6. Pre-pull all 172 SWE-bench Lite Docker images before starting
+7. Run with `--workers 2`, `container_timeout=4h`, `pull_timeout=1800`
+
+**What's next:** We're running Gemma 4 E4B (4B, the smallest variant) on the same scaffold to see where the floor is. Same images, same config, same machine — just a smaller brain. Results will be appended here when available.
+
+---
+
+*Also in this series: [Part 15 — Feasibility test](/en/blog/swe-bench-local-models-framework-matters) | [Part 16 — Scaffold engineering](/en/blog/dgx-spark-gemma4-swe-bench-scaffold-engineering)*
 
 ---
 
@@ -1754,17 +2008,18 @@ Imagine you have 400 notes about different topics. Some of them are related, but
 
 A knowledge graph pre-computes these connections. It scans all your notes, finds shared concepts, and draws lines between related documents — even when they use completely different vocabulary.
 
-**The result:**
+**Measured comparison** (52 notes, 10 tasks, Claude Sonnet 4.5):
 
-| How Claude finds information | Files it reads | Tokens spent |
-|------------------------------|---------------|-------------|
-| Reads everything that might be relevant | 10-20 files | ~40,000 |
-| Keyword search (QMD) | 3-5 files | ~10,000 |
-| Knowledge graph search | 2-3 files | ~4,000 |
+| How Claude finds information | Task type | Result |
+|------------------------------|---------|--------|
+| Grep (keyword match) | Lookup by known topic | **Often cheapest** — two steps and you're there |
+| Knowledge graph search | Cross-domain connections | **Saves 17-25%** |
+| Knowledge graph search | "What else is related?" | **Saves 35-65%** |
+| Knowledge graph search | "Which notes are stale?" | **Saves 80%+** (grep literally can't do this) |
 
-Same answer. 10x fewer tokens.
+**Overall: 36% savings — with preconditions.** That number came from a 52-note corpus. On the bundled 20-note demo, grep actually wins by ~73% because when the corpus is small enough, two `grep -l` hops already find the file. Below ~30 notes, don't expect savings.
 
-The knowledge graph doesn't just save tokens — it finds notes you wouldn't have searched for. That's the real magic: **connections you didn't know existed in your own notes.**
+The knowledge graph's real value isn't pure token savings — it's finding **cross-domain connections keyword search can't reach** and answering questions **grep fundamentally can't**, like "which notes might be stale?" or "what else have I written on this theme?" That's the real magic: **connections you didn't know existed in your own notes.**
 
 ### Musubi: A Knowledge Graph for Your Notes
 
@@ -1790,7 +2045,7 @@ The second and third results are notes that keyword search would **never** find 
 
 Musubi itself uses **zero LLM tokens** — the graph is built with deterministic concept matching, not an AI service. The README is honest about this: [they don't claim "saves 40% tokens" without data](https://github.com/coolthor/musubi#measure-your-token-savings). The tool includes a built-in benchmark (`musubi benchmark`) so you can measure your actual savings on your own notes.
 
-When integrated with Claude Code, Musubi runs automatically before Claude searches the web or reads files. If the answer already exists in your notes, Claude reads that instead of starting from scratch. Fewer files read, fewer tokens burned, better answers.
+When integrated with Claude Code, Musubi runs automatically before Claude searches the web or reads files. If the answer already exists in your notes, Claude can locate the right file in a few calls instead of hunting. In practice the biggest wins are on "find the related stuff" and "check what's stale"; for straight "find that note about X" lookups, plain grep often does the job too. **It doesn't save tokens in every scenario — it finds connections grep can never reach.**
 
 ---
 
