@@ -17,11 +17,11 @@ faq:
     a: "RTX 5090 配 32 GB GDDR7 (1792 GB/s) 是測試中最快的 — E2B 310 tok/s，31B dense 也有 62 tok/s。Apple Silicon 的話，M1 Max 32 GB 適合跑到 26B。"
 ---
 
-<VideoEmbed src="/videos/gemma4-4-machines-4-models.mp4" />
-
 <TLDRCard>
 Gemma 4 在 RTX 5090、M1 Max、DGX Spark、M4 四台機器上測試。**E2B 在 5090 上 310 tok/s。** MBP 跑 31B 只有 1.5 tok/s 因為 swap 殺死一切。規則：模型裝不下記憶體，頻寬再高也沒用。
 </TLDRCard>
+
+<VideoEmbed src="/videos/gemma4-4-machines-4-models.mp4" />
 
 ## 白話版：為什麼你的硬體比 AI 模型更重要
 
@@ -67,7 +67,7 @@ RTX 5090 是新成員 — 32 GB GDDR7 跑 1792 GB/s。頻寬是 GB10 的 6.5 倍
 
 ---
 
-## 方法
+## 方法：每台 4 輪、不同 prompt、排除 cache 命中
 
 跟 [Part 11](/zh-TW/blog/dgx-spark-gemma4-e2b-vs-e4b-ollama-3-machines) 一樣：
 
@@ -82,7 +82,7 @@ RTX 5090 是新成員 — 32 GB GDDR7 跑 1792 GB/s。頻寬是 GB10 的 6.5 倍
 
 ---
 
-## 結果
+## 結果：記憶體頻寬預測 95% 的速度差異
 
 ### 生成速度 (tok/s) — 完整矩陣
 

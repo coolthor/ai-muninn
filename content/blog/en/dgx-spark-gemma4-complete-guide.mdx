@@ -21,11 +21,11 @@ faq:
     a: "RTX 5090 is faster on every Gemma 4 variant (E2B 310 vs 53, 26B MoE 186 vs 52 tok/s). But RTX 5090 can't run models over 32 GB. On RTX 5090, 31B Dense at 62 tok/s is the smartest comfortable choice. On DGX Spark, 26B MoE NVFP4 at 52 tok/s is the best balance because 31B Dense hits only 7 tok/s (bandwidth-limited)."
 ---
 
-<VideoEmbed src="/videos/gemma4-4-machines-4-models.mp4" />
-
 <TLDRCard>
 Complete benchmark of all four Gemma 4 variants across three machines. **26B MoE NVFP4 on DGX Spark: 52 tok/s** is the best bang for buck. 31B Dense is only 7 tok/s — skip it. MacBook Pro 32GB maxes out at 26B MoE (47 tok/s). RTX 5090 is the only hardware where 31B Dense is the right pick (62 tok/s — fast enough to keep full intelligence).
 </TLDRCard>
+
+<VideoEmbed src="/videos/gemma4-4-machines-4-models.mp4" />
 
 ## Plain-Language Version: Four AI Models, One Table
 

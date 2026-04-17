@@ -21,17 +21,11 @@ faq:
     a: "The power and thermal problems affect some batches, not all. Units that work properly run Gemma 4 26B MoE at 52 tok/s with 128GB unified memory fitting most models. Confirm the return policy before purchasing, and run the nvidia-smi diagnostic as soon as you receive it."
 ---
 
-<VideoEmbed src="/videos/power-diagnostic.mp4" />
-
-A power supply problem that looks like a software problem is the worst kind. You spend a day tuning vLLM flags, switching quantization formats, reading kernel logs — and the whole time the machine was just starving for power.
-
-> **2026-04-13 update:** John Carmack [publicly criticized DGX Spark](https://www.tomshardware.com/tech-industry/semiconductors/users-question-dgx-spark-performance) for failing to meet advertised specs, overheating, and capping at 100W. The [NVIDIA developer forums](https://forums.developer.nvidia.com/c/accelerated-computing/dgx-spark-gb10/719) are now flooded with crash and shutdown reports. If you arrived here because of that news, this article helps you **distinguish three different symptoms in 30 seconds**: 30W hardware defect (needs RMA), 100W thermal throttling (environmental), and 5W driver bug (fixable).
-
-This picks up from the series so far ([Part 5](/en/blog/dgx-spark-fp8-kvcache-repetition)). This one is not about model behavior or CUDA errors. It is about the hardware beneath all of that.
-
 <TLDRCard>
 Some GX10 units ship with a PD controller defect that permanently caps total system power at ~30W regardless of workload. Firmware reflash does not fix it. NVIDIA recommends RMA. Run one command to find out if you are affected.
 </TLDRCard>
+
+<VideoEmbed src="/videos/power-diagnostic.mp4" />
 
 ## Plain-Language Version: When Your AI Machine Is Secretly Running on Fumes
 

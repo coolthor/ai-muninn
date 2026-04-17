@@ -17,12 +17,11 @@ faq:
     a: "If the repetition starts at a consistent token count (not immediately) and sampling parameters have no effect, it's precision degradation — not a temperature or top_p issue. Check the startup log for 'q_scale=1.0'. If that line appears, FP8 KV cache is running uncalibrated."
 ---
 
-
-<VideoEmbed src="/videos/fp8-kvcache-bug.mp4" />
-
 <TLDRCard>
 Adding `--kv-cache-dtype fp8` to vLLM on GB10 without calibration data causes outputs to collapse into repetition loops after ~500 tokens. The startup log warns `q_scale=1.0` — meaning FP8 quantization is running uncalibrated. Fix: remove the flag and use BF16 KV cache. On GB10 with 128GB unified memory, VRAM is not the constraint, so FP8 KV cache is unnecessary.
 </TLDRCard>
+
+<VideoEmbed src="/videos/fp8-kvcache-bug.mp4" />
 
 ## Plain-Language Version: Why AI Output Breaks After 500 Words
 

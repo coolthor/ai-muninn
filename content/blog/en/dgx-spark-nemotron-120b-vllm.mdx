@@ -17,12 +17,11 @@ faq:
     a: "13-16 tok/s decode speed. Load time is ~8 minutes for 17 shards. At 200K context with fp8 KV cache and 0.85 GPU utilization, it allocates ~35GB for KV cache. It's roughly 3x slower than Qwen3.5-35B (47 tok/s) on the same hardware — consistent with its 3x larger active parameter count."
 ---
 
-
-<VideoEmbed src="/videos/nemotron-120b-debug.mp4" />
-
 <TLDRCard>
 Nemotron-3-Super-120B-NVFP4 runs at 13-16 tok/s on a single GB10 (DGX Spark, SM121) using ~108 GB of the 128 GB unified memory. Requires stable vLLM image (v0.17.1-cu130, not nightly), `--moe-backend marlin` CLI flag, and three NVFP4-specific env vars. Five SM121-specific pitfalls documented with a working docker command.
 </TLDRCard>
+
+<VideoEmbed src="/videos/nemotron-120b-debug.mp4" />
 
 ## Plain-Language Version: Running a 120-Billion-Parameter AI on a Desktop
 

@@ -17,12 +17,11 @@ faq:
     a: "Not meaningfully for agent tasks. The speed difference is real (47.0 vs 36.1 tok/s, 23% gap) and VRAM savings are substantial, but across 7 task categories the quality difference was nearly invisible. q4_K_M is the right choice for almost all agent workloads."
 ---
 
-
-<VideoEmbed src="/videos/ollama-benchmark.mp4" />
-
 <TLDRCard>
 Benchmarked 8 LLMs on DGX Spark (GB10, 128 GB) across 7 task categories. Best agent stack: qwen3-coder-next q4_K_M at 47 tok/s (primary) + qwen3-vl:30b at 19 GB (vision), using only 71 GB combined. gpt-oss 120B failed tool calling with invalid JSON despite being 3x larger. q4 vs q8 quality difference was nearly invisible.
 </TLDRCard>
+
+<VideoEmbed src="/videos/ollama-benchmark.mp4" />
 
 ## Plain-Language Version: Choosing the Right AI Brain for Your Desktop
 

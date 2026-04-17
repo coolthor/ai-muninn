@@ -21,17 +21,11 @@ faq:
     a: "供電和散熱問題影響部分批次，不是全部。能正常運作的機器跑 Gemma 4 26B MoE 可達 52 tok/s、128GB 統一記憶體能放下大部分模型。買之前先確認退換貨政策，收到後第一件事跑 nvidia-smi 診斷。"
 ---
 
-<VideoEmbed src="/videos/power-diagnostic.mp4" />
-
-一個看起來像軟體問題的硬體問題是最浪費時間的那種。你花了一天調 vLLM 的參數、換量化格式、翻 kernel log——結果機器從頭到尾就是在餓死狀態。
-
-> **2026-04-13 更新：** John Carmack [公開批評 DGX Spark](https://www.tomshardware.com/tech-industry/semiconductors/users-question-dgx-spark-performance) 效能不符預期、過熱、功耗上限問題。NVIDIA 開發者論壇湧入大量 crash 和 shutdown 報告。如果你是因為這波消息來的，這篇可以幫你在 **30 秒內區分三種不同的症狀**：30W 硬體缺陷（要 RMA）、100W 散熱降頻（正常保護但影響效能）、5W driver bug（可修）。
-
-這篇接在系列前幾篇之後（[Part 5](/zh-TW/blog/dgx-spark-fp8-kvcache-repetition)），不討論模型行為或 CUDA 錯誤，只談底層硬體。
-
 <TLDRCard>
 部分 GX10 出廠帶有 PD controller 缺陷，不管跑什麼負載，整台機器的總功耗都被永久鎖在約 30W。刷韌體無效，NVIDIA 建議直接 RMA。一個指令可以在 30 秒內確認你有沒有中招。
 </TLDRCard>
+
+<VideoEmbed src="/videos/power-diagnostic.mp4" />
 
 ## 白話版：你的 AI 機器其實在「餓肚子」
 

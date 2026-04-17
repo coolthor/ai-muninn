@@ -17,12 +17,11 @@ faq:
     a: "Ollama's KEEP_ALIVE=2h keeps models in the shared unified memory pool. Before starting vLLM, run 'curl -s http://localhost:11434/api/ps' to check what's loaded, then unload with 'curl -X POST http://localhost:11434/api/generate -d {\"model\": \"MODEL_NAME\", \"keep_alive\": 0}'."
 ---
 
-
-<VideoEmbed src="/videos/vllm-qwen35.mp4" />
-
 <TLDRCard>
 Migrating Qwen3.5-35B from Ollama to vLLM on DGX Spark (GB10) dropped TTFT from 2-4s to 0.12s via prefix caching, while maintaining 47 tok/s decode speed. Critical gotcha: `--enable-chunked-prefill` causes a 9x throughput regression (50 to 5.7 tok/s) on SSM+MoE hybrid models.
 </TLDRCard>
+
+<VideoEmbed src="/videos/vllm-qwen35.mp4" />
 
 ## Plain-Language Version: Why Switching AI Engines Matters
 

@@ -17,11 +17,11 @@ faq:
     a: "Three critical settings: --enable-auto-tool-choice, --tool-call-parser gemma4, and --chat-template tool_chat_template_gemma4.jinja (download from vLLM GitHub). The chat template is the most commonly missed one — without it, Gemma 4's tool calls lose their parameters even though the model generates them correctly."
 ---
 
-<VideoEmbed src="/videos/swe-bench-local-models-framework-matters.mp4" />
-
 <TLDRCard>
 **Feasibility test, not a full benchmark.** Gemma 4 26B went from 40+ tool calling errors on OpenHands to fixing a test bug in 9 steps on SWE-agent — same model, same GX10 hardware. The pipeline works; a full SWE-Bench Lite run (300 tasks) is next.
 </TLDRCard>
+
+<VideoEmbed src="/videos/swe-bench-local-models-framework-matters.mp4" />
 
 ## Plain-Language Version: Can a desktop AI fix real bugs?
 

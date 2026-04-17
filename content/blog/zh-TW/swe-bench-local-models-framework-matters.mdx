@@ -17,11 +17,11 @@ faq:
     a: "三個關鍵設定：--enable-auto-tool-choice、--tool-call-parser gemma4、以及 --chat-template tool_chat_template_gemma4.jinja（從 vLLM GitHub 下載）。Chat template 最容易漏 — 沒設的話 Gemma 4 的 tool call 會丟失參數，即使模型有正確生成。"
 ---
 
-<VideoEmbed src="/videos/swe-bench-local-models-framework-matters.mp4" />
-
 <TLDRCard>
 **可行性測試，不是完整 benchmark。** Gemma 4 26B 在 OpenHands 上 40+ 次 tool calling 錯誤，換到 SWE-agent 後 9 步修好測試 bug。同一個模型、同一台 GX10。整條路通了，完整 SWE-Bench Lite（300 題）是下一步。
 </TLDRCard>
+
+<VideoEmbed src="/videos/swe-bench-local-models-framework-matters.mp4" />
 
 ## 白話版：桌上型 AI 電腦能修真正的 bug 嗎？
 

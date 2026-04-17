@@ -17,12 +17,11 @@ faq:
     a: "Ollama 的 KEEP_ALIVE=2h 讓 model 留在 unified memory pool 裡。啟動 vLLM 前，先用 'curl -s http://localhost:11434/api/ps' 確認有沒有 model 在記憶體，再用 'curl -X POST http://localhost:11434/api/generate -d {\"model\": \"MODEL_NAME\", \"keep_alive\": 0}' 卸載。"
 ---
 
-
-<VideoEmbed src="/videos/vllm-qwen35.mp4" />
-
 <TLDRCard>
 在 DGX Spark（GB10）上將 Qwen3.5-35B 從 Ollama 遷移到 vLLM，透過 prefix caching 讓 TTFT 從 2-4 秒降到 0.12 秒，decode 速度維持 47 tok/s。關鍵地雷：`--enable-chunked-prefill` 對 SSM+MoE hybrid 模型會造成 9 倍 throughput 衰退（50 降到 5.7 tok/s）。
 </TLDRCard>
+
+<VideoEmbed src="/videos/vllm-qwen35.mp4" />
 
 ## 白話版：為什麼換 AI 引擎很重要
 

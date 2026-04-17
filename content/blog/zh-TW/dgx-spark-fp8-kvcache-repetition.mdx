@@ -17,12 +17,11 @@ faq:
     a: "如果重複從固定 token 數開始（不是一開始就出現）且調整 sampling 參數無效，那是精度退化問題，不是 temperature 或 top_p 的事。查看 startup log 是否有 'q_scale=1.0'。這行出現就代表 FP8 KV cache 在沒有 calibration 的情況下運行。"
 ---
 
-
-<VideoEmbed src="/videos/fp8-kvcache-bug.mp4" />
-
 <TLDRCard>
 在 GB10 上沒有 calibration data 的情況下加 `--kv-cache-dtype fp8`，vLLM 的輸出會在約 500 token 後崩成重複迴圈。Startup log 警告 `q_scale=1.0`——代表 FP8 量化在沒有校準的狀態下運行。修法：拿掉這個 flag，用 BF16 KV cache。GB10 有 128GB unified memory，VRAM 不是瓶頸，FP8 KV cache 根本沒必要用。
 </TLDRCard>
+
+<VideoEmbed src="/videos/fp8-kvcache-bug.mp4" />
 
 ## 白話版：為什麼 AI 輸出寫到 500 字就壞掉
 

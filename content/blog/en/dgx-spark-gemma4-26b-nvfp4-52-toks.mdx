@@ -17,11 +17,11 @@ faq:
     a: "Yes. The community NVFP4 checkpoint (bg-digitalservices/Gemma-4-26B-A4B-it-NVFP4) requires a patched gemma4.py to correctly map NVFP4 scale keys (.weight_scale, .weight_scale_2, .input_scale) in FusedMoE. Without it, weight loading fails. The patch ships with the model repo."
 ---
 
-<VideoEmbed src="/videos/gemma4-nvfp4-benchmark.mp4" />
-
 <TLDRCard>
 Gemma 4 26B-A4B NVFP4 runs at **52 tok/s** on DGX Spark (GB10) via vLLM 0.19, using only 16.5 GB of model memory and leaving 82 GB for KV cache. The 31B dense variant is 7.5x slower — don't bother.
 </TLDRCard>
+
+<VideoEmbed src="/videos/gemma4-nvfp4-benchmark.mp4" />
 
 ## Plain-Language Version: What Is Gemma 4? What Does 52 tok/s Mean?
 

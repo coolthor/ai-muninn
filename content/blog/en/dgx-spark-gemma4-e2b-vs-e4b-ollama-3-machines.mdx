@@ -17,11 +17,11 @@ faq:
     a: "It unloads the model after every request. Sequential benchmark runs trigger cold loads, adding 2+ seconds to TTFT and producing wildly inconsistent numbers. Override with keep_alive: 10m per request."
 ---
 
-<VideoEmbed src="/videos/gemma4-e2b-vs-e4b-3-machines.mp4" />
-
 <TLDRCard>
 Gemma 4 E2B runs at **81 tok/s** on M1 Max, **53 tok/s** on GB10, and **42 tok/s** on M4 — consistently 44-82% faster than E4B across all three machines. The speed difference comes down to one thing: memory bandwidth.
 </TLDRCard>
+
+<VideoEmbed src="/videos/gemma4-e2b-vs-e4b-3-machines.mp4" />
 
 ## Plain-Language Version: Gemma 4 E2B vs E4B
 

@@ -18,11 +18,11 @@ faq:
     a: "vLLM PR #38280 在 2026 年 3 月下旬 review 中，但 **2026-04-06 未合併被 close 掉**。llama.cpp 有社群 fork 但尚未合併到 main。追 upstream vLLM 看有沒有後續 PR；目前還沒到 production usability。"
 ---
 
-<VideoEmbed src="/videos/turboquant-explainer.mp4" caption="TurboQuant 30 秒動畫說明：PolarQuant + QJL 兩階段壓縮" />
-
 <TLDRCard>
 Google TurboQuant 3-bit KV cache 壓縮在 GB10 上驗證通過：5.0x 壓縮、cosine sim 0.9943、Needle-in-Haystack EXACT。但目前沒有速度優勢（需要 fused kernel），且 Qwen3.5-35B 的 hybrid attention 只有 25% 的層受益——僅省 600 MB，遠低於論文對 dense 模型宣稱的 6x。
 </TLDRCard>
+
+<VideoEmbed src="/videos/turboquant-explainer.mp4" caption="TurboQuant 30 秒動畫說明：PolarQuant + QJL 兩階段壓縮" />
 
 ## 白話版：壓縮 AI 的記憶體卻不損失品質
 

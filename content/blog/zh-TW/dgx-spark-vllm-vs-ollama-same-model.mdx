@@ -15,11 +15,11 @@ faq:
     a: "生產用 vLLM（52 tok/s、OpenAI 相容 API、並發、tool calling）。快速測試用 Ollama（40 tok/s、設定簡單、不需要 Docker）。兩者可共存但不能同時吃滿 GPU 頻寬。"
 ---
 
-<VideoEmbed src="/videos/vllm-vs-ollama-gb10.mp4" />
-
 <TLDRCard>
 同一個 Gemma 4 26B-A4B 在 GB10 上，vLLM 跑 **52 tok/s**、Ollama 跑 **40 tok/s** — 差 30% 來自 Marlin kernel、CUDA graphs 和 torch.compile 融合。Ollama 還有一個靜默 CPU/GPU split 陷阱，會把速度砍到 16 tok/s。
 </TLDRCard>
+
+<VideoEmbed src="/videos/vllm-vs-ollama-gb10.mp4" />
 
 ## 白話版：vLLM vs Ollama
 

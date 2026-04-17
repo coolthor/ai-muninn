@@ -17,12 +17,11 @@ faq:
     a: "每一行的每個元素都是相同的值——例如 [-28.625, -28.625, -28.625, ...]。不是零，不是 NaN，不是隨機雜訊。Kernel 計算出一個純量然後廣播填滿整行，而不是做正確的矩陣乘法。這個特徵和其他失敗模式截然不同，可以確認問題來自 CUTLASS FP4 kernel。"
 ---
 
-
-<VideoEmbed src="/videos/sm121-bug.mp4" />
-
 <TLDRCard>
 DGX Spark（GB10，SM121）跑 NVFP4 模型會靜默輸出 `!!!!!` 垃圾，因為 CUTLASS FP4 kernel 針對的是 SM120（GB200），不是 SM121。需要修四個獨立的 bug：PTX 指令不匹配、Marlin thread race、GDN 層缺少 SupportsQuant、以及 CUTLASS FP4 裝置選擇誤判。全部修完後，Qwen3.5-122B 透過 Marlin W4A16 跑到 ~15 tok/s。
 </TLDRCard>
+
+<VideoEmbed src="/videos/sm121-bug.mp4" />
 
 ## 白話版：當你的 AI 硬體運作正常卻不正常
 

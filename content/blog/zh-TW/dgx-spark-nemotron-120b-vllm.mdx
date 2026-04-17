@@ -17,12 +17,11 @@ faq:
     a: "decode 速度 13-16 tok/s，17 個 shard 的載入時間約 8 分鐘。以 200K context、fp8 KV cache、0.85 GPU utilization 計算，約分配 35GB 給 KV cache。比同硬體上的 Qwen3.5-35B（47 tok/s）慢約 3 倍，和它大約 3 倍的 active parameter 數量一致。"
 ---
 
-
-<VideoEmbed src="/videos/nemotron-120b-debug.mp4" />
-
 <TLDRCard>
 Nemotron-3-Super-120B-NVFP4 在單顆 GB10（DGX Spark，SM121）上跑到 13-16 tok/s，使用約 108 GB 的 128 GB unified memory。必須用 stable vLLM image（v0.17.1-cu130，不是 nightly）、`--moe-backend marlin` CLI flag，以及三個 NVFP4 專屬環境變數。五個 SM121 專屬坑和完整可用的 docker 指令。
 </TLDRCard>
+
+<VideoEmbed src="/videos/nemotron-120b-debug.mp4" />
 
 ## 白話版：在桌上型電腦跑 1200 億參數的 AI
 

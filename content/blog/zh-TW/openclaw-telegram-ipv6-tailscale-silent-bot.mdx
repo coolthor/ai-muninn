@@ -17,12 +17,11 @@ faq:
     a: "在 launchd plist 的環境變數裡設 OPENCLAW_TELEGRAM_DISABLE_AUTO_SELECT_FAMILY=1。這會在初始化時就把 undici Agent 的 autoSelectFamily: false 設好，從根本阻止 IPv6 嘗試，而不是在 EHOSTUNREACH 之後才嘗試 fallback。"
 ---
 
-
-<VideoEmbed src="/videos/telegram-routing.mp4" />
-
 <TLDRCard>
 openclaw 的 Telegram bot 全面沉默，但看起來完全健康：process 在跑、token 有效、訊息有進來、沒 error。根因：Tailscale 透過 utun 介面注入 IPv6 路由，路由看起來有效但實際上通不到網路。Node.js undici（Happy Eyeballs、RFC 8305）先嘗試 IPv6，撞到 EHOSTUNREACH，整個 request 失敗不會 fallback 到 IPv4。修法：在 launchd plist 的環境變數裡設 `OPENCLAW_TELEGRAM_DISABLE_AUTO_SELECT_FAMILY=1`。
 </TLDRCard>
+
+<VideoEmbed src="/videos/telegram-routing.mp4" />
 
 ## 白話版：看起來「在跑」不等於「有用」
 

@@ -17,12 +17,11 @@ faq:
     a: "Every element in a row has the same value — e.g., [-28.625, -28.625, -28.625, ...]. Not zeros, not NaN, not random noise. One scalar computed and broadcast across the full row width. This is distinct from other failure modes and confirms the CUTLASS FP4 kernel is miscomputing, not just producing noise."
 ---
 
-
-<VideoEmbed src="/videos/sm121-bug.mp4" />
-
 <TLDRCard>
 DGX Spark (GB10, SM121) silently produces `!!!!!` garbage output with NVFP4 models because CUTLASS FP4 kernels target SM120 (GB200), not SM121. Four independent bugs must be fixed: PTX instruction mismatch, Marlin thread race, missing SupportsQuant for GDN layers, and false-positive CUTLASS FP4 device selection. After all fixes, Qwen3.5-122B runs at ~15 tok/s via Marlin W4A16.
 </TLDRCard>
+
+<VideoEmbed src="/videos/sm121-bug.mp4" />
 
 ## Plain-Language Version: When Your AI Hardware Works But Doesn't
 

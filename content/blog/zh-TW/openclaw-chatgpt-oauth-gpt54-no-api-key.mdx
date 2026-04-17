@@ -17,15 +17,11 @@ faq:
     a: "auth 和預設模型是分開的設定。登入後必須重啟 gateway，然後另外指定預設模型：改 `~/.openclaw/openclaw.json` 把 active profile 指到 `openai-codex/gpt-5.4`，或跑 `openclaw models set-default`。release notes 沒寫清楚這一步。"
 ---
 
-
-<VideoEmbed src="/videos/chatgpt-oauth.mp4" />
-用臉開的鎖和用鑰匙開的鎖，門還是同一扇。openclaw 新的 `openai-codex` provider 就是這個概念——你的 ChatGPT Plus 訂閱變成憑證，agent 直接拿到 GPT-5.4，不需要另一個 OpenAI 帳單帳戶。
-
-這是 [OpenClaw 系列](/zh-TW/blog/openclaw-dgx-spark-local-ai-agent) 的第 11 篇。設定本身大概五分鐘，但有三個步驟在 release notes 裡沒寫清楚。
-
 <TLDRCard>
 `openclaw models auth login --provider openai-codex` 讓你用 ChatGPT Plus 帳號把 GPT-5.4（100 萬 token context）加進 openclaw，不需要 OpenAI API key。三個地雷：需要互動式 terminal、auth 後要重啟 gateway、default model 要另外設定。
 </TLDRCard>
+
+<VideoEmbed src="/videos/chatgpt-oauth.mp4" />
 
 ## 白話版：你的 ChatGPT Plus 訂閱其實能做更多
 

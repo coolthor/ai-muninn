@@ -17,12 +17,11 @@ faq:
     a: "Set OPENCLAW_TELEGRAM_DISABLE_AUTO_SELECT_FAMILY=1 in the launchd plist environment. This sets autoSelectFamily: false in the undici Agent at initialization — preventing IPv6 attempts entirely rather than trying to fall back after EHOSTUNREACH."
 ---
 
-
-<VideoEmbed src="/videos/telegram-routing.mp4" />
-
 <TLDRCard>
 An openclaw Telegram bot went silent while looking perfectly healthy: process running, token valid, messages received, no errors. Root cause: Tailscale injects IPv6 routes via utun interfaces that look valid but have no internet reachability. Node.js undici (Happy Eyeballs, RFC 8305) tries IPv6 first, hits EHOSTUNREACH, and fails without falling back to IPv4. Fix: set `OPENCLAW_TELEGRAM_DISABLE_AUTO_SELECT_FAMILY=1` in the launchd plist environment.
 </TLDRCard>
+
+<VideoEmbed src="/videos/telegram-routing.mp4" />
 
 ## Plain-Language Version: When "Running" Doesn't Mean "Working"
 

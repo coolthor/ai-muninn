@@ -15,11 +15,11 @@ faq:
     a: "部分。NVFP4 把模型從 62 GB（BF16）壓到 31 GB，速度從理論 4.4 tok/s 提升到 7.0 tok/s — 改善 60%。但根本限制是頻寬，沒有任何量化能讓 dense 模型在頻寬受限的硬體上跟 MoE 競爭。"
 ---
 
-<VideoEmbed src="/videos/gemma4-31b-bandwidth-wall.mp4" />
-
 <TLDRCard>
 Gemma 4 31B dense NVFP4 在 DGX Spark 上跑 **7.0 tok/s** — 跟社群 benchmark 完全吻合。同硬體上 26B-A4B MoE 跑 52 tok/s。Dense 模型在 273 GB/s 頻寬牆面前，量化救不了。
 </TLDRCard>
+
+<VideoEmbed src="/videos/gemma4-31b-bandwidth-wall.mp4" />
 
 ## 白話版：為什麼更大的模型不一定更好
 

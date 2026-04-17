@@ -17,11 +17,11 @@ faq:
     a: "模型在每次請求後立刻 unload。連續跑 benchmark 每輪都要冷啟動，TTFT 多 2 秒以上，數字完全不可靠。解法：在 request body 帶 keep_alive: 10m。"
 ---
 
-<VideoEmbed src="/videos/gemma4-e2b-vs-e4b-3-machines.mp4" />
-
 <TLDRCard>
 Gemma 4 E2B 在 M1 Max 上跑到 **81 tok/s**、GB10 上 **53 tok/s**、M4 上 **42 tok/s** — 比 E4B 快 44-82%。速度差異歸結為一件事：記憶體頻寬。
 </TLDRCard>
+
+<VideoEmbed src="/videos/gemma4-e2b-vs-e4b-3-machines.mp4" />
 
 ## 白話版：Gemma 4 E2B vs E4B
 

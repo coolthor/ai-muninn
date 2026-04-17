@@ -17,13 +17,11 @@ faq:
     a: "是。NemoClaw、OpenClaw、OpenShell 都是開源的。OpenClaw 在 NemoClaw 出現之前就已經開源。NemoClaw 把它們跟 NVIDIA Agent Toolkit 整合和 onboarding 工具打包在一起。"
 ---
 
-
-<VideoEmbed src="/videos/nemoclaw-arch.mp4" />
-OpenClaw 在我的本地 Mac 上跑了一段時間，扮演個人 AI agent。GTC 2026 NVIDIA 宣布了 NemoClaw，第一眼看起來像是換個名字的同一個東西。但它不是。
-
 <TLDRCard>
 NemoClaw（v0.1.0，GTC 2026）把 OpenClaw agent core + OpenShell 安全沙箱 + NVIDIA Agent Toolkit 打包成一個框架。關鍵新增是 OpenShell：一個在使用者和 agent 之間執行政策的層，沙箱化檔案存取、限制工具執行。沒有它，OpenClaw 是個能幹但寬鬆的 agent runtime；有了它，OpenClaw 才能部署在你不能完全信任 agent 自我限制的場景。
 </TLDRCard>
+
+<VideoEmbed src="/videos/nemoclaw-arch.mp4" />
 
 ## 白話版：NemoClaw 到底在幹嘛？
 

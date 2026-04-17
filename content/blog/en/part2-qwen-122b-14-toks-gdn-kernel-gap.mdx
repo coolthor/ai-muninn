@@ -17,12 +17,11 @@ faq:
     a: "For interactive use, gpt-oss-120B at ~59 tok/s is the correct choice. Qwen3.5-122B at 14 tok/s is usable for offline batch workloads where latency matters less. Revisit Qwen3.5-122B when Marlin adds GDN kernel support."
 ---
 
-
-<VideoEmbed src="/videos/qwen-122b-speed.mp4" />
-
 <TLDRCard>
 Qwen3.5-122B boots correctly on DGX Spark (GB10/SM121) after the Part 1 SM121 fixes — output is coherent, model works. Speed stabilizes at 14 tok/s regardless of tuning. Root cause: Marlin has no specialized kernel for GDN (Gated Delta Network) SSM layers, so they fall back to a generic compute path. No flag fixes this. Bandwidth-only ceiling for a 10B-active MoE on GB10 is ~55 tok/s; observed is 14 — the gap is compute, not bandwidth. Use gpt-oss-120B (~59 tok/s) for interactive workloads until Marlin ships GDN support.
 </TLDRCard>
+
+<VideoEmbed src="/videos/qwen-122b-speed.mp4" />
 
 ## Plain-Language Version: A 122-Billion-Parameter AI Model — Why Only 14 tok/s?
 

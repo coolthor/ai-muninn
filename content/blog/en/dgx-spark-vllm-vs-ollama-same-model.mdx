@@ -15,11 +15,11 @@ faq:
     a: "vLLM for production serving (52 tok/s, OpenAI-compatible API, concurrent requests, tool calling). Ollama for quick testing and interactive chat (40 tok/s, simpler setup, no Docker required). They can coexist but not simultaneously — GPU memory bandwidth is shared."
 ---
 
-<VideoEmbed src="/videos/vllm-vs-ollama-gb10.mp4" />
-
 <TLDRCard>
 vLLM serves Gemma 4 26B-A4B at **52 tok/s** on GB10 while Ollama tops at **40 tok/s** with the same model — a 30% gap from Marlin kernels, CUDA graphs, and torch.compile fusion. Ollama has a silent CPU/GPU split trap that can halve speed to 16 tok/s.
 </TLDRCard>
+
+<VideoEmbed src="/videos/vllm-vs-ollama-gb10.mp4" />
 
 ## Plain-Language Version: vLLM vs Ollama
 

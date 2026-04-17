@@ -17,15 +17,11 @@ faq:
     a: "Ollama is easier to set up, supports multiple models in memory, and swaps models quickly. vLLM gives lower time-to-first-token (~0.12s vs ~0.4s), cleaner handling of structured output and tool calls, and better thinking-mode support via --reasoning-parser. For single-model personal use, either works; for production behavior, vLLM is preferred."
 ---
 
-
-<VideoEmbed src="/videos/nemoclaw-local.mp4" />
-Running an agent through cloud inference is convenient until the 30-day free tier runs out. Then it's a decision: pay for NVIDIA's API, or point the stack at the hardware already sitting on the desk.
-
-This continues from [Part 2](/en/blog/nemoclaw-install-gx10-from-scratch), which covered getting NemoClaw installed and the `my-assistant` sandbox into `Phase: Ready`. At that point, the agent was routing all inference to `integrate.api.nvidia.com` via the `nvidia/nemotron-3-super-120b-a12b` model. This article covers replacing that with a local [Ollama](https://ollama.com) endpoint running on the same GX10.
-
 <TLDRCard>
 NemoClaw's inference backend is OpenAI-compatible and configurable per-sandbox via `~/.nemoclaw/sandboxes/<name>/config.yaml`. Pointing it at a local Ollama endpoint (`http://localhost:11434/v1`) requires three changes: endpoint URL, model name, and API key (set to `"ollama"`). OpenShell's filesystem and tool policy enforcement is independent of the inference backend — it applies regardless of which model is running.
 </TLDRCard>
+
+<VideoEmbed src="/videos/nemoclaw-local.mp4" />
 
 ## Plain-Language Version: Why Run AI on Your Own Computer?
 

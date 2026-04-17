@@ -17,15 +17,11 @@ faq:
     a: "Ollama 設定簡單、支援多模型同時在記憶體、換模型快。vLLM 的 TTFT 更低（約 0.12s vs 約 0.4s）、structured output 和 tool call 處理更穩、thinking mode 支援更好（透過 --reasoning-parser）。個人使用跑單一模型的話兩個都行；要 production 行為選 vLLM。"
 ---
 
-
-<VideoEmbed src="/videos/nemoclaw-local.mp4" />
-用雲端推理跑 agent 很方便，直到免費 30 天到期。然後面臨選擇：付錢用 NVIDIA 的 API，或是把 stack 指向桌上那台機器。
-
-這篇接 [Part 2](/zh-TW/blog/nemoclaw-install-gx10-from-scratch) 繼續。上一篇把 NemoClaw 裝好、把 `my-assistant` sandbox 跑到 `Phase: Ready`。那時候所有推理都走 `integrate.api.nvidia.com` 上的 `nvidia/nemotron-3-super-120b-a12b`。這篇講怎麼把它換成同一台 GX10 上的本地 [Ollama](https://ollama.com) endpoint。
-
 <TLDRCard>
 NemoClaw 的推理後端是 OpenAI-compatible，可以在每個 sandbox 的 `~/.nemoclaw/sandboxes/<name>/config.yaml` 裡設定。換成本地 Ollama endpoint（`http://localhost:11434/v1`）需要改三個欄位：endpoint URL、model name、api_key（設成 `"ollama"`）。OpenShell 的 filesystem 和工具政策跟推理後端無關——不管跑哪個模型都照樣執行。
 </TLDRCard>
+
+<VideoEmbed src="/videos/nemoclaw-local.mp4" />
 
 ## 白話版：為什麼要在自己電腦跑 AI？
 

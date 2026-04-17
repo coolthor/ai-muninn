@@ -21,11 +21,11 @@ faq:
     a: "RTX 5090 在每個 Gemma 4 版本都更快（E2B 310 vs 53、26B MoE 186 vs 52 tok/s）。但 RTX 5090 跑不了超過 32 GB 的模型。在 RTX 5090 上，31B Dense 62 tok/s 是最聰明的舒適選擇。在 DGX Spark 上，26B MoE NVFP4 52 tok/s 是最佳平衡，因為 31B Dense 只有 7 tok/s（頻寬瓶頸）。"
 ---
 
-<VideoEmbed src="/videos/gemma4-4-machines-4-models.mp4" />
-
 <TLDRCard>
 Gemma 4 家族四種版本在三台機器上的完整測試。**26B MoE NVFP4 在 DGX Spark 上 52 tok/s** 是最佳性價比。31B Dense 只有 7 tok/s — 別浪費時間。MacBook Pro 32GB 最高跑到 26B MoE（47 tok/s）。RTX 5090 是唯一適合跑 31B Dense 的硬體（62 tok/s — 夠快，不用犧牲智商）。
 </TLDRCard>
+
+<VideoEmbed src="/videos/gemma4-4-machines-4-models.mp4" />
 
 ## 白話版：Google 的 AI 模型有四種大小，你該選哪個？
 

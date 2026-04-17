@@ -17,15 +17,11 @@ faq:
     a: "Auth and default model selection are separate. After login you must restart the gateway AND set the default model explicitly: edit `~/.openclaw/openclaw.json` to point the active profile at `openai-codex/gpt-5.4`, or run `openclaw models set-default`. The release notes don't spell this out."
 ---
 
-
-<VideoEmbed src="/videos/chatgpt-oauth.mp4" />
-A lock that opens with a face instead of a key still opens the door. openclaw's new `openai-codex` provider does exactly that — your ChatGPT Plus subscription becomes the credential, and your agent gets GPT-5.4 without a separate API billing account.
-
-This is Part 11 of the [OpenClaw series](/en/blog/openclaw-dgx-spark-local-ai-agent). The setup covered here takes about five minutes, but there are three non-obvious steps that aren't in the release notes.
-
 <TLDRCard>
 `openclaw models auth login --provider openai-codex` adds GPT-5.4 (1,050,000-token context) to your openclaw agent using a ChatGPT Plus account. No OpenAI API key required. Three gotchas: needs an interactive terminal, gateway must restart after auth, and the default model must be set separately.
 </TLDRCard>
+
+<VideoEmbed src="/videos/chatgpt-oauth.mp4" />
 
 ## Plain-Language Version: Your ChatGPT Plus Subscription Can Do More Than You Think
 

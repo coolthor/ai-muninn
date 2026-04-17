@@ -17,12 +17,11 @@ faq:
     a: "--reasoning-parser openai_gptoss routes all output to the reasoning field and sets content to null. Standard OpenAI-compatible clients read content, so they get nothing. Remove --reasoning-parser openai_gptoss unless you specifically need the reasoning channel separated."
 ---
 
-
-<VideoEmbed src="/videos/gpt-oss-120b.mp4" />
-
 <TLDRCard>
 gpt-oss-120B (Microsoft, MXFP4) hits ~59 tok/s on DGX Spark (GB10, SM121) — near the 273 GB/s bandwidth ceiling. Six bugs stood in the way, including a silent env var (`VLLM_NVFP4_GEMM_BACKEND` does nothing; correct var is `VLLM_MXFP4_BACKEND=marlin`) and `--enforce-eager` halving speed to 26 tok/s. Working serve script and ordered checklist included.
 </TLDRCard>
+
+<VideoEmbed src="/videos/gpt-oss-120b.mp4" />
 
 ## Plain-Language Version: A 120-Billion-Parameter AI for Zero API Cost
 

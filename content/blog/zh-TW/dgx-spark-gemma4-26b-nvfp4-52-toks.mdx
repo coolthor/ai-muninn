@@ -17,11 +17,11 @@ faq:
     a: "需要。社群 NVFP4 checkpoint（bg-digitalservices/Gemma-4-26B-A4B-it-NVFP4）需要修正過的 gemma4.py 才能正確對應 NVFP4 scale keys（.weight_scale、.weight_scale_2、.input_scale）。Patch 隨模型 repo 一起下載。"
 ---
 
-<VideoEmbed src="/videos/gemma4-nvfp4-benchmark.mp4" />
-
 <TLDRCard>
 Gemma 4 26B-A4B NVFP4 在 DGX Spark (GB10) 上用 vLLM 0.19 跑出 **52 tok/s**，模型只佔 16.5 GB，KV cache 剩 82 GB。31B dense 版只有 6.9 tok/s，別浪費時間。
 </TLDRCard>
+
+<VideoEmbed src="/videos/gemma4-nvfp4-benchmark.mp4" />
 
 ## 白話版：Gemma 4 是什麼？52 tok/s 是什麼意思？
 
@@ -129,7 +129,7 @@ GPU KV cache size: 714,768 tokens
 
 ---
 
-## 壓測結果
+## 壓測結果：52 tok/s，比 Dense 31B 快 7 倍
 
 5 輪連續測試，每輪 800 tokens：
 

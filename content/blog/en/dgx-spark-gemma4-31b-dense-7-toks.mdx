@@ -15,11 +15,11 @@ faq:
     a: "Partially. NVFP4 compresses the model from ~62 GB (BF16) to 31 GB, which brings speed from the theoretical 4.4 tok/s to 7.0 tok/s — a 60% improvement. But the fundamental constraint is bandwidth, and no quantization makes a dense model competitive with MoE on bandwidth-limited hardware."
 ---
 
-<VideoEmbed src="/videos/gemma4-31b-bandwidth-wall.mp4" />
-
 <TLDRCard>
 Gemma 4 31B dense NVFP4 runs at **7.0 tok/s** on DGX Spark — exactly matching community benchmarks. The 26B-A4B MoE does 52 tok/s on the same hardware. Dense models hit a bandwidth wall at 273 GB/s that no quantization can fix.
 </TLDRCard>
+
+<VideoEmbed src="/videos/gemma4-31b-bandwidth-wall.mp4" />
 
 ## Plain-Language Version: Why Bigger Models Aren't Always Better
 

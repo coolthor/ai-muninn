@@ -17,11 +17,11 @@ faq:
     a: "短 context 下不行。TurboQuant 壓縮 KV cache（BF16→4-bit），但 500 tokens 的 KV cache 只有幾百 MB — 太小沒差。TurboQuant 在長 context（8K+ tokens）才有效，那時 KV cache 會長到幾 GB。"
 ---
 
-<VideoEmbed src="/videos/gemma4-31b-rescue-mbp.mp4" />
-
 <TLDRCard>
 Gemma 4 31B 在 32GB MacBook Pro 上：Ollama 預設 **1.5 tok/s**（swap），降 context 到 2048 得 **9 tok/s**，oMLX 得 **12.8 tok/s** — 恢復 8.5 倍。真正的兇手不是模型大小，是 KV cache 分配。
 </TLDRCard>
+
+<VideoEmbed src="/videos/gemma4-31b-rescue-mbp.mp4" />
 
 ## 白話版：為什麼一個大 AI 模型可以毀掉你的筆電
 

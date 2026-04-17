@@ -17,22 +17,11 @@ faq:
     a: "Ubuntu 24.04 uses cgroup v2 by default, but OpenShell's internal k3s expects cgroup v1 paths. Add '\"default-cgroupns-mode\": \"host\"' to /etc/docker/daemon.json and restart Docker. Verify with 'stat -fc %T /sys/fs/cgroup/' — if it shows 'cgroup2fs', the fix is needed."
 ---
 
-
-<VideoEmbed src="/videos/nemoclaw-install.mp4" />
-Installing software from a curl-pipe-bash script on unusual hardware is a trust exercise. You run the script, something fails loud, and then you spend thirty minutes figuring out whether anything actually installed.
-
-This picks up where [Part 1](/en/blog/nemoclaw-what-it-is-why-it-exists) left off. That article covered what NemoClaw is and why it exists. This one is the install log from a GX10 (ASUS GX10 Ascent, GB10 chip, SM121 — same architecture as DGX Spark) to a running `my-assistant` sandbox.
-
-Environment going in:
-- Ubuntu 24.04, kernel `6.17.0-1008-nvidia`
-- aarch64 (ARM)
-- Node.js v18.19.1
-- Docker 28.5.1, user already in `docker` group
-- No OpenShell, no NemoClaw
-
 <TLDRCard>
 NemoClaw on GX10 (GB10/SM121) needs four fixes that aren't in the official docs: upgrade Node.js to v22, manually run `sudo npm link` after the installer, install OpenShell from the tar.gz release (not the binary URL in the docs — that 404s), and add `cgroupns=host` to Docker daemon.json before onboard. After those, `nemoclaw setup-spark` and `NEMOCLAW_NON_INTERACTIVE=1 nemoclaw onboard` complete cleanly.
 </TLDRCard>
+
+<VideoEmbed src="/videos/nemoclaw-install.mp4" />
 
 ## Plain-Language Version: Installing AI Agent Software on Unusual Hardware
 

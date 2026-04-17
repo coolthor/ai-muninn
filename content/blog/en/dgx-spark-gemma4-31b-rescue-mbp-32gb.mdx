@@ -17,11 +17,11 @@ faq:
     a: "Not for short contexts. TurboQuant compresses KV cache (BF16→4-bit), but at 500 tokens the KV cache is only a few hundred MB — too small to matter. TurboQuant helps at long contexts (8K+ tokens) where KV cache would otherwise cause memory pressure."
 ---
 
-<VideoEmbed src="/videos/gemma4-31b-rescue-mbp.mp4" />
-
 <TLDRCard>
 Gemma 4 31B on a 32GB MacBook Pro: Ollama defaults to **1.5 tok/s** (swap), but reducing context to 2048 gets **9 tok/s**, and oMLX gets **12.8 tok/s** — an 8.5x recovery. The real culprit isn't model size, it's KV cache allocation.
 </TLDRCard>
+
+<VideoEmbed src="/videos/gemma4-31b-rescue-mbp.mp4" />
 
 ## Plain-Language Version: Why a Big AI Model Can Destroy Your Laptop
 

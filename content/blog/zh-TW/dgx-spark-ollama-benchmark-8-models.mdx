@@ -17,12 +17,11 @@ faq:
     a: "對 agent 任務來說幾乎沒有差別。速度差異確實存在（47.0 vs 36.1 tok/s，差距 23%），VRAM 節省也很可觀，但在 7 個任務類別中品質差異幾乎看不出來。q4_K_M 是幾乎所有 agent 工作負載的正確選擇。"
 ---
 
-
-<VideoEmbed src="/videos/ollama-benchmark.mp4" />
-
 <TLDRCard>
 在 DGX Spark（GB10，128 GB）上用 7 個任務類別評測 8 個 LLM。最佳 agent 組合：qwen3-coder-next q4_K_M 47 tok/s（主力）+ qwen3-vl:30b 19 GB（視覺），兩者合計僅用 71 GB。gpt-oss 120B 雖然大 3 倍，但 tool calling 生成無效 JSON 直接出局。q4 和 q8 品質差異幾乎看不出來。
 </TLDRCard>
+
+<VideoEmbed src="/videos/ollama-benchmark.mp4" />
 
 ## 白話版：怎麼為你的桌上型電腦選對 AI 大腦
 

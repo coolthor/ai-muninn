@@ -18,11 +18,11 @@ faq:
     a: "vLLM PR #38280 was under review through March 2026 but **closed unmerged on 2026-04-06**. llama.cpp has community forks but nothing merged to main. Watch upstream vLLM for a follow-up PR — production usability is not there yet."
 ---
 
-<VideoEmbed src="/videos/turboquant-explainer.mp4" caption="TurboQuant in 30 seconds: PolarQuant + QJL two-stage compression" />
-
 <TLDRCard>
 Google's TurboQuant 3-bit KV cache compression validates on GB10: 5.0x compression, cosine sim 0.9943, Needle-in-Haystack EXACT. But no speed gain yet (needs fused kernels), and Qwen3.5-35B's hybrid attention means only 25% of layers benefit — saving just 600 MB vs the paper's claimed 6x for dense models.
 </TLDRCard>
+
+<VideoEmbed src="/videos/turboquant-explainer.mp4" caption="TurboQuant in 30 seconds: PolarQuant + QJL two-stage compression" />
 
 ## Plain-Language Version: Compressing AI Memory Without Losing Quality
 

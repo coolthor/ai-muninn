@@ -17,12 +17,11 @@ faq:
     a: "--reasoning-parser openai_gptoss 把所有輸出放進 reasoning 欄位，讓 content 變成 null。標準 OpenAI 相容 client 只讀 content，所以什麼都收不到。除非你需要 reasoning channel 分離，否則移除 --reasoning-parser openai_gptoss。"
 ---
 
-
-<VideoEmbed src="/videos/gpt-oss-120b.mp4" />
-
 <TLDRCard>
 gpt-oss-120B（Microsoft，MXFP4）在 DGX Spark（GB10，SM121）上跑到 ~59 tok/s，接近 273 GB/s 頻寬上限。六個坑擋在路上，包括一個靜默無效的環境變數（`VLLM_NVFP4_GEMM_BACKEND` 沒用，正確的是 `VLLM_MXFP4_BACKEND=marlin`）和 `--enforce-eager` 讓速度砍半到 26 tok/s。附完整 serve script 和有順序的檢查清單。
 </TLDRCard>
+
+<VideoEmbed src="/videos/gpt-oss-120b.mp4" />
 
 ## 白話版：1200 億參數 AI，零 API 費用
 
