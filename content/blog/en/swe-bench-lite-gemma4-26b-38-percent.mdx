@@ -66,6 +66,8 @@ SWE-bench Lite leaderboard (snapshot 2026-04-16, [swebench.com](https://www.sweb
 
 Two observations. First: Moatless Tools uses Claude 3.5 Sonnet — a model roughly 10x larger and accessed via paid API — and beats us by exactly one solved instance (0.33%). Second: SWE-Fixer uses Qwen 2.5 72B — nearly 3x our parameter count — and lands at 24.67%. Scaffold matters.
 
+*Why Moatless + Claude 3.5 Sonnet as the primary comparison? It's the closest apples-to-apples on the Lite board: single model, general-purpose scaffold, no multi-agent pipeline, no retrieval augmentation. Qwen3.5-35B-A3B (recently added to SWE-rebench) and Qwen 3.6 are on the radar — running the same scaffold on a different model is the obvious next experiment and will appear in a follow-up post. The real thesis isn't "Gemma 4 beats X" — it's "this scaffold transfers across models."*
+
 ---
 
 ## What actually ran
@@ -258,7 +260,13 @@ The full configuration — YAML files, edit-tool source, vLLM serving command, a
 6. Pre-pull all 172 SWE-bench Lite Docker images before starting
 7. Run with `--workers 2`, `container_timeout=4h`, `pull_timeout=1800`
 
-**What's next:** We're running Gemma 4 E4B (4B, the smallest variant) on the same scaffold to see where the floor is. Same images, same config, same machine — just a smaller brain. Results will be appended here when available.
+**What's next:** This is the first data point in a scaffold engineering series, not the last. The scaffold — backticks + edit-tool v2 + budget prompt — is model-agnostic by design. The natural follow-ups:
+
+- **Gemma 4 E4B (4B)** is running on the same scaffold right now. Where's the floor for a 4B MoE? Results will be appended here.
+- **Qwen 3.6** and **Qwen3.5-35B-A3B** are the obvious next models to drop into the same scaffold. If the resolve rate transfers, the thesis holds: scaffold is the lever, model is the variable.
+- **Fault localization** — the scaffold currently lets the model explore blind. Adding automated traceback parsing before the model starts could cut 10-15 wasted exploration steps.
+
+The question isn't "how high can Gemma 4 score" — it's "how far can a well-designed scaffold carry any open-weight model."
 
 ---
 

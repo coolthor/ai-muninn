@@ -66,6 +66,8 @@ SWE-bench Lite 排行榜（2026-04-16 快照，[swebench.com](https://www.sweben
 
 看兩件事。第一：Moatless Tools 用的是 Claude 3.5 Sonnet——參數量大約是我們的 10 倍、而且要付 API 費——贏我們剛好一題（0.33%）。第二：SWE-Fixer 用 Qwen 2.5 72B——參數量是我們的 3 倍——只拿到 24.67%。Scaffold 比模型大小重要。
 
+*為什麼拿 Moatless + Claude 3.5 Sonnet 做主要對照？因為它是 Lite 榜上最接近我們設定的系統：單模型 + 通用 scaffold，沒有 multi-agent、沒有 retrieval augmentation。Qwen3.5-35B-A3B（SWE-rebench 最近才加入）和 Qwen 3.6 都在下一輪實驗清單上——用同一套 scaffold 換不同模型，正是我們想驗證的事。這篇的論點不是「Gemma 4 贏了誰」，是「這套 scaffold 能遷移到不同模型上」。*
+
 ---
 
 ## 配置：Gemma 4 26B FP8 + vLLM + 2 workers，19 小時跑完
@@ -258,7 +260,13 @@ Gemma 4 26B（38.67%）跟 SWE-Fixer 用 Qwen 72B（24.67%）差 14 個百分點
 6. 跑之前先 pre-pull 全部 172 個 SWE-bench Lite Docker image
 7. `--workers 2`，`container_timeout=4h`，`pull_timeout=1800`
 
-**接下來：** Gemma 4 E4B（4B，最小的版本）正在同 scaffold 上跑。看 4B 的天花板在哪。結果出來會更新這裡。
+**接下來：** 這是 scaffold engineering 系列的第一個數據點，不是最後一個。Backticks + edit-tool v2 + budget prompt 這套 scaffold 設計上就是模型無關的。接下來要驗證的事：
+
+- **Gemma 4 E4B（4B）**正在同 scaffold 上跑。4B MoE 的底線在哪？結果出來會更新這裡。
+- **Qwen 3.6** 和 **Qwen3.5-35B-A3B** 是下一輪要帶進同一套 scaffold 的模型。如果命中率能遷移，thesis 就成立：scaffold 是槓桿，模型是變數。
+- **Fault localization** — 目前 scaffold 讓模型自己探索。如果加入自動 traceback 解析、在模型起跑前就告訴它「bug 在哪個檔案」，能省掉 10-15 步的盲目探索。
+
+問題不是「Gemma 4 能跑多高」——是「一套好的 scaffold 能帶任何開源模型走多遠」。
 
 ---
 
