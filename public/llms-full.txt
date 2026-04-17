@@ -1,11 +1,222 @@
 # ai-muninn — Full Site Content
 # https://ai-muninn.com
 # Generated: 2026-04-17
-# Articles: 54
+# Articles: 55
 
 This file contains the full text of all articles on ai-muninn.com.
 It is intended for AI tools that need complete site context.
 For the article index only, see /llms.txt.
+
+---
+
+# [LLM 101] Why Run AI on Your Own Computer? It's Not a Cheaper ChatGPT — It's a Different Tool
+URL: https://ai-muninn.com/en/blog/llm-101-why-run-ai-locally
+Date: 2026-04-17
+Series: LLM 101 (Part 6)
+
+<VideoEmbed src="/videos/llm-101-why-run-locally.mp4" />
+
+
+Local AI isn't a cheaper ChatGPT — it's a fundamentally different tool. Cloud AI is the smartest option; local AI is the freest — no cost, no data leaks, no usage limits. A Mac Mini M4 running AI costs about $1.20/month in electricity, but the models it can run aren't as capable as ChatGPT. The point isn't to replace cloud AI — it's to handle what cloud AI can't: confidential documents, private codebases, bulk processing, and offline work. This article has a decision table for when to use which.
+
+
+## Plain-Language Version: You Don't Need a Subscription to Use AI
+
+You don't need to spend $20/month on ChatGPT Plus. Your computer — if it has enough memory — can run AI with free software.
+
+But here's the honest part: it won't be as smart as ChatGPT.
+
+The models your computer can run have roughly 7 to 35 billion "brain cells" (technically called parameters). ChatGPT's model has hundreds of billions. The intelligence gap is real.
+
+So why bother? Because local AI does different things. ChatGPT is your conversation partner — you ask, it answers. Local AI is more like a private document processor: it classifies your images, summarizes your PDFs, assists with your company's code — all for free, all without your data ever leaving your machine.
+
+This article is about knowing when to use which.
+
+---
+
+## Preface
+
+Cloud AI is like eating at a restaurant. The food is great, it's convenient, professional chefs handle everything. But you pay (starting at $20/month), the menu is someone else's decision (what you can and can't do is up to the platform), and your ingredients (conversation data) [default into the training set](/en/blog/ai-ask-right-what-ai-does-poorly).
+
+Local AI is like cooking at home. You control the ingredients, eat as much as you want for no extra charge, and nobody sees your recipes. But you have to do the cooking yourself — at minimum, you need to know how to turn on the stove.
+
+The previous article covered [how much text AI can read at once](/en/blog/llm-101-context-window). This one asks a more fundamental question: is it worth cooking at home?
+
+---
+
+## Local AI Isn't a Budget ChatGPT — It Does Completely Different Things
+
+When people first hear "run AI on your own computer," they think: "Great, I don't need to pay for ChatGPT anymore!"
+
+You can do that, but you'll be disappointed. The AI your computer produces is usually less capable than ChatGPT. Not a software problem — your machine simply can't fit models that large.
+
+ChatGPT's GPT-5 has hundreds of billions of parameters running on [OpenAI's specialized server clusters](https://openai.com/gpt-5). Your MacBook or Mac Mini can run models with 7 to 35 billion parameters (depending on your RAM — want to know how to calculate? See [Part 3's memory formula](/en/blog/llm-101-how-to-choose-a-model)).
+
+A 16GB machine running a 14-billion-parameter model handles everyday Q&A fine, but you wouldn't want it for complex analysis or long-form writing.
+
+**So why run local at all?** Because local AI can do four things that cloud AI either can't do or charges heavily for.
+
+---
+
+## Four Scenarios Where Only Local AI Makes Sense
+
+### Knowledge extraction: turning images and documents into structured data for free
+
+You have 200 reference images from a client and want to classify each one by style, color palette, and composition. On ChatGPT? Upload one at a time, wait for each response, manually copy results. Two hundred images will eat your entire day.
+
+On local AI? Write a simple batch command (or ask a developer colleague to help), and the AI processes all 200 automatically, outputting a spreadsheet. Time: press Enter, go make coffee. Cost: zero.
+
+Same logic applies to:
+- 100-page contract PDFs → automatically extract key clauses
+- A year of meeting notes → organize into a topic index
+- Bulk product photos → auto-generate descriptions
+
+The point isn't that local AI does this better than ChatGPT — for extraction tasks that don't require deep intelligence but need to run many times, it does well enough. And it's completely free with no usage limits.
+
+### Private company code: when leaking isn't an option
+
+If you're a developer, your company's codebase is a core asset. Pasting the entire repo into ChatGPT to ask "find the bug" works technically, but your code enters the training set (unless your company pays for an Enterprise plan).
+
+Local AI is the only option: install [Ollama](https://ollama.com) on your dev machine, pair it with a VS Code AI extension like [Continue](https://continue.dev), and you have a fully private code assistant. Your code never touches anyone else's server.
+
+A 14-billion-parameter model handles boilerplate code, test generation, and explaining legacy code just fine. Architecture decisions? Send those to the cloud (but don't paste the full codebase).
+
+### Offline and air-gapped environments
+
+Airplanes, factory intranets, hospital closed networks, military installations — places with no internet or policies forbidding external connections. Cloud AI is simply unavailable. Local AI is the only choice.
+
+### Running the same task a thousand times for free
+
+ChatGPT has usage limits. The free tier caps daily queries, Plus has its own ceiling, and exceeding it means waiting. If your job is "run the same template across a thousand documents" — say, sentiment analysis on a thousand customer emails — cloud plans aren't impossible, just constantly hitting rate limits.
+
+Local AI has no ceiling. Run as long as you want, as long as your computer is on.
+
+---
+
+## Honest Capability Comparison — What Local AI Can't Do Well
+
+No sugarcoating. Same month (April 2026), here's how they stack up:
+
+| Capability | Cloud (ChatGPT / Claude) | Local (16GB) | Local (32GB) |
+|---|---|---|---|
+| Everyday Q&A | Strong | Passable | OK |
+| Complex reasoning | Strong | Noticeably weaker | Decent |
+| Long-form writing | Strong | Barely | Decent |
+| Real-time web search | Yes (default on) | No | No |
+| Image understanding | Strong | Passable | OK |
+| Bulk batch processing | Limited / paid | Unlimited / free | Unlimited / free |
+| Privacy | Defaults to training | Fully private | Fully private |
+| Offline use | No | Yes | Yes |
+| Private code assistance | Requires Enterprise | Free | Free |
+
+**Simple rule: need smart → cloud. Need private, free, or unlimited → local.** It's not either/or — the smartest approach is mixing both.
+
+---
+
+## $1.20/month vs $20/month — But Cheaper Doesn't Mean Better
+
+Let's do the math.
+
+**Cloud subscription costs (April 2026):**
+- [ChatGPT Plus](https://chatgpt.com/pricing): $20/month
+- [Claude Pro](https://claude.com/pricing): $20/month
+- ChatGPT Pro: $200/month
+
+**Local electricity cost:**
+- A [Mac Mini M4](https://support.apple.com/en-us/103253) running AI averages about 15 watts (3-5 watts when idle)
+- Monthly consumption: 15W × 24h × 30 days = 10.8 kWh
+- At typical US residential rates (~$0.11/kWh): **$1.20/month**
+
+So running local AI costs roughly **one-sixteenth** of ChatGPT Plus.
+
+But this number is misleading on its own. The AI you get for $1.20 is not the same quality as the AI you get for $20. You saved money, but you got a different product.
+
+The right framing:
+- $1.20 local AI → use it for tasks that don't need peak intelligence but need privacy and volume
+- $20 ChatGPT Plus → use it for tasks that need the smartest possible answers
+- Mix both → what most people should actually do
+
+---
+
+## When to Use Cloud, When to Use Local
+
+| Task | Use | Why |
+|---|---|---|
+| Deep thinking question | Cloud | Model intelligence gap is too large |
+| Latest news / prices / info | Cloud | Local has no real-time search |
+| Long essay / polished presentation | Cloud | Quality gap is obvious |
+| Classify 200 images | Local | Free + unlimited |
+| Read company contracts, extract clauses | Local | Privacy — nothing leaves your machine |
+| Find bugs in company codebase | Local | Code can't go to someone else's server |
+| Airplane / no internet | Local | Only option |
+| Sentiment analysis on 1,000 emails | Local | No usage limits |
+| Brainstorming / chat / translation | Either | Even 16GB local handles these OK |
+
+**One line: confidential, bulk, or offline → local. Needs intelligence or latest info → cloud.**
+
+---
+
+## Five Minutes to Start: Install Ollama, Run Your First Local Model
+
+No programming required. No technical background needed.
+
+**Step 1: Install Ollama**
+
+Go to [ollama.com](https://ollama.com), download, install. Mac, Windows, and Linux are all supported.
+
+**Step 2: Run your first model**
+
+Open a terminal (Terminal app on Mac, PowerShell on Windows) and type:
+
+```
+ollama run gemma3:4b
+```
+
+Wait for the download (~3GB), then start chatting. This model has 4 billion parameters and runs on any modern computer.
+
+**Step 3: Try a bigger model**
+
+If your computer has 16GB of RAM:
+
+```
+ollama run qwen3.5:14b
+```
+
+14 billion parameters. Noticeably better answers, slightly slower.
+
+If you have 32GB:
+
+```
+ollama run gemma4:e2b
+```
+
+This is the fastest model in Google's [Gemma 4](https://ai.google.dev/gemma/docs) family — I measured 81 words per second on my MacBook Pro. Completely fluid for everyday use.
+
+Want to go deeper on Ollama vs vLLM? See [Part 1: Microwave vs Professional Oven](/en/blog/llm-101-ollama-vs-vllm). Want to pick a model based on your RAM? See [Part 3: How to Choose a Model](/en/blog/llm-101-how-to-choose-a-model).
+
+---
+
+## Try One Thing Today
+
+If your computer has 16GB of RAM or more:
+
+1. Spend two minutes installing [Ollama](https://ollama.com)
+2. Open a terminal and type `ollama run gemma3:4b`
+3. Ask it a question — any question
+
+You'll discover: AI can run on your own computer, no account, no payment, no internet.
+
+Then ask yourself: does your work have tasks that don't need peak intelligence but need to run many times, or can't leak outside your organization? That's where local AI actually belongs.
+
+---
+
+## The One-Liner
+
+**Local AI isn't a cheaper ChatGPT — it's a completely different tool. Cloud handles the smart stuff; local handles the private, bulk, and free stuff.**
+
+Next: how to use local AI as a knowledge extractor — turning scattered images, PDFs, and notes into structured knowledge, without spending a cent.
+
+*This is Part 6 of the "[LLM 101](/en/blog/llm-101-ollama-vs-vllm)" series. Previous: [Context Window — How Much Can AI Read at Once?](/en/blog/llm-101-context-window). Related: [How to Choose a Model](/en/blog/llm-101-how-to-choose-a-model), [What Is Quantization?](/en/blog/llm-101-what-is-quantization).*
 
 ---
 
@@ -62,6 +273,8 @@ SWE-bench Lite leaderboard (snapshot 2026-04-16, [swebench.com](https://www.sweb
 | — | SWE-Fixer | Qwen 2.5 72B | 24.67 |
 
 Two observations. First: Moatless Tools uses Claude 3.5 Sonnet — a model roughly 10x larger and accessed via paid API — and beats us by exactly one solved instance (0.33%). Second: SWE-Fixer uses Qwen 2.5 72B — nearly 3x our parameter count — and lands at 24.67%. Scaffold matters.
+
+*Why Moatless + Claude 3.5 Sonnet as the primary comparison? It's the closest apples-to-apples on the Lite board: single model, general-purpose scaffold, no multi-agent pipeline, no retrieval augmentation. Qwen3.5-35B-A3B (recently added to SWE-rebench) and Qwen 3.6 are on the radar — running the same scaffold on a different model is the obvious next experiment and will appear in a follow-up post. The real thesis isn't "Gemma 4 beats X" — it's "this scaffold transfers across models."*
 
 ---
 
@@ -255,7 +468,13 @@ The full configuration — YAML files, edit-tool source, vLLM serving command, a
 6. Pre-pull all 172 SWE-bench Lite Docker images before starting
 7. Run with `--workers 2`, `container_timeout=4h`, `pull_timeout=1800`
 
-**What's next:** We're running Gemma 4 E4B (4B, the smallest variant) on the same scaffold to see where the floor is. Same images, same config, same machine — just a smaller brain. Results will be appended here when available.
+**What's next:** This is the first data point in a scaffold engineering series, not the last. The scaffold — backticks + edit-tool v2 + budget prompt — is model-agnostic by design. The natural follow-ups:
+
+- **Gemma 4 E4B (4B)** is running on the same scaffold right now. Where's the floor for a 4B MoE? Results will be appended here.
+- **Qwen 3.6** and **Qwen3.5-35B-A3B** are the obvious next models to drop into the same scaffold. If the resolve rate transfers, the thesis holds: scaffold is the lever, model is the variable.
+- **Fault localization** — the scaffold currently lets the model explore blind. Adding automated traceback parsing before the model starts could cut 10-15 wasted exploration steps.
+
+The question isn't "how high can Gemma 4 score" — it's "how far can a well-designed scaffold carry any open-weight model."
 
 ---
 
@@ -268,11 +487,10 @@ URL: https://ai-muninn.com/en/blog/ai-ask-right-what-ai-does-poorly
 Date: 2026-04-16
 Series: Ask AI Right (Part 7)
 
-<VideoEmbed src="/videos/ai-ask-right-what-ai-does-poorly.mp4" />
-
-
 AI still stumbles in four predictable places in 2026: hallucinations (confidently making things up), stale knowledge (doesn't know what's recent), short memory (loses the thread on long chats), and privacy defaults (your chats train the model unless you opt out). In May 2025, Anthropic's own lawyer used Claude to format a legal citation and got caught filing a fabricated source. This guide shows you how to spot each landmine, plus a trust spectrum for when to believe an AI answer and when to verify.
 
+
+<VideoEmbed src="/videos/ai-ask-right-what-ai-does-poorly.mp4" />
 
 ## Plain-Language Version: Why Does AI Make Things Up?
 
@@ -828,11 +1046,10 @@ URL: https://ai-muninn.com/en/blog/ai-ask-right-follow-up-questions
 Date: 2026-04-14
 Series: Ask AI Right (Part 6)
 
-<VideoEmbed src="/videos/ai-ask-right-follow-up.mp4" />
-
-
 The first answer AI gives you is a rough draft. The quality lives in the follow-ups: add constraints, ask for comparisons, challenge the answer, and — most powerful of all — ask AI what information it needs from you. Two to four follow-up messages routinely turn a generic response into something genuinely useful.
 
+
+<VideoEmbed src="/videos/ai-ask-right-follow-up.mp4" />
 
 ## Plain-Language Version: Why the first answer is never the best one
 
@@ -1084,11 +1301,10 @@ URL: https://ai-muninn.com/en/blog/llm-101-context-window
 Date: 2026-04-14
 Series: LLM 101 (Part 5)
 
-<VideoEmbed src="/videos/llm-101-context-window.mp4" />
-
-
 A context window is **how much text an AI can see at once** — think of it as the size of its desk. In 2026, mainstream cloud models (GPT-5.4, Claude 4.6, Gemini 2.5 Pro) all have desks holding **~750K-787K words**. Meta's Llama 4 Scout goes to 7.5M words. When the desk is full, older messages **fall off** and the AI can't see them anymore. It's not forgetting — it literally can't read what's no longer on the desk. To work around this: start fresh conversations, break big tasks into pieces, and paste key context at the top.
 
+
+<VideoEmbed src="/videos/llm-101-context-window.mp4" />
 
 ## Plain-Language Version: Why AI loses track of your conversation
 
@@ -1293,11 +1509,10 @@ URL: https://ai-muninn.com/en/blog/ai-ask-right-does-it-exist
 Date: 2026-04-13
 Series: Ask AI Right (Part 5)
 
-<VideoEmbed src="/videos/ai-ask-right-does-it-exist.mp4" />
-
-
 Your first question to AI shouldn't be "help me do X." It should be **"does something that already does X exist?"** Three follow-ups: (1) list options, (2) compare top 3, (3) verify they're still alive. This 2-minute research habit saves hours of reinventing things that already exist.
 
+
+<VideoEmbed src="/videos/ai-ask-right-does-it-exist.mp4" />
 
 ## Plain-Language Version: Why most people skip the most important step
 
@@ -2356,11 +2571,10 @@ URL: https://ai-muninn.com/en/blog/dgx-spark-gemma4-complete-guide
 Date: 2026-04-13
 Series: DGX Spark (Part 14)
 
-<VideoEmbed src="/videos/gemma4-4-machines-4-models.mp4" />
-
-
 Complete benchmark of all four Gemma 4 variants across three machines. **26B MoE NVFP4 on DGX Spark: 52 tok/s** is the best bang for buck. 31B Dense is only 7 tok/s — skip it. MacBook Pro 32GB maxes out at 26B MoE (47 tok/s). RTX 5090 is the only hardware where 31B Dense is the right pick (62 tok/s — fast enough to keep full intelligence).
 
+
+<VideoEmbed src="/videos/gemma4-4-machines-4-models.mp4" />
 
 ## Plain-Language Version: Four AI Models, One Table
 
@@ -2486,11 +2700,10 @@ URL: https://ai-muninn.com/en/blog/swe-bench-local-models-framework-matters
 Date: 2026-04-13
 Series: DGX Spark (Part 15)
 
-<VideoEmbed src="/videos/swe-bench-local-models-framework-matters.mp4" />
-
-
 **Feasibility test, not a full benchmark.** Gemma 4 26B went from 40+ tool calling errors on OpenHands to fixing a test bug in 9 steps on SWE-agent — same model, same GX10 hardware. The pipeline works; a full SWE-Bench Lite run (300 tasks) is next.
 
+
+<VideoEmbed src="/videos/swe-bench-local-models-framework-matters.mp4" />
 
 ## Plain-Language Version: Can a desktop AI fix real bugs?
 
@@ -2698,11 +2911,10 @@ URL: https://ai-muninn.com/en/blog/ai-ask-right-why-ai-feels-useless
 Date: 2026-04-11
 Series: Ask AI Right (Part 4)
 
-<VideoEmbed src="/videos/ai-ask-right-why-ai-feels-useless.mp4" />
-
-
 If you think AI is useless, you're probably using it as an **answer machine** — one question, one final answer, disappointed. The people getting real value use it as a **collaboration tool** — describe the goal, ask for suggested approaches, solve the hard parts together in small steps. Same AI. Completely different results.
 
+
+<VideoEmbed src="/videos/ai-ask-right-why-ai-feels-useless.mp4" />
 
 ## Plain-Language Version: Why the same AI feels magical to some people and useless to others
 
@@ -2876,11 +3088,10 @@ URL: https://ai-muninn.com/en/blog/ai-ask-right-find-your-needs
 Date: 2026-04-10
 Series: Ask AI Right (Part 3)
 
-<VideoEmbed src="/videos/ai-ask-right-find-needs.mp4" />
-
-
 Most people don't lack the ability to use AI — they **don't know which parts of their work can be handed off to AI**. The method is simple: describe your daily workflow to AI and let it find the repetitive steps. According to an [MIT 2023 study](https://economics.mit.edu/sites/default/files/inline-files/Noy_Zhang_1.pdf), workers using AI saw an average **37% productivity increase**.
 
+
+<VideoEmbed src="/videos/ai-ask-right-find-needs.mp4" />
 
 ## Plain-Language Version: Why you think AI isn't relevant to you
 
@@ -3013,11 +3224,10 @@ URL: https://ai-muninn.com/en/blog/llm-101-how-to-choose-a-model
 Date: 2026-04-10
 Series: LLM 101 (Part 3)
 
-<VideoEmbed src="/videos/llm-101-choose-model.mp4" />
-
-
 Choosing a model is like buying a car: check your **parking space** (memory) first, then decide **sedan or truck** (model size), then pick a **brand** (Gemma, Llama, Qwen). One formula: **parameters (B) × 0.6 ≈ required GB of memory**. 8 GB RAM → 7B, 16 GB → 14B, 32 GB → 30B.
 
+
+<VideoEmbed src="/videos/llm-101-choose-model.mp4" />
 
 ## Plain-Language Version: How to pick the right AI model from hundreds of options
 
@@ -3248,11 +3458,10 @@ URL: https://ai-muninn.com/en/blog/llm-101-what-is-quantization
 Date: 2026-04-10
 Series: LLM 101 (Part 4)
 
-<VideoEmbed src="/videos/llm-101-what-is-quantization.mp4" />
-
-
 Quantization compresses AI models the way MP3 compresses music. A 14B model in **Q4_K_M is 75% smaller than the original FP16** (8.4 GB vs 28 GB) with **less than 2% quality loss**. For daily use, pick **Q4_K_M**. If memory allows, go **Q5_K_M** or **Q6_K**. Skip Q2 and Q3 unless you really must.
 
+
+<VideoEmbed src="/videos/llm-101-what-is-quantization.mp4" />
 
 ## Plain-Language Version: What those cryptic model names actually mean
 
@@ -3452,11 +3661,10 @@ URL: https://ai-muninn.com/en/blog/ai-ask-right-first-message
 Date: 2026-04-09
 Series: Ask AI Right (Part 2)
 
-<VideoEmbed src="/videos/ai-ask-right-first-message.mp4" />
-
-
 AI isn't Google — you don't need keywords, **just talk naturally**. Describing your situation works better than giving commands. Answer not right? Just say "too long," "explain differently," or "are you sure?" — AI adjusts instantly.
 
+
+<VideoEmbed src="/videos/ai-ask-right-first-message.mp4" />
 
 ## Plain-Language Version: What does "talking to AI" mean?
 
@@ -3625,11 +3833,10 @@ URL: https://ai-muninn.com/en/blog/ai-ask-right-which-ai-to-use-2026
 Date: 2026-04-09
 Series: Ask AI Right (Part 1)
 
-<VideoEmbed src="/videos/ai-ask-right-which-ai.mp4" />
-
-
 The three AI assistants that matter in 2026: **ChatGPT** (most popular), **Claude** (best at writing and analysis), and **Gemini** (best Google integration). All three are free to start. Not sure which to pick? Try all three — whichever feels most natural is your answer.
 
+
+<VideoEmbed src="/videos/ai-ask-right-which-ai.mp4" />
 
 ## Plain-Language Version: What are AI assistants?
 
@@ -3801,11 +4008,10 @@ URL: https://ai-muninn.com/en/blog/dgx-spark-gemma4-31b-rescue-mbp-32gb
 Date: 2026-04-08
 Series: DGX Spark (Part 13)
 
-<VideoEmbed src="/videos/gemma4-31b-rescue-mbp.mp4" />
-
-
 Gemma 4 31B on a 32GB MacBook Pro: Ollama defaults to **1.5 tok/s** (swap), but reducing context to 2048 gets **9 tok/s**, and oMLX gets **12.8 tok/s** — an 8.5x recovery. The real culprit isn't model size, it's KV cache allocation.
 
+
+<VideoEmbed src="/videos/gemma4-31b-rescue-mbp.mp4" />
 
 ## Plain-Language Version: Why a Big AI Model Can Destroy Your Laptop
 
@@ -4090,11 +4296,10 @@ URL: https://ai-muninn.com/en/blog/dgx-spark-gemma4-4-machines-4-models-bandwidt
 Date: 2026-04-08
 Series: DGX Spark (Part 12)
 
-<VideoEmbed src="/videos/gemma4-4-machines-4-models.mp4" />
-
-
 Gemma 4 tested across RTX 5090, M1 Max, DGX Spark, and M4 with Ollama. **E2B hits 310 tok/s on 5090.** MBP runs 31B at 1.5 tok/s because swap kills everything. The rule: if the model doesn't fit in memory, bandwidth doesn't matter.
 
+
+<VideoEmbed src="/videos/gemma4-4-machines-4-models.mp4" />
 
 ## Plain-Language Version: Why Your Hardware Matters More Than the Model
 
@@ -4306,11 +4511,10 @@ URL: https://ai-muninn.com/en/blog/llm-101-dense-moe-ple-ssm-architectures
 Date: 2026-04-08
 Series: LLM 101 (Part 2)
 
-<VideoEmbed src="/videos/llm-101-model-architectures.mp4" />
-
-
 Four main AI model architectures: **Dense** (everyone works, stable but slow), **MoE** (expert rotation, big but fast), **PLE** (dictionary on every floor, efficient lookups), **SSM** (speed reader, no slowdown on long conversations). Knowing the architecture tells you more than the parameter count.
 
+
+<VideoEmbed src="/videos/llm-101-model-architectures.mp4" />
 
 ## Plain-Language Version: Why Do AI Models Have Different "Body Types"?
 
@@ -4531,11 +4735,10 @@ URL: https://ai-muninn.com/en/blog/dgx-spark-gemma4-e2b-vs-e4b-ollama-3-machines
 Date: 2026-04-07
 Series: DGX Spark (Part 11)
 
-<VideoEmbed src="/videos/gemma4-e2b-vs-e4b-3-machines.mp4" />
-
-
 Gemma 4 E2B runs at **81 tok/s** on M1 Max, **53 tok/s** on GB10, and **42 tok/s** on M4 — consistently 44-82% faster than E4B across all three machines. The speed difference comes down to one thing: memory bandwidth.
 
+
+<VideoEmbed src="/videos/gemma4-e2b-vs-e4b-3-machines.mp4" />
 
 ## Plain-Language Version: Gemma 4 E2B vs E4B
 
@@ -4723,11 +4926,10 @@ URL: https://ai-muninn.com/en/blog/dgx-spark-gemma4-e4b-nvfp4-50-toks
 Date: 2026-04-07
 Series: DGX Spark (Part 10)
 
-<VideoEmbed src="/videos/gemma4-e4b-nvfp4-quantization.mp4" />
-
-
 Gemma 4 E4B NVFP4A16 runs at **49.9 tok/s** on DGX Spark — 2.6x faster than BF16, using only 9.8 GB of GPU memory. First NVFP4 checkpoint for E4B, now on [HuggingFace](https://huggingface.co/coolthor/Gemma-4-E4B-it-NVFP4A16).
 
+
+<VideoEmbed src="/videos/gemma4-e4b-nvfp4-quantization.mp4" />
 
 ## Plain-Language Version: Gemma 4 E4B Quantization
 
@@ -5035,11 +5237,10 @@ URL: https://ai-muninn.com/en/blog/llm-101-ollama-vs-vllm
 Date: 2026-04-07
 Series: LLM 101 (Part 1)
 
-<VideoEmbed src="/videos/llm-101-ollama-vs-vllm.mp4" />
-
-
 Ollama is a **microwave** — one command, three minutes, you're chatting with AI. vLLM is a **professional oven** — harder to set up, but 30% faster and handles multiple users at once. Start with Ollama. Add vLLM when you need more.
 
+
+<VideoEmbed src="/videos/llm-101-ollama-vs-vllm.mp4" />
 
 ## Plain-Language Version: What Does "Running AI on Your Own Computer" Mean?
 
@@ -5224,11 +5425,10 @@ URL: https://ai-muninn.com/en/blog/dgx-spark-gemma4-26b-nvfp4-52-toks
 Date: 2026-04-05
 Series: DGX Spark (Part 7)
 
-<VideoEmbed src="/videos/gemma4-nvfp4-benchmark.mp4" />
-
-
 Gemma 4 26B-A4B NVFP4 runs at **52 tok/s** on DGX Spark (GB10) via vLLM 0.19, using only 16.5 GB of model memory and leaving 82 GB for KV cache. The 31B dense variant is 7.5x slower — don't bother.
 
+
+<VideoEmbed src="/videos/gemma4-nvfp4-benchmark.mp4" />
 
 ## Plain-Language Version: What Is Gemma 4? What Does 52 tok/s Mean?
 
@@ -5416,11 +5616,10 @@ URL: https://ai-muninn.com/en/blog/dgx-spark-gemma4-31b-dense-7-toks
 Date: 2026-04-05
 Series: DGX Spark (Part 9)
 
-<VideoEmbed src="/videos/gemma4-31b-bandwidth-wall.mp4" />
-
-
 Gemma 4 31B dense NVFP4 runs at **7.0 tok/s** on DGX Spark — exactly matching community benchmarks. The 26B-A4B MoE does 52 tok/s on the same hardware. Dense models hit a bandwidth wall at 273 GB/s that no quantization can fix.
 
+
+<VideoEmbed src="/videos/gemma4-31b-bandwidth-wall.mp4" />
 
 ## Plain-Language Version: Why Bigger Models Aren't Always Better
 
@@ -5568,11 +5767,10 @@ URL: https://ai-muninn.com/en/blog/dgx-spark-vllm-vs-ollama-same-model
 Date: 2026-04-05
 Series: DGX Spark (Part 8)
 
-<VideoEmbed src="/videos/vllm-vs-ollama-gb10.mp4" />
-
-
 vLLM serves Gemma 4 26B-A4B at **52 tok/s** on GB10 while Ollama tops at **40 tok/s** with the same model — a 30% gap from Marlin kernels, CUDA graphs, and torch.compile fusion. Ollama has a silent CPU/GPU split trap that can halve speed to 16 tok/s.
 
+
+<VideoEmbed src="/videos/vllm-vs-ollama-gb10.mp4" />
 
 ## Plain-Language Version: vLLM vs Ollama
 
@@ -5742,17 +5940,10 @@ URL: https://ai-muninn.com/en/blog/dgx-spark-30w-power-safety-mode
 Date: 2026-04-02
 Series: DGX Spark (Part 6)
 
-<VideoEmbed src="/videos/power-diagnostic.mp4" />
-
-A power supply problem that looks like a software problem is the worst kind. You spend a day tuning vLLM flags, switching quantization formats, reading kernel logs — and the whole time the machine was just starving for power.
-
-> **2026-04-13 update:** John Carmack [publicly criticized DGX Spark](https://www.tomshardware.com/tech-industry/semiconductors/users-question-dgx-spark-performance) for failing to meet advertised specs, overheating, and capping at 100W. The [NVIDIA developer forums](https://forums.developer.nvidia.com/c/accelerated-computing/dgx-spark-gb10/719) are now flooded with crash and shutdown reports. If you arrived here because of that news, this article helps you **distinguish three different symptoms in 30 seconds**: 30W hardware defect (needs RMA), 100W thermal throttling (environmental), and 5W driver bug (fixable).
-
-This picks up from the series so far ([Part 5](/en/blog/dgx-spark-fp8-kvcache-repetition)). This one is not about model behavior or CUDA errors. It is about the hardware beneath all of that.
-
-
 Some GX10 units ship with a PD controller defect that permanently caps total system power at ~30W regardless of workload. Firmware reflash does not fix it. NVIDIA recommends RMA. Run one command to find out if you are affected.
 
+
+<VideoEmbed src="/videos/power-diagnostic.mp4" />
 
 ## Plain-Language Version: When Your AI Machine Is Secretly Running on Fumes
 
@@ -5904,11 +6095,10 @@ URL: https://ai-muninn.com/en/blog/turboquant-kv-cache-benchmark-gx10
 Date: 2026-03-30
 Series: DGX Spark (Part 3)
 
-<VideoEmbed src="/videos/turboquant-explainer.mp4" caption="TurboQuant in 30 seconds: PolarQuant + QJL two-stage compression" />
-
-
 Google's TurboQuant 3-bit KV cache compression validates on GB10: 5.0x compression, cosine sim 0.9943, Needle-in-Haystack EXACT. But no speed gain yet (needs fused kernels), and Qwen3.5-35B's hybrid attention means only 25% of layers benefit — saving just 600 MB vs the paper's claimed 6x for dense models.
 
+
+<VideoEmbed src="/videos/turboquant-explainer.mp4" caption="TurboQuant in 30 seconds: PolarQuant + QJL two-stage compression" />
 
 ## Plain-Language Version: Compressing AI Memory Without Losing Quality
 
@@ -6120,14 +6310,10 @@ URL: https://ai-muninn.com/en/blog/nemoclaw-local-inference-ollama
 Date: 2026-03-24
 Series: NemoClaw (Part 3)
 
-<VideoEmbed src="/videos/nemoclaw-local.mp4" />
-Running an agent through cloud inference is convenient until the 30-day free tier runs out. Then it's a decision: pay for NVIDIA's API, or point the stack at the hardware already sitting on the desk.
-
-This continues from [Part 2](/en/blog/nemoclaw-install-gx10-from-scratch), which covered getting NemoClaw installed and the `my-assistant` sandbox into `Phase: Ready`. At that point, the agent was routing all inference to `integrate.api.nvidia.com` via the `nvidia/nemotron-3-super-120b-a12b` model. This article covers replacing that with a local [Ollama](https://ollama.com) endpoint running on the same GX10.
-
-
 NemoClaw's inference backend is OpenAI-compatible and configurable per-sandbox via `~/.nemoclaw/sandboxes/<name>/config.yaml`. Pointing it at a local Ollama endpoint (`http://localhost:11434/v1`) requires three changes: endpoint URL, model name, and API key (set to `"ollama"`). OpenShell's filesystem and tool policy enforcement is independent of the inference backend — it applies regardless of which model is running.
 
+
+<VideoEmbed src="/videos/nemoclaw-local.mp4" />
 
 ## Plain-Language Version: Why Run AI on Your Own Computer?
 
@@ -6295,14 +6481,10 @@ URL: https://ai-muninn.com/en/blog/openclaw-chatgpt-oauth-gpt54-no-api-key
 Date: 2026-03-24
 Series: OpenClaw (Part 11)
 
-<VideoEmbed src="/videos/chatgpt-oauth.mp4" />
-A lock that opens with a face instead of a key still opens the door. openclaw's new `openai-codex` provider does exactly that — your ChatGPT Plus subscription becomes the credential, and your agent gets GPT-5.4 without a separate API billing account.
-
-This is Part 11 of the [OpenClaw series](/en/blog/openclaw-dgx-spark-local-ai-agent). The setup covered here takes about five minutes, but there are three non-obvious steps that aren't in the release notes.
-
-
 `openclaw models auth login --provider openai-codex` adds GPT-5.4 (1,050,000-token context) to your openclaw agent using a ChatGPT Plus account. No OpenAI API key required. Three gotchas: needs an interactive terminal, gateway must restart after auth, and the default model must be set separately.
 
+
+<VideoEmbed src="/videos/chatgpt-oauth.mp4" />
 
 ## Plain-Language Version: Your ChatGPT Plus Subscription Can Do More Than You Think
 
@@ -6416,21 +6598,10 @@ URL: https://ai-muninn.com/en/blog/nemoclaw-install-gx10-from-scratch
 Date: 2026-03-23
 Series: NemoClaw (Part 2)
 
-<VideoEmbed src="/videos/nemoclaw-install.mp4" />
-Installing software from a curl-pipe-bash script on unusual hardware is a trust exercise. You run the script, something fails loud, and then you spend thirty minutes figuring out whether anything actually installed.
-
-This picks up where [Part 1](/en/blog/nemoclaw-what-it-is-why-it-exists) left off. That article covered what NemoClaw is and why it exists. This one is the install log from a GX10 (ASUS GX10 Ascent, GB10 chip, SM121 — same architecture as DGX Spark) to a running `my-assistant` sandbox.
-
-Environment going in:
-- Ubuntu 24.04, kernel `6.17.0-1008-nvidia`
-- aarch64 (ARM)
-- Node.js v18.19.1
-- Docker 28.5.1, user already in `docker` group
-- No OpenShell, no NemoClaw
-
-
 NemoClaw on GX10 (GB10/SM121) needs four fixes that aren't in the official docs: upgrade Node.js to v22, manually run `sudo npm link` after the installer, install OpenShell from the tar.gz release (not the binary URL in the docs — that 404s), and add `cgroupns=host` to Docker daemon.json before onboard. After those, `nemoclaw setup-spark` and `NEMOCLAW_NON_INTERACTIVE=1 nemoclaw onboard` complete cleanly.
 
+
+<VideoEmbed src="/videos/nemoclaw-install.mp4" />
 
 ## Plain-Language Version: Installing AI Agent Software on Unusual Hardware
 
@@ -6671,12 +6842,10 @@ URL: https://ai-muninn.com/en/blog/nemoclaw-what-it-is-why-it-exists
 Date: 2026-03-23
 Series: NemoClaw (Part 1)
 
-<VideoEmbed src="/videos/nemoclaw-arch.mp4" />
-OpenClaw has been running as my personal AI agent on the local Mac for a while. Then at GTC 2026, NVIDIA announced NemoClaw — and at first it looked like the same thing with a different name. It isn't.
-
-
 NemoClaw (v0.1.0, GTC 2026) bundles OpenClaw agent core + OpenShell security sandbox + NVIDIA Agent Toolkit into a single installable framework. The key addition is OpenShell: a policy enforcement layer that runs between the user and the agent, sandboxing file access and restricting tool execution. Without it, OpenClaw is a capable but permissive agent runtime. With it, OpenClaw becomes deployable in contexts where you can't trust the agent to self-limit.
 
+
+<VideoEmbed src="/videos/nemoclaw-arch.mp4" />
 
 ## Plain-Language Version: What Does NemoClaw Actually Do?
 
@@ -6962,11 +7131,10 @@ URL: https://ai-muninn.com/en/blog/dgx-spark-fp8-kvcache-repetition
 Date: 2026-03-21
 Series: DGX Spark (Part 5)
 
-<VideoEmbed src="/videos/fp8-kvcache-bug.mp4" />
-
-
 Adding `--kv-cache-dtype fp8` to vLLM on GB10 without calibration data causes outputs to collapse into repetition loops after ~500 tokens. The startup log warns `q_scale=1.0` — meaning FP8 quantization is running uncalibrated. Fix: remove the flag and use BF16 KV cache. On GB10 with 128GB unified memory, VRAM is not the constraint, so FP8 KV cache is unnecessary.
 
+
+<VideoEmbed src="/videos/fp8-kvcache-bug.mp4" />
 
 ## Plain-Language Version: Why AI Output Breaks After 500 Words
 
@@ -7441,11 +7609,10 @@ URL: https://ai-muninn.com/en/blog/openclaw-telegram-ipv6-tailscale-silent-bot
 Date: 2026-03-19
 Series: OpenClaw (Part 8)
 
-<VideoEmbed src="/videos/telegram-routing.mp4" />
-
-
 An openclaw Telegram bot went silent while looking perfectly healthy: process running, token valid, messages received, no errors. Root cause: Tailscale injects IPv6 routes via utun interfaces that look valid but have no internet reachability. Node.js undici (Happy Eyeballs, RFC 8305) tries IPv6 first, hits EHOSTUNREACH, and fails without falling back to IPv4. Fix: set `OPENCLAW_TELEGRAM_DISABLE_AUTO_SELECT_FAMILY=1` in the launchd plist environment.
 
+
+<VideoEmbed src="/videos/telegram-routing.mp4" />
 
 ## Plain-Language Version: When "Running" Doesn't Mean "Working"
 
@@ -7835,11 +8002,10 @@ URL: https://ai-muninn.com/en/blog/part2-gpt-oss-120b-serve-script
 Date: 2026-03-19
 Series: gpt-oss-120B on DGX Spark (Part 1)
 
-<VideoEmbed src="/videos/gpt-oss-120b.mp4" />
-
-
 gpt-oss-120B (Microsoft, MXFP4) hits ~59 tok/s on DGX Spark (GB10, SM121) — near the 273 GB/s bandwidth ceiling. Six bugs stood in the way, including a silent env var (`VLLM_NVFP4_GEMM_BACKEND` does nothing; correct var is `VLLM_MXFP4_BACKEND=marlin`) and `--enforce-eager` halving speed to 26 tok/s. Working serve script and ordered checklist included.
 
+
+<VideoEmbed src="/videos/gpt-oss-120b.mp4" />
 
 ## Plain-Language Version: A 120-Billion-Parameter AI for Zero API Cost
 
@@ -8133,11 +8299,10 @@ URL: https://ai-muninn.com/en/blog/part2-qwen-122b-14-toks-gdn-kernel-gap
 Date: 2026-03-19
 Series: Qwen3.5-122B on DGX Spark (Part 1)
 
-<VideoEmbed src="/videos/qwen-122b-speed.mp4" />
-
-
 Qwen3.5-122B boots correctly on DGX Spark (GB10/SM121) after the Part 1 SM121 fixes — output is coherent, model works. Speed stabilizes at 14 tok/s regardless of tuning. Root cause: Marlin has no specialized kernel for GDN (Gated Delta Network) SSM layers, so they fall back to a generic compute path. No flag fixes this. Bandwidth-only ceiling for a 10B-active MoE on GB10 is ~55 tok/s; observed is 14 — the gap is compute, not bandwidth. Use gpt-oss-120B (~59 tok/s) for interactive workloads until Marlin ships GDN support.
 
+
+<VideoEmbed src="/videos/qwen-122b-speed.mp4" />
 
 ## Plain-Language Version: A 122-Billion-Parameter AI Model — Why Only 14 tok/s?
 
@@ -8345,11 +8510,10 @@ URL: https://ai-muninn.com/en/blog/part1-why-your-dgx-spark-says-exclamation-mar
 Date: 2026-03-17
 Series: DGX Spark (Part 4)
 
-<VideoEmbed src="/videos/sm121-bug.mp4" />
-
-
 DGX Spark (GB10, SM121) silently produces `!!!!!` garbage output with NVFP4 models because CUTLASS FP4 kernels target SM120 (GB200), not SM121. Four independent bugs must be fixed: PTX instruction mismatch, Marlin thread race, missing SupportsQuant for GDN layers, and false-positive CUTLASS FP4 device selection. After all fixes, Qwen3.5-122B runs at ~15 tok/s via Marlin W4A16.
 
+
+<VideoEmbed src="/videos/sm121-bug.mp4" />
 
 ## Plain-Language Version: When Your AI Hardware Works But Doesn't
 
@@ -8834,11 +8998,10 @@ URL: https://ai-muninn.com/en/blog/dgx-spark-nemotron-120b-vllm
 Date: 2026-03-13
 Series: DGX Spark (Part 3)
 
-<VideoEmbed src="/videos/nemotron-120b-debug.mp4" />
-
-
 Nemotron-3-Super-120B-NVFP4 runs at 13-16 tok/s on a single GB10 (DGX Spark, SM121) using ~108 GB of the 128 GB unified memory. Requires stable vLLM image (v0.17.1-cu130, not nightly), `--moe-backend marlin` CLI flag, and three NVFP4-specific env vars. Five SM121-specific pitfalls documented with a working docker command.
 
+
+<VideoEmbed src="/videos/nemotron-120b-debug.mp4" />
 
 ## Plain-Language Version: Running a 120-Billion-Parameter AI on a Desktop
 
@@ -9393,11 +9556,10 @@ URL: https://ai-muninn.com/en/blog/dgx-spark-vllm-qwen35-setup
 Date: 2026-03-05
 Series: DGX Spark (Part 2)
 
-<VideoEmbed src="/videos/vllm-qwen35.mp4" />
-
-
 Migrating Qwen3.5-35B from Ollama to vLLM on DGX Spark (GB10) dropped TTFT from 2-4s to 0.12s via prefix caching, while maintaining 47 tok/s decode speed. Critical gotcha: `--enable-chunked-prefill` causes a 9x throughput regression (50 to 5.7 tok/s) on SSM+MoE hybrid models.
 
+
+<VideoEmbed src="/videos/vllm-qwen35.mp4" />
 
 ## Plain-Language Version: Why Switching AI Engines Matters
 
@@ -10830,11 +10992,10 @@ URL: https://ai-muninn.com/en/blog/dgx-spark-ollama-benchmark-8-models
 Date: 2026-02-19
 Series: DGX Spark (Part 1)
 
-<VideoEmbed src="/videos/ollama-benchmark.mp4" />
-
-
 Benchmarked 8 LLMs on DGX Spark (GB10, 128 GB) across 7 task categories. Best agent stack: qwen3-coder-next q4_K_M at 47 tok/s (primary) + qwen3-vl:30b at 19 GB (vision), using only 71 GB combined. gpt-oss 120B failed tool calling with invalid JSON despite being 3x larger. q4 vs q8 quality difference was nearly invisible.
 
+
+<VideoEmbed src="/videos/ollama-benchmark.mp4" />
 
 ## Plain-Language Version: Choosing the Right AI Brain for Your Desktop
 

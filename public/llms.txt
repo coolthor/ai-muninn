@@ -203,6 +203,10 @@ experimentation with real hardware and production systems.
   https://ai-muninn.com/en/blog/llm-101-context-window
   AI's desk size. Why conversations go stale, lost-in-the-middle problem, local vs cloud trade-offs.
 
+- [Part 6] Why Run AI on Your Own Computer? Not a Cheaper ChatGPT — A Different Tool
+  https://ai-muninn.com/en/blog/llm-101-why-run-ai-locally
+  Local AI = knowledge extractor + private code assistant + offline tool. Decision table for cloud vs local. Mac Mini M4 power cost ~$1.20/mo.
+
 ### Series: Ask AI Right (Non-technical AI usage guide)
 
 - [Part 1] Which AI Should You Use in 2026?

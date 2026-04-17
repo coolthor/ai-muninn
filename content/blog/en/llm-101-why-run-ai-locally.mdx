@@ -1,0 +1,226 @@
+---
+title: "[LLM 101] Why Run AI on Your Own Computer? It's Not a Cheaper ChatGPT — It's a Different Tool"
+description: "Local AI isn't a budget ChatGPT. It's a knowledge extractor, private code assistant, and offline tool. Monthly power cost ~$1.20 vs ChatGPT Plus $20. This guide has a decision table for when to use which."
+date: "2026-04-17"
+updatedAt: "2026-04-17"
+tags: ["LLM", "Local AI", "Ollama", "Beginner", "Privacy", "Cost"]
+series: "LLM 101"
+part: 6
+faq:
+  - q: "What's the difference between local AI and ChatGPT?"
+    a: "ChatGPT is a cloud service — you ask questions, OpenAI's servers compute the answer, starting at $20/month. Local AI runs on your own computer — free, offline-capable, and your data never leaves. But it's usually less capable than ChatGPT. They're not substitutes; they're complementary — like a restaurant vs cooking at home."
+  - q: "How much does it cost to run AI on my computer?"
+    a: "The software is free (Ollama is open-source). You only pay for electricity. A Mac Mini M4 running AI around the clock costs roughly $1.20/month in power — less than a cup of coffee. But you need at least 16GB of RAM, which is the hardware threshold."
+  - q: "Can a Mac Mini or MacBook run AI well enough?"
+    a: "Depends on RAM. 16GB runs 7-14 billion parameter models (compressed) — fine for everyday Q&A and document processing, noticeably weaker than ChatGPT on complex reasoning. 32GB runs up to 35 billion — solid for most tasks. 64GB+ approaches cloud quality."
+  - q: "Is local AI smarter than ChatGPT?"
+    a: "No. ChatGPT and Claude use models with hundreds of billions of parameters running on specialized servers. Your computer can typically run 7-35 billion. The gap is real. Local AI wins on privacy, cost, and unlimited usage — not on intelligence."
+  - q: "Can a company replace ChatGPT with local AI?"
+    a: "Not entirely, but certain tasks only local AI can handle — processing confidential documents, reading internal codebases, working in air-gapped networks. Best approach: use local for sensitive work, cloud for everything else."
+  - q: "What is Ollama?"
+    a: "Ollama is free open-source software that turns your Mac, Windows, or Linux computer into an AI server. Install with one command, download models with one command. No programming required. Once installed, you can chat with AI in the terminal or through any compatible app."
+---
+
+<VideoEmbed src="/videos/llm-101-why-run-locally.mp4" />
+
+<TLDRCard>
+Local AI isn't a cheaper ChatGPT — it's a fundamentally different tool. Cloud AI is the smartest option; local AI is the freest — no cost, no data leaks, no usage limits. A Mac Mini M4 running AI costs about $1.20/month in electricity, but the models it can run aren't as capable as ChatGPT. The point isn't to replace cloud AI — it's to handle what cloud AI can't: confidential documents, private codebases, bulk processing, and offline work. This article has a decision table for when to use which.
+</TLDRCard>
+
+## Plain-Language Version: You Don't Need a Subscription to Use AI
+
+You don't need to spend $20/month on ChatGPT Plus. Your computer — if it has enough memory — can run AI with free software.
+
+But here's the honest part: it won't be as smart as ChatGPT.
+
+The models your computer can run have roughly 7 to 35 billion "brain cells" (technically called parameters). ChatGPT's model has hundreds of billions. The intelligence gap is real.
+
+So why bother? Because local AI does different things. ChatGPT is your conversation partner — you ask, it answers. Local AI is more like a private document processor: it classifies your images, summarizes your PDFs, assists with your company's code — all for free, all without your data ever leaving your machine.
+
+This article is about knowing when to use which.
+
+---
+
+## Preface
+
+Cloud AI is like eating at a restaurant. The food is great, it's convenient, professional chefs handle everything. But you pay (starting at $20/month), the menu is someone else's decision (what you can and can't do is up to the platform), and your ingredients (conversation data) [default into the training set](/en/blog/ai-ask-right-what-ai-does-poorly).
+
+Local AI is like cooking at home. You control the ingredients, eat as much as you want for no extra charge, and nobody sees your recipes. But you have to do the cooking yourself — at minimum, you need to know how to turn on the stove.
+
+The previous article covered [how much text AI can read at once](/en/blog/llm-101-context-window). This one asks a more fundamental question: is it worth cooking at home?
+
+---
+
+## Local AI Isn't a Budget ChatGPT — It Does Completely Different Things
+
+When people first hear "run AI on your own computer," they think: "Great, I don't need to pay for ChatGPT anymore!"
+
+You can do that, but you'll be disappointed. The AI your computer produces is usually less capable than ChatGPT. Not a software problem — your machine simply can't fit models that large.
+
+ChatGPT's GPT-5 has hundreds of billions of parameters running on [OpenAI's specialized server clusters](https://openai.com/gpt-5). Your MacBook or Mac Mini can run models with 7 to 35 billion parameters (depending on your RAM — want to know how to calculate? See [Part 3's memory formula](/en/blog/llm-101-how-to-choose-a-model)).
+
+A 16GB machine running a 14-billion-parameter model handles everyday Q&A fine, but you wouldn't want it for complex analysis or long-form writing.
+
+**So why run local at all?** Because local AI can do four things that cloud AI either can't do or charges heavily for.
+
+---
+
+## Four Scenarios Where Only Local AI Makes Sense
+
+### Knowledge extraction: turning images and documents into structured data for free
+
+You have 200 reference images from a client and want to classify each one by style, color palette, and composition. On ChatGPT? Upload one at a time, wait for each response, manually copy results. Two hundred images will eat your entire day.
+
+On local AI? Write a simple batch command (or ask a developer colleague to help), and the AI processes all 200 automatically, outputting a spreadsheet. Time: press Enter, go make coffee. Cost: zero.
+
+Same logic applies to:
+- 100-page contract PDFs → automatically extract key clauses
+- A year of meeting notes → organize into a topic index
+- Bulk product photos → auto-generate descriptions
+
+The point isn't that local AI does this better than ChatGPT — for extraction tasks that don't require deep intelligence but need to run many times, it does well enough. And it's completely free with no usage limits.
+
+### Private company code: when leaking isn't an option
+
+If you're a developer, your company's codebase is a core asset. Pasting the entire repo into ChatGPT to ask "find the bug" works technically, but your code enters the training set (unless your company pays for an Enterprise plan).
+
+Local AI is the only option: install [Ollama](https://ollama.com) on your dev machine, pair it with a VS Code AI extension like [Continue](https://continue.dev), and you have a fully private code assistant. Your code never touches anyone else's server.
+
+A 14-billion-parameter model handles boilerplate code, test generation, and explaining legacy code just fine. Architecture decisions? Send those to the cloud (but don't paste the full codebase).
+
+### Offline and air-gapped environments
+
+Airplanes, factory intranets, hospital closed networks, military installations — places with no internet or policies forbidding external connections. Cloud AI is simply unavailable. Local AI is the only choice.
+
+### Running the same task a thousand times for free
+
+ChatGPT has usage limits. The free tier caps daily queries, Plus has its own ceiling, and exceeding it means waiting. If your job is "run the same template across a thousand documents" — say, sentiment analysis on a thousand customer emails — cloud plans aren't impossible, just constantly hitting rate limits.
+
+Local AI has no ceiling. Run as long as you want, as long as your computer is on.
+
+---
+
+## Honest Capability Comparison — What Local AI Can't Do Well
+
+No sugarcoating. Same month (April 2026), here's how they stack up:
+
+| Capability | Cloud (ChatGPT / Claude) | Local (16GB) | Local (32GB) |
+|---|---|---|---|
+| Everyday Q&A | Strong | Passable | OK |
+| Complex reasoning | Strong | Noticeably weaker | Decent |
+| Long-form writing | Strong | Barely | Decent |
+| Real-time web search | Yes (default on) | No | No |
+| Image understanding | Strong | Passable | OK |
+| Bulk batch processing | Limited / paid | Unlimited / free | Unlimited / free |
+| Privacy | Defaults to training | Fully private | Fully private |
+| Offline use | No | Yes | Yes |
+| Private code assistance | Requires Enterprise | Free | Free |
+
+**Simple rule: need smart → cloud. Need private, free, or unlimited → local.** It's not either/or — the smartest approach is mixing both.
+
+---
+
+## $1.20/month vs $20/month — But Cheaper Doesn't Mean Better
+
+Let's do the math.
+
+**Cloud subscription costs (April 2026):**
+- [ChatGPT Plus](https://chatgpt.com/pricing): $20/month
+- [Claude Pro](https://claude.com/pricing): $20/month
+- ChatGPT Pro: $200/month
+
+**Local electricity cost:**
+- A [Mac Mini M4](https://support.apple.com/en-us/103253) running AI averages about 15 watts (3-5 watts when idle)
+- Monthly consumption: 15W × 24h × 30 days = 10.8 kWh
+- At typical US residential rates (~$0.11/kWh): **$1.20/month**
+
+So running local AI costs roughly **one-sixteenth** of ChatGPT Plus.
+
+But this number is misleading on its own. The AI you get for $1.20 is not the same quality as the AI you get for $20. You saved money, but you got a different product.
+
+The right framing:
+- $1.20 local AI → use it for tasks that don't need peak intelligence but need privacy and volume
+- $20 ChatGPT Plus → use it for tasks that need the smartest possible answers
+- Mix both → what most people should actually do
+
+---
+
+## When to Use Cloud, When to Use Local
+
+| Task | Use | Why |
+|---|---|---|
+| Deep thinking question | Cloud | Model intelligence gap is too large |
+| Latest news / prices / info | Cloud | Local has no real-time search |
+| Long essay / polished presentation | Cloud | Quality gap is obvious |
+| Classify 200 images | Local | Free + unlimited |
+| Read company contracts, extract clauses | Local | Privacy — nothing leaves your machine |
+| Find bugs in company codebase | Local | Code can't go to someone else's server |
+| Airplane / no internet | Local | Only option |
+| Sentiment analysis on 1,000 emails | Local | No usage limits |
+| Brainstorming / chat / translation | Either | Even 16GB local handles these OK |
+
+**One line: confidential, bulk, or offline → local. Needs intelligence or latest info → cloud.**
+
+---
+
+## Five Minutes to Start: Install Ollama, Run Your First Local Model
+
+No programming required. No technical background needed.
+
+**Step 1: Install Ollama**
+
+Go to [ollama.com](https://ollama.com), download, install. Mac, Windows, and Linux are all supported.
+
+**Step 2: Run your first model**
+
+Open a terminal (Terminal app on Mac, PowerShell on Windows) and type:
+
+```
+ollama run gemma3:4b
+```
+
+Wait for the download (~3GB), then start chatting. This model has 4 billion parameters and runs on any modern computer.
+
+**Step 3: Try a bigger model**
+
+If your computer has 16GB of RAM:
+
+```
+ollama run qwen3.5:14b
+```
+
+14 billion parameters. Noticeably better answers, slightly slower.
+
+If you have 32GB:
+
+```
+ollama run gemma4:e2b
+```
+
+This is the fastest model in Google's [Gemma 4](https://ai.google.dev/gemma/docs) family — I measured 81 words per second on my MacBook Pro. Completely fluid for everyday use.
+
+Want to go deeper on Ollama vs vLLM? See [Part 1: Microwave vs Professional Oven](/en/blog/llm-101-ollama-vs-vllm). Want to pick a model based on your RAM? See [Part 3: How to Choose a Model](/en/blog/llm-101-how-to-choose-a-model).
+
+---
+
+## Try One Thing Today
+
+If your computer has 16GB of RAM or more:
+
+1. Spend two minutes installing [Ollama](https://ollama.com)
+2. Open a terminal and type `ollama run gemma3:4b`
+3. Ask it a question — any question
+
+You'll discover: AI can run on your own computer, no account, no payment, no internet.
+
+Then ask yourself: does your work have tasks that don't need peak intelligence but need to run many times, or can't leak outside your organization? That's where local AI actually belongs.
+
+---
+
+## The One-Liner
+
+**Local AI isn't a cheaper ChatGPT — it's a completely different tool. Cloud handles the smart stuff; local handles the private, bulk, and free stuff.**
+
+Next: how to use local AI as a knowledge extractor — turning scattered images, PDFs, and notes into structured knowledge, without spending a cent.
+
+*This is Part 6 of the "[LLM 101](/en/blog/llm-101-ollama-vs-vllm)" series. Previous: [Context Window — How Much Can AI Read at Once?](/en/blog/llm-101-context-window). Related: [How to Choose a Model](/en/blog/llm-101-how-to-choose-a-model), [What Is Quantization?](/en/blog/llm-101-what-is-quantization).*
