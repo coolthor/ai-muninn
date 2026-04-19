@@ -1,18 +1,31 @@
+import { type NextRequest, NextResponse } from 'next/server'
 import createMiddleware from 'next-intl/middleware'
 import { routing } from './i18n/routing'
 
-// alternateLinks: false — HTML head already emits correct canonical/hreflang.
-// The auto-generated HTTP Link header added an x-default pointing at the
-// unprefixed /blog/:slug path, which Google then indexed as a separate URL
-// alongside /en/blog/:slug, splitting ranking signal and tanking CTR.
-export default createMiddleware({
+const intlMiddleware = createMiddleware({
   ...routing,
   alternateLinks: false,
 })
 
+export default function middleware(request: NextRequest) {
+  const accept = request.headers.get('accept') ?? ''
+  const pathname = request.nextUrl.pathname
+
+  if (
+    accept.includes('text/markdown') &&
+    /^\/(en|zh-TW)\/blog\/[a-z0-9-]+$/.test(pathname)
+  ) {
+    const url = request.nextUrl.clone()
+    url.pathname = '/api/markdown'
+    url.searchParams.set('path', pathname)
+    return NextResponse.rewrite(url)
+  }
+
+  return intlMiddleware(request)
+}
+
 export const config = {
   matcher: [
-    // Skip bpstracker callback (OAuth compat), api routes, static files
     '/((?!bpstracker|api|_next|_vercel|.*\\..*).*)',
   ],
 }

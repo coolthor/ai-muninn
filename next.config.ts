@@ -20,6 +20,19 @@ const nextConfig: NextConfig = {
       },
     ]
   },
+  async headers() {
+    return [
+      {
+        source: '/',
+        headers: [
+          {
+            key: 'Link',
+            value: '</llms.txt>; rel="service-doc", </sitemap.xml>; rel="index", </.well-known/api-catalog>; rel="api-catalog"',
+          },
+        ],
+      },
+    ]
+  },
 }
 
 export default withNextIntl(nextConfig)
