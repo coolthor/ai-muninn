@@ -8,6 +8,20 @@ const BLOG_ROOT = path.join(process.cwd(), 'content/blog')
 export function GET(request: NextRequest) {
   const pagePath = request.nextUrl.searchParams.get('path') ?? ''
 
+  if (pagePath === '/') {
+    const llmsPath = path.join(process.cwd(), 'public/llms.txt')
+    if (!fs.existsSync(llmsPath)) {
+      return new NextResponse('Not found', { status: 404 })
+    }
+    const content = fs.readFileSync(llmsPath, 'utf8')
+    return new NextResponse(content, {
+      headers: {
+        'Content-Type': 'text/markdown; charset=utf-8',
+        'x-markdown-tokens': String(Math.ceil(content.split(/\s+/).length * 1.3)),
+      },
+    })
+  }
+
   const match = pagePath.match(/^\/(en|zh-TW)\/blog\/([a-z0-9-]+)$/)
   if (!match) {
     return new NextResponse('Not found', { status: 404 })
