@@ -1,0 +1,180 @@
+---
+title: "[Benchmark] 同 Scaffold、三個模型：SWE-bench Lite 16% → 38% → 48%"
+description: "一套 scaffold（backticks + edit-tool + budget prompt），三個模型（Gemma 4 E4B、Gemma 4 26B、Qwen 3.6 35B），跑之間零程式碼改動。Qwen 3.6 拿到 48.33%——超越 SWE-agent + Claude 3.7 Sonnet。Scaffold 是固定成本，模型是變數。"
+date: "2026-04-20"
+updatedAt: "2026-04-20"
+tags: ["SWE-bench", "Gemma 4", "Qwen 3.6", "scaffold", "mini-swe-agent", "vLLM", "DGX Spark", "benchmark", "開源模型"]
+series: "DGX Spark"
+part: 18
+faq:
+  - q: "同一套 SWE-bench scaffold 能跨模型使用嗎？"
+    a: "可以。backticks + edit-tool v2 + budget prompt 這套 scaffold 在三個模型上跑，中間零程式碼改動：Gemma 4 E4B（16.67%）、Gemma 4 26B（38.67%）、Qwen 3.6 35B（48.33%）。工程時間投資一次，每次有更好的模型就直接 reuse。"
+  - q: "Qwen 3.6 35B 跟 Claude 3.7 Sonnet 在 SWE-bench Lite 上比怎樣？"
+    a: "Qwen 3.6-35B-A3B FP8 在我們的 scaffold 上拿到 48.33%，略高於 SWE-agent + Claude 3.7 Sonnet（48.00%）。Qwen 3.6 是開源模型，在地端跑零 API 費，每次推理只啟用 3B 參數。"
+  - q: "最小多大的模型還能修真實 GitHub bug？"
+    a: "Gemma 4 E4B（~1B active 參數）在同 scaffold 上解了 50/300 題（16.67%）。跟 MCTS-Refine-7B（16.33%）差不多。說明極小模型也有能力，但天花板很低。"
+  - q: "用 Qwen 3.6 跑 SWE-bench Lite 300 題要多久？"
+    a: "在 DGX Spark 上約 36 小時（2 workers 並行）。Qwen 3.6 用 DeltaNet hybrid attention，在 vLLM 上比標準 Transformer 慢。Gemma 4 26B 同樣 300 題只需 19 小時。"
+---
+
+import { TLDRCard } from "@/components/blog/TLDRCard";
+
+<TLDRCard>
+一套 scaffold、三個模型、零改動：Gemma 4 E4B → **16.67%**、Gemma 4 26B → **38.67%**、Qwen 3.6 35B → **48.33%**（SWE-bench Lite）。Qwen 3.6 超越 SWE-agent + Claude 3.7 Sonnet（48.00%），在 DGX Spark 上地端跑，零 API 費。Scaffold 是固定成本，模型是變數。
+</TLDRCard>
+
+<VideoEmbed src="/videos/swe-bench-scaffold-transfers-three-models.mp4" />
+
+## 白話版：一套工具，三顆腦袋
+
+[上一篇](/zh-TW/blog/swe-bench-lite-gemma4-26b-38-percent)我們做了一個簡單的 scaffold——三條限制，告訴 AI 模型怎麼改程式碼不要搞砸。用 Gemma 4 26B 跑出 38.67%。最後留了一個問題：這套東西換到別的模型上還有用嗎？
+
+我們把另外兩個模型丟進同一套 scaffold。沒改程式碼，沒調 prompt，沒動 config——只是把 API 後面的模型換了。
+
+答案：scaffold 可遷移。4B 模型拿 16.67%。35B 模型拿 48.33%——超越用 Claude 3.7 Sonnet（目前最強的商用模型之一）的系統。你花在 scaffold 上的工程時間，每次有更好的開源模型出來都能白賺。
+
+---
+
+## 前言
+
+[Part 17](/zh-TW/blog/swe-bench-lite-gemma4-26b-38-percent) 建立了 scaffold（backticks + edit-tool v2 + budget prompt），用 Gemma 4 26B 跑出 38.67%。結尾寫：*「問題不是 Gemma 4 能跑多高——是一套好的 scaffold 能帶任何開源模型走多遠。」*
+
+這篇用數據回答。
+
+---
+
+## 三個模型，一套 scaffold，零改動
+
+```
+Scaffold: backticks 協議 + edit-tool v2 + budget prompt
+Config:   swebench_backticks.yaml + gemma4-bt-edittool.yaml
+改動:     model_name 用 CLI flag 換。其他完全不動。
+```
+
+| 模型 | Active 參數 | 總參數 | Resolved | % |
+|------|-----------|--------|----------|---|
+| [Gemma 4 E4B](https://huggingface.co/google/gemma-4-e4b-it) BF16 | ~1B | 4B | 50/300 | **16.67%** |
+| [Gemma 4 26B-A4B](https://huggingface.co/RedHatAI/gemma-4-26B-A4B-it-FP8-Dynamic) FP8 | 3.8B | 25.2B | 116/300 | **38.67%** |
+| [Qwen 3.6-35B-A3B](https://huggingface.co/Qwen/Qwen3.6-35B-A3B-FP8) FP8 | 3B | 35B | 145/300 | **48.33%** |
+
+三次 run 之間唯一的差別是 `model.model_name` 這個 config 值。YAML 檔案一樣。edit-tool 一樣。budget prompt 一樣。Docker image 一樣。機器一樣。
+
+---
+
+## Qwen 3.6 在排行榜上的位置
+
+SWE-bench Lite 排行榜（2026-04-16 快照，[swebench.com](https://www.swebench.com/)）：
+
+| # | 系統 | 模型 | % Resolved |
+|---|------|------|-----------|
+| 1 | ExpeRepair v1.0 | Claude 4 Sonnet | 60.33 |
+| 5 | EntroPO + R2E | Qwen3-Coder-30B | 49.67 |
+| **→** | **mini-swe-agent + edit-tool v2** | **Qwen 3.6-35B-A3B FP8** | **48.33** |
+| 7 | SWE-agent | Claude 3.7 Sonnet | 48.00 |
+| 13 | OpenHands CodeAct v2.1 | Claude 3.5 Sonnet | 41.67 |
+| 15 | Moatless Tools | Claude 3.5 Sonnet | 39.00 |
+| 16 | mini-swe-agent + edit-tool v2 | Gemma 4 26B-A4B FP8 | 38.67 |
+
+Qwen 3.6 搭我們的 scaffold 超越了 SWE-agent + Claude 3.7 Sonnet，差距 0.33%。一個 3B active 參數的開源模型，在桌上型工作站本地跑，零 API 費。
+
+---
+
+## 三個數據點說了什麼
+
+### Scaffold 設了地板
+
+Gemma 4 E4B（1B active）拿 16.67%。這是地板——scaffold 沒辦法補救一個容量不夠的模型。但一個 4B 模型修了 50 個真實 bug 仍然值得注意。沒有 scaffold（用原始 tool_calls 裸跑），這個模型接近零分。
+
+### 模型品質是乘數
+
+16.67% → 38.67% → 48.33%——每次換模型都有明顯跳升。但注意邊際遞減：active 參數第一次 6 倍擴大（1B → 3.8B）買到 22 個百分點。下一跳（3.8B → 3B active 但 35B total、更多 expert）買到 10 個百分點。模型更大有幫助，但不是線性的。
+
+### Scaffold 會攤銷
+
+Part 15-17 投入的工程——debug pydantic 靜默丟棄、發現 backticks 協議、做 edit-tool v2、調 budget prompt——只做了一次。跑 Qwen 3.6 的額外工程成本是零。就這一行：
+
+```bash
+-c model.model_name=hosted_vllm/qwen36-35b-a3b-fp8
+```
+
+未來每個支援 text-based action 的模型都能直接用。
+
+---
+
+## Qwen 3.6 的特殊之處
+
+### 架構差異
+
+Qwen 3.6-35B-A3B 不是標準 Transformer。它用 **DeltaNet hybrid attention**——線性注意力（Gated DeltaNet）跟標準注意力 3:1 混合。影響：
+
+- **Context length**：原生 262K（Gemma 4 是 96K）——長 trajectory 更有空間
+- **推理速度**：在 vLLM 上比較慢。DeltaNet kernel 沒有標準 attention 優化得好。300 題跑了 ~36 小時，Gemma 4 26B 只要 ~19 小時
+- **Expert 數量**：256 個 expert，每次啟用 8 + 1 shared。更多 expert、更少 active
+
+### vLLM 啟動指令
+
+```bash
+vllm serve /models/qwen36 \
+  --served-model-name qwen36-35b-a3b-fp8 \
+  --host 0.0.0.0 --port 8000 \
+  --max-model-len 96000 \
+  --gpu-memory-utilization 0.85 \
+  --enable-auto-tool-choice \
+  --tool-call-parser hermes
+```
+
+`--tool-call-parser hermes` 不同於 Gemma 4 的 `gemma4`。但因為我們用 backticks scaffold（LitellmTextbasedModel），tool-call parser 其實不起作用——action 靠 regex 解析，不走 vLLM 的 tool-call 協議。
+
+---
+
+## Scaffold——跟 Part 17 完全一樣
+
+三條限制，三個模型之間零改動：
+
+**1. Backticks 協議** — 模型輸出 markdown code block，框架用 regex 解析。不依賴 JSON。
+
+**2. edit-tool v2** — 90 行 Python，每次 container 啟動注入。強制 exactly-one-match 取代。禁止整檔覆寫。
+
+**3. Budget prompt** — 五行文字。100 步內、60 步前交。
+
+就這些。90 行 Python。五行 prompt。剩下靠模型自己。
+
+---
+
+## 學到什麼
+
+### 花最多時間的事
+
+等。三次 run 加起來 ~67 小時（19h + 12h + 36h）。Part 18 的實際工程是改一個 config 值然後按 enter。Part 15-17 的 scaffold 工程是真正的投資——現在完全攤銷了。
+
+### 可以帶走的診斷模式
+
+1. **DeltaNet 模型在 vLLM 上比較慢。** 如果你在 benchmark hybrid-attention 模型（DeltaNet、Mamba、SSM），預算 2 倍的 wall time。Kernel 還沒追上。
+
+2. **Tool-call parser 對 text-based scaffold 不重要。** Qwen 3.6 用 `--tool-call-parser hermes`，Gemma 4 用 `gemma4`。兩個都沒差——backticks scaffold 完全繞過 tool-call 協議。不用浪費時間找「對的」parser。
+
+3. **注意邊際遞減。** 1B → 3.8B active 給了 +22pp。3.8B → 3B（35B total）給了 +10pp。下一個模型可能給 +5pp。到某個點，scaffold 改進（fault localization、test-driven loop）會比換模型更有效。
+
+### 通用原則
+
+投資在 scaffold，不要投資在模型。模型每季都換——Qwen 3.7 可能幾個月後就出了。Scaffold 的三條限制（不要覆寫檔案、限時交作業、用文字格式溝通）針對的是**所有小模型共有的行為缺陷**。針對行為設計，不要針對品牌。
+
+---
+
+## 結論
+
+三個模型。一套 scaffold。零改動：
+
+| 模型 | Active | % Resolved | 費用 |
+|------|--------|-----------|------|
+| Gemma 4 E4B | ~1B | 16.67% | $0 |
+| Gemma 4 26B | 3.8B | 38.67% | $0 |
+| Qwen 3.6 35B | 3B | **48.33%** | $0 |
+
+48.33% 超越 SWE-agent + Claude 3.7 Sonnet（48.00%）。Scaffold——backticks + edit-tool v2 + budget prompt——是固定成本。每個新模型都是免費紅利。
+
+**接下來：** Fault localization（在模型開始前自動解析 traceback）是下一個 scaffold 改進。不管跑哪個模型，都能省 10-15 步盲目探索。這是 scaffold 升級，不是模型升級——而且同樣會遷移到之後跑的每個模型。
+
+---
+
+*同系列：[Part 15 — 可行性測試](/zh-TW/blog/swe-bench-local-models-framework-matters) | [Part 16 — Scaffold 工程](/zh-TW/blog/dgx-spark-gemma4-swe-bench-scaffold-engineering) | [Part 17 — Gemma 4 26B: 38.67%](/zh-TW/blog/swe-bench-lite-gemma4-26b-38-percent)*

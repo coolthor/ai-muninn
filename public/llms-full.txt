@@ -1,11 +1,180 @@
 # ai-muninn — Full Site Content
 # https://ai-muninn.com
-# Generated: 2026-04-17
-# Articles: 55
+# Generated: 2026-04-20
+# Articles: 56
 
 This file contains the full text of all articles on ai-muninn.com.
 It is intended for AI tools that need complete site context.
 For the article index only, see /llms.txt.
+
+---
+
+# [Benchmark] Same Scaffold, Three Models: 16% → 38% → 48% on SWE-bench Lite
+URL: https://ai-muninn.com/en/blog/swe-bench-scaffold-transfers-three-models
+Date: 2026-04-20
+Series: DGX Spark (Part 18)
+
+import { TLDRCard } from "@/components/blog/TLDRCard";
+
+
+One scaffold, three models, zero code changes: Gemma 4 E4B → **16.67%**, Gemma 4 26B → **38.67%**, Qwen 3.6 35B → **48.33%** on SWE-bench Lite. Qwen 3.6 beats SWE-agent + Claude 3.7 Sonnet (48.00%) running locally on a DGX Spark at zero API cost. The scaffold is the fixed cost; the model is the variable.
+
+
+<VideoEmbed src="/videos/swe-bench-scaffold-transfers-three-models.mp4" />
+
+## Plain-Language Version: One tool, three brains
+
+In [Part 17](/en/blog/swe-bench-lite-gemma4-26b-38-percent), we built a simple scaffold — three constraints that tell an AI model how to edit code without breaking things. That scaffold scored 38.67% on [SWE-bench Lite](https://www.swebench.com/) with Gemma 4 26B. We ended with a question: does this scaffold transfer to other models?
+
+We ran two more models through the exact same scaffold. No code changes, no prompt tweaks, no config adjustments — just swapped the model behind the API endpoint.
+
+The answer: the scaffold transfers. A 4B model scored 16.67%. A 35B model scored 48.33% — beating a system that uses Claude 3.7 Sonnet, one of the strongest proprietary models available. The engineering work you put into the scaffold pays off every time a better open-source model comes along.
+
+---
+
+## Preface
+
+[Part 17](/en/blog/swe-bench-lite-gemma4-26b-38-percent) established the scaffold (backticks + edit-tool v2 + budget prompt) and scored 38.67% with Gemma 4 26B. The article ended with: *"The question isn't 'how high can Gemma 4 score' — it's 'how far can a well-designed scaffold carry any open-weight model.'"*
+
+This article answers that question with data.
+
+---
+
+## Three models, one scaffold, zero changes
+
+```
+Scaffold: backticks protocol + edit-tool v2 + budget prompt
+Config:   swebench_backticks.yaml + gemma4-bt-edittool.yaml
+Changes:  model_name swapped via CLI flag. Nothing else touched.
+```
+
+| Model | Active params | Total params | Resolved | % |
+|-------|-------------|-------------|----------|---|
+| [Gemma 4 E4B](https://huggingface.co/google/gemma-4-e4b-it) BF16 | ~1B | 4B | 50/300 | **16.67%** |
+| [Gemma 4 26B-A4B](https://huggingface.co/RedHatAI/gemma-4-26B-A4B-it-FP8-Dynamic) FP8 | 3.8B | 25.2B | 116/300 | **38.67%** |
+| [Qwen 3.6-35B-A3B](https://huggingface.co/Qwen/Qwen3.6-35B-A3B-FP8) FP8 | 3B | 35B | 145/300 | **48.33%** |
+
+The only difference between runs was the `model.model_name` config value. Same YAML files. Same edit-tool. Same budget prompt. Same Docker images. Same machine.
+
+---
+
+## Where Qwen 3.6 lands on the leaderboard
+
+SWE-bench Lite leaderboard (snapshot 2026-04-16, [swebench.com](https://www.swebench.com/)):
+
+| # | System | Model | % Resolved |
+|---|--------|-------|-----------|
+| 1 | ExpeRepair v1.0 | Claude 4 Sonnet | 60.33 |
+| 5 | EntroPO + R2E | Qwen3-Coder-30B | 49.67 |
+| **→** | **mini-swe-agent + edit-tool v2** | **Qwen 3.6-35B-A3B FP8** | **48.33** |
+| 7 | SWE-agent | Claude 3.7 Sonnet | 48.00 |
+| 13 | OpenHands CodeAct v2.1 | Claude 3.5 Sonnet | 41.67 |
+| 15 | Moatless Tools | Claude 3.5 Sonnet | 39.00 |
+| 16 | mini-swe-agent + edit-tool v2 | Gemma 4 26B-A4B FP8 | 38.67 |
+
+Qwen 3.6 with our scaffold beats SWE-agent + Claude 3.7 Sonnet by 0.33%. An open-weight model with 3B active parameters, running locally on a single desktop workstation, with zero API cost.
+
+---
+
+## What the three data points tell us
+
+### The scaffold sets the floor
+
+Gemma 4 E4B (1B active) scored 16.67%. That's the floor — the scaffold can't compensate for a model that simply doesn't have enough capacity to understand complex codebases. But 50 real bug fixes from a 4B model is still remarkable. Without the scaffold (raw tool_calls on a naive setup), this model scores near zero.
+
+### Model quality is the multiplier
+
+From 16.67% to 38.67% to 48.33% — each model upgrade delivered a meaningful jump. But notice the diminishing returns: the first 6x increase in active parameters (1B → 3.8B) bought 22 percentage points. The next jump (3.8B → 3B active but 35B total with more experts) bought 10 points. More model helps, but it's not linear.
+
+### The scaffold amortizes
+
+The engineering work that went into Parts 15-17 — debugging pydantic silent drops, discovering backticks protocol, building edit-tool v2, tuning the budget prompt — was done once. Running Qwen 3.6 cost zero additional engineering time. Just:
+
+```bash
+-c model.model_name=hosted_vllm/qwen36-35b-a3b-fp8
+```
+
+Every future model that supports text-based actions gets the scaffold for free.
+
+---
+
+## Qwen 3.6 specifics
+
+### Architecture differences
+
+Qwen 3.6-35B-A3B is not a standard Transformer. It uses **DeltaNet hybrid attention** — a mix of linear attention (Gated DeltaNet) and standard attention in a 3:1 ratio. This has implications:
+
+- **Context length**: 262K native (vs Gemma 4's 96K) — more room for long SWE-bench trajectories
+- **Inference speed**: slower under vLLM. The DeltaNet kernels aren't as optimized as standard attention. Our 300-task run took ~36 hours vs ~19 hours for Gemma 4 26B.
+- **Expert count**: 256 experts with 8 routed + 1 shared per token (vs Gemma 4's architecture). More experts, fewer active.
+
+### vLLM serving
+
+```bash
+vllm serve /models/qwen36 \
+  --served-model-name qwen36-35b-a3b-fp8 \
+  --host 0.0.0.0 --port 8000 \
+  --max-model-len 96000 \
+  --gpu-memory-utilization 0.85 \
+  --enable-auto-tool-choice \
+  --tool-call-parser hermes
+```
+
+Note: `--tool-call-parser hermes` instead of `gemma4`. But since we use the backticks scaffold (LitellmTextbasedModel), the tool-call parser is irrelevant — actions are parsed by regex, not by the vLLM tool-call protocol.
+
+---
+
+## The scaffold — unchanged from Part 17
+
+For reference, here's what transferred across all three models:
+
+**1. Backticks protocol** — model outputs markdown code blocks instead of JSON tool calls. Parsed by regex.
+
+**2. edit-tool v2** — 90-line Python script injected into each Docker container at startup. Enforces exactly-one-match string replacement. Prevents whole-file rewrites.
+
+**3. Budget prompt** — five lines of text telling the model to submit by step 60 of 100.
+
+That's it. Three constraints. 90 lines of Python. Five lines of prompt. The rest is the model's own capability.
+
+---
+
+## What was gained
+
+### What cost the most time
+
+Waiting. The three runs together took ~67 hours of wall time (19h + 12h + 36h). The actual engineering for Part 18 was changing one config value and pressing enter. The scaffold work from Parts 15-17 was the real investment — and it's now fully amortized.
+
+### Transferable diagnostics
+
+1. **DeltaNet models are slower under vLLM.** If you're benchmarking a hybrid-attention model (DeltaNet, Mamba, SSM), budget 2x the wall time compared to a pure Transformer of similar size. The kernels aren't there yet.
+
+2. **Tool-call parser doesn't matter for text-based scaffolds.** We used `--tool-call-parser hermes` for Qwen 3.6 and `--tool-call-parser gemma4` for Gemma 4. Both are irrelevant — the backticks scaffold bypasses the tool-call protocol entirely. Don't waste time finding the "right" parser.
+
+3. **Watch the diminishing returns.** 1B → 3.8B active gave +22pp. 3.8B → 3B (but 35B total) gave +10pp. The next model might give +5pp. At some point, scaffold improvements (fault localization, test-driven loop) will outperform model upgrades.
+
+### The pattern that applies everywhere
+
+Invest in the scaffold, not the model. The model changes every quarter — Qwen 3.7 is probably months away. The scaffold constraints (don't rewrite files, submit within budget, use text-based actions) address fundamental behavioral patterns that every model shares. Build for the behavior, not the brand.
+
+---
+
+## Conclusion
+
+Three models. One scaffold. Zero changes between runs:
+
+| Model | Active | % Resolved | Cost |
+|-------|--------|-----------|------|
+| Gemma 4 E4B | ~1B | 16.67% | $0 |
+| Gemma 4 26B | 3.8B | 38.67% | $0 |
+| Qwen 3.6 35B | 3B | **48.33%** | $0 |
+
+The 48.33% beats SWE-agent + Claude 3.7 Sonnet (48.00%). The scaffold — backticks + edit-tool v2 + budget prompt — is the fixed cost. Every new model is free upside.
+
+**What's next:** Fault localization (auto-parsing tracebacks before the model starts) is the next scaffold improvement. It should cut 10-15 wasted exploration steps regardless of which model is running. That's a scaffold upgrade, not a model upgrade — and it'll transfer to every model we run after it.
+
+---
+
+*Also in this series: [Part 15 — Feasibility test](/en/blog/swe-bench-local-models-framework-matters) | [Part 16 — Scaffold engineering](/en/blog/dgx-spark-gemma4-swe-bench-scaffold-engineering) | [Part 17 — Gemma 4 26B: 38.67%](/en/blog/swe-bench-lite-gemma4-26b-38-percent)*
 
 ---
 
