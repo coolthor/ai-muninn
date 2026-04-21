@@ -20,9 +20,11 @@ import { TLDRCard } from "@/components/blog/TLDRCard";
 NVFP4 on DGX Spark's GB10 (SM121) is **32% slower** than FP8 — not faster. Root cause: SM121 lacks the `cvt.e2m1x2` hardware instruction that SM120 (RTX 5090) and SM100 (B200) have natively. Qwen 3.6-35B-A3B FP8 on vLLM hits **53.8 tok/s** (driver 580.142). NVFP4 on vLLM falls back to Marlin dequant at **40.8 tok/s**. SGLang NVFP4 crashes entirely. This is silicon — no driver update fixes it.
 
 
+<VideoEmbed src="/videos/dgx-spark-nvfp4-trap-gb10.mp4" />
+
 ## White-Box Version: Why Smaller Numbers Aren't Always Faster
 
-[NVFP4](https://developer.nvidia.com/blog/nvidia-blackwell-fp4-inference/) is NVIDIA's 4-bit floating point format — half the bits of FP8, so in theory it should move data faster and use less memory. On most Blackwell GPUs (RTX 5090, B200), it does. But DGX Spark uses a different chip — the GB10, codenamed SM121 — and this chip is missing a key instruction that makes FP4 math work at full speed.
+[NVFP4](https://developer.nvidia.com/blog/introducing-nvfp4-for-efficient-and-accurate-low-precision-inference/) is NVIDIA's 4-bit floating point format — half the bits of FP8, so in theory it should move data faster and use less memory. On most Blackwell GPUs (RTX 5090, B200), it does. But DGX Spark uses a different chip — the GB10, codenamed SM121 — and this chip is missing a key instruction that makes FP4 math work at full speed.
 
 The result: FP4 on DGX Spark is actually slower than FP8. I tested two inference engines ([vLLM](https://github.com/vllm-project/vllm) and [SGLang](https://github.com/sgl-project/sglang)) to confirm this isn't a software problem. It's hardware. If you have a DGX Spark, use FP8 — it's 32% faster than NVFP4 and actually works.
 
@@ -99,7 +101,7 @@ While NVFP4 was a dead end, upgrading from driver 580.126 to 580.142 gave an une
 | 580.126 | 51.8 | baseline |
 | 580.142 | **53.8** | **+3.9%** |
 
-Key changes in [580.142](https://www.nvidia.com/en-us/drivers/details/242498/):
+Key changes in [580.142](https://docs.nvidia.com/dgx/dgx-spark/release-notes.html):
 
 - **UMA memory reporting fix** — GB10's unified memory pressure values were reported incorrectly. This may explain some of the SGLang OOM issues on older drivers.
 - **SM121 ISA fallback fix** — the driver no longer falls back to SM80 (Ampere) instruction paths. FP8 kernels now run native SM121 code instead of compatibility mode.
@@ -3523,7 +3525,7 @@ Next up: once you've found a need, how do you figure out whether to do it yourse
 
 ---
 
-# [LLM 101] So Many Models — Which One Should You Download?
+# [LLM 101] How to Choose an AI Model: Gemma vs Llama vs Qwen vs Mistral (2026)
 URL: https://ai-muninn.com/en/blog/llm-101-how-to-choose-a-model
 Date: 2026-04-10
 Series: LLM 101 (Part 3)
@@ -6780,7 +6782,7 @@ To point NemoClaw at a local inference backend:
 
 ---
 
-# [AI Agent] Use GPT-5.4 with ChatGPT Plus — No API Credits Needed (openclaw OAuth)
+# [AI Agent] openclaw + ChatGPT OAuth: Run GPT-5.4 Agents Without API Credits
 URL: https://ai-muninn.com/en/blog/openclaw-chatgpt-oauth-gpt54-no-api-key
 Date: 2026-03-24
 Series: OpenClaw (Part 11)
@@ -6897,7 +6899,7 @@ The tradeoff: GPT-5.4 runs on OpenAI's servers, not locally. Anything the agent 
 
 ---
 
-# NemoClaw on DGX Spark: 4 Fixes the Official Docs Don't Tell You
+# [AI Agent] How to Install NemoClaw on DGX Spark (4 Undocumented Fixes)
 URL: https://ai-muninn.com/en/blog/nemoclaw-install-gx10-from-scratch
 Date: 2026-03-23
 Series: NemoClaw (Part 2)
@@ -7141,7 +7143,7 @@ For NemoClaw on GX10 / DGX Spark (aarch64, Ubuntu 24.04, cgroup v2):
 
 ---
 
-# NemoClaw Explained: NVIDIA's All-in-One AI Agent Framework for DGX Spark
+# [AI Agent] What Is NemoClaw? NVIDIA's AI Agent Framework for DGX Spark Explained
 URL: https://ai-muninn.com/en/blog/nemoclaw-what-it-is-why-it-exists
 Date: 2026-03-23
 Series: NemoClaw (Part 1)
@@ -9855,7 +9857,7 @@ The only way to catch it is to measure before and after any flag change.
 
 ---
 
-# [vLLM] Qwen3.5-35B at 47 tok/s on a Desktop: Migrating from Ollama to vLLM
+# [vLLM] Qwen3.5-35B at 47 tok/s on DGX Spark: Ollama to vLLM Migration Guide
 URL: https://ai-muninn.com/en/blog/dgx-spark-vllm-qwen35-setup
 Date: 2026-03-05
 Series: DGX Spark (Part 2)
