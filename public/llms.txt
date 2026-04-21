@@ -1,7 +1,7 @@
 # ai-muninn — AI Infrastructure Research Notes
 # https://ai-muninn.com
 # Author: coolthor
-# Updated: 2026-04-13
+# Updated: 2026-04-21
 
 This site contains primary research notes on LLM inference infrastructure,
 AI agent systems, and developer tooling. All content is based on hands-on
@@ -97,6 +97,10 @@ experimentation with real hardware and production systems.
 - [Part 18] Same Scaffold, Three Models: 16% → 38% → 48% on SWE-bench Lite
   https://ai-muninn.com/en/blog/swe-bench-scaffold-transfers-three-models
   One scaffold (backticks + edit-tool v2 + budget prompt), three models (Gemma 4 E4B 16.67%, Gemma 4 26B 38.67%, Qwen 3.6 35B 48.33%), zero code changes. Scaffold transfers. Qwen 3.6 beats SWE-agent + Claude 3.7 Sonnet.
+
+- [Part 19] NVFP4 Is a Trap on GB10: FP8 Wins by 32% (vLLM + SGLang Tested)
+  https://ai-muninn.com/en/blog/dgx-spark-nvfp4-trap-gb10-fp8-wins
+  SM121 lacks native FP4 hardware instruction (cvt.e2m1x2). NVFP4 40.8 tok/s vs FP8 53.8 tok/s on Qwen 3.6. SGLang NVFP4 crashes entirely. Driver 580.142 gives free +4% FP8 boost.
 
 ### Series: NemoClaw (NVIDIA's AI agent framework on DGX Spark)
 

@@ -1,0 +1,150 @@
+---
+title: "[Benchmark] NVFP4 在 GB10 上是陷阱：FP8 快 32%（vLLM + SGLang 雙引擎實測）"
+description: "NVFP4 理論上更快——位元更少、頻寬更省。但在 DGX Spark 的 GB10 (SM121) 上反而慢 32%。根因：缺硬體指令。vLLM 和 SGLang 雙引擎驗證。"
+date: "2026-04-21"
+updatedAt: "2026-04-21"
+tags: ["NVFP4", "FP8", "DGX Spark", "GB10", "SM121", "vLLM", "SGLang", "Qwen 3.6", "benchmark", "量化"]
+series: "DGX Spark"
+part: 19
+faq:
+  - q: "為什麼 NVFP4 在 DGX Spark GB10 上比 FP8 慢？"
+    a: "GB10 的 SM121 GPU 缺少 cvt.rn.satfinite.e2m1x2.f32 這條 PTX 指令，無法原生做 FP4↔FP32 轉換。RTX 5090 (SM120) 和 B200 (SM100) 有硬體支援。SM121 上 NVFP4 只能走 Marlin fallback（40.8 tok/s，-21%）或直接 crash。這是矽片限制，driver 更新修不了。"
+  - q: "Qwen 3.6 在 DGX Spark 上最快能跑多少？"
+    a: "53.8 tok/s，用 Qwen 3.6-35B-A3B FP8 + vLLM 0.19.1 + NVIDIA driver 580.142。從 580.126 升級 driver 就多 4%。"
+  - q: "SGLang 能在 DGX Spark 上跑 Qwen 3.6 嗎？"
+    a: "目前不行。SGLang 0.5.4 (spark image) 不認識 Qwen 3.6 架構。SGLang 0.5.10 認識但 NVFP4 CUDA kernel crash。FP8 路徑因 NVFP4 crash 阻斷未測試。"
+  - q: "DGX Spark 該用 NVFP4 還是 FP8？"
+    a: "FP8，永遠選 FP8。GB10 (SM121) 上 NVFP4 慢 21-32%，SGLang 甚至直接 crash。FP8 + vLLM 0.19.1 + driver 580.142 給你 53.8 tok/s——這就是天花板。"
+---
+
+import { TLDRCard } from "@/components/blog/TLDRCard";
+
+<TLDRCard>
+DGX Spark 的 GB10 (SM121) 跑 NVFP4 比 FP8 **慢 32%**。根因：SM121 缺少 `cvt.e2m1x2` 硬體指令，RTX 5090 (SM120) 和 B200 (SM100) 才有。Qwen 3.6-35B-A3B FP8 + vLLM 跑到 **53.8 tok/s**（driver 580.142）。NVFP4 走 Marlin fallback 只有 **40.8 tok/s**。SGLang NVFP4 直接 crash。這是矽片問題，driver 更新修不了。
+</TLDRCard>
+
+<VideoEmbed src="/videos/dgx-spark-nvfp4-trap-gb10.mp4" />
+
+## 白話版：為什麼位元更少反而更慢
+
+[NVFP4](https://developer.nvidia.com/blog/introducing-nvfp4-for-efficient-and-accurate-low-precision-inference/) 是 NVIDIA 的 4-bit 浮點格式——位元只有 FP8 的一半，理論上資料搬運更快、記憶體吃更少。在 RTX 5090、B200 這些 GPU 上確實如此。
+
+但 DGX Spark 用的晶片不一樣。它的 GB10（代號 SM121）少了一條讓 FP4 運算跑滿速的關鍵指令。結果就是：FP4 在 DGX Spark 上反而比 FP8 慢。
+
+我用了兩套推理引擎（[vLLM](https://github.com/vllm-project/vllm) 和 [SGLang](https://github.com/sgl-project/sglang)）交叉驗證，確認這不是軟體問題，是硬體限制。如果你有 DGX Spark，用 FP8 就對了——快 32%，而且真的能跑。
+
+---
+
+## 前言
+
+[Part 7](/zh-TW/blog/dgx-spark-gemma4-26b-nvfp4-52-toks) 拿 Gemma 4 跑 NVFP4 得到 52 tok/s，看起來很漂亮。[Part 8](/zh-TW/blog/dgx-spark-vllm-vs-ollama-same-model) 確認 vLLM 比 Ollama 快 30%。兩篇都用 NVFP4，一切正常。
+
+然後我換上 [Qwen 3.6-35B-A3B](https://huggingface.co/Qwen/Qwen3.6-35B-A3B-FP8)——這個模型同時提供 NVFP4 和 FP8 checkpoint——數字就不對了。NVFP4 竟然比較慢。
+
+我花了一整天把引擎、量化格式、driver 版本的每種組合都跑過一遍。答案在矽片裡。
+
+## 40.8 vs 53.8 tok/s：FP8 贏 NVFP4 32%
+
+測試條件：Qwen 3.6-35B-A3B，DGX Spark（GB10，128GB unified memory），single-user generation。
+
+| 引擎 | 量化格式 | Driver | tok/s | 備註 |
+|------|---------|--------|-------|------|
+| vLLM 0.19.1 | **FP8** | 580.142 | **53.8** | 最佳配置 |
+| vLLM 0.19.1 | **FP8** | 580.126 | 51.8 | 舊 driver |
+| vLLM 0.19.1 | NVFP4 | 580.142 | 40.8 | Marlin fallback (-24%) |
+| SGLang 0.5.4 (spark) | NVFP4 | 580.142 | — | 不認識模型 |
+| SGLang 0.5.10 | NVFP4 | 580.142 | — | CUDA kernel crash |
+| SGLang 0.5.10 + no CUDA graph | NVFP4 | 580.142 | — | OOM → crash |
+
+能跑又跑得快的組合只有一個：FP8 + 最新 driver。
+
+## 根因：SM121 少了一條硬體指令
+
+DGX Spark 的 GB10 晶片是 [SM121](https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#compute-capabilities)。它是 Blackwell 架構沒錯，但跟 RTX 5090 (SM120) 和 B200 (SM100) 不是同一顆。
+
+關鍵差異：SM121 沒有 `cvt.rn.satfinite.e2m1x2.f32` 這條 [PTX 指令](https://docs.nvidia.com/cuda/parallel-thread-execution/index.html)。這條指令負責在硬體層做 FP4 (e2m1) ↔ FP32 的轉換——SM120/SM100 上一個 clock cycle 搞定。
+
+SM121 沒有這條指令，只剩兩條路：
+
+1. **軟體模擬** — driver 580.142 在 PTX 8.6+ 加了 `cvt.e2m1x2` 支援，但走軟體模擬路徑。NVIDIA changelog 明確寫了：比原生硬體慢約 30 倍。
+2. **Fallback 路徑** — vLLM 偵測到 SM121 不在 `FP4_ARCHS` 清單，改走 Marlin kernel，先把 FP4 權重解壓成 BF16 再算。這就是 40.8 tok/s 的來源。
+
+**這是矽片級限制。** 沒有任何 driver 更新、firmware 刷新、軟體 patch 能補上一條不存在的電路。
+
+對照表：
+
+| GPU | Compute Capability | 原生 FP4 | NVFP4 表現 |
+|-----|-------------------|----------|-----------|
+| B200 | SM100 | ✅ 有 | 全速 |
+| RTX 5090 | SM120 | ✅ 有 | 全速 |
+| **DGX Spark GB10** | **SM121** | **❌ 沒有** | **Marlin fallback 或 crash** |
+
+## SGLang：三次嘗試，三次失敗
+
+vLLM 的 NVFP4 走 fallback 好歹還能跑。我想試 SGLang——說不定它有不同的 NVFP4 kernel 能繞過 SM121 限制。結果沒有。
+
+**第一次：SGLang 0.5.4（spark image）**
+
+`lmsysorg/sglang:spark` 是專為 DGX Spark 做的 Docker image，有 SM121 patch。但它帶的 transformers 是 4.57.1，不認識 Qwen 3.6 的 `qwen3_5_moe` 架構。還沒開始就死了。
+
+**第二次：SGLang 0.5.10（最新版）**
+
+升級到最新 SGLang + transformers 5.3.0，模型認了。`TRITON_PTXAS_PATH=/usr/local/cuda/bin/ptxas` 解了 `sm_121a` 編譯問題。模型載入、選到原生 NVFP4 路徑——第一個 CUDA kernel call 就 crash。
+
+Qwen 3.6 的 DeltaNet hybrid attention 加上 NVFP4 在 SM121 上，碰到一個根本不存在的 kernel。
+
+**第三次：SGLang 0.5.10 + `--disable-cuda-graph`**
+
+關掉 CUDA graph 減少記憶體開銷。結果直接 OOM，降 `--mem-fraction-static` 也沒救。模型需要的記憶體本來就靠 CUDA graph 管理。
+
+## Driver 580.142：FP8 白撿 4%
+
+NVFP4 是死路，但升級 driver 從 580.126 到 580.142 意外給了 FP8 加速：
+
+| Driver | FP8 tok/s | 變化 |
+|--------|-----------|------|
+| 580.126 | 51.8 | baseline |
+| 580.142 | **53.8** | **+3.9%** |
+
+[580.142](https://docs.nvidia.com/dgx/dgx-spark/release-notes.html) 重點修改：
+
+- **UMA 記憶體回報修正** — GB10 的 unified memory 壓力值之前報錯。這可能是舊 driver 上 SGLang OOM 的原因之一。
+- **SM121 ISA fallback 修正** — 不再 fallback 到 SM80 (Ampere) 指令路徑。FP8 kernel 現在跑原生 SM121 code。
+- **狀態升級** — 從 Beta 變 Production/Recommended。
+
+有 DGX Spark 的話，升 580.142。FP8 白撿 4%。
+
+## 收穫
+
+### 最花時間：SGLang 相容性連鎖反應
+
+三次 SGLang 嘗試花了最多時間——不是因為每次很難，而是每次失敗都揭露下一個依賴。transformers 太舊 → 升級 → ptxas 錯誤 → workaround → kernel crash → 關 CUDA graph → OOM。五個環節串在一起，每個都要完整載入模型（約 3 分鐘）才能發現下一個問題。
+
+### 可搬走的診斷方法：選量化格式前先查 compute capability
+
+選量化格式之前，先確認你的 GPU 在矽片層級支援什麼：
+
+```bash
+python3 -c "import torch; print(torch.cuda.get_device_capability())"
+```
+
+如果輸出是 `(12, 1)`——那就是 SM121，NVFP4 不會跑在原生速度。去 [CUDA compute capability 表](https://developer.nvidia.com/cuda-gpus) 交叉比對你的硬體支援哪些指令。
+
+### 通用原則
+
+位元更少不代表推理更快。從權重格式到實際運算之間要經過硬體指令——如果指令不存在，軟體繞道永遠比用原生支援的大格式慢。
+
+## 結論
+
+DGX Spark（GB10/SM121）用戶的行動清單：
+
+1. **用 FP8，不要用 NVFP4。** FP8 快 32%，因為 SM121 有原生硬體支援。NVFP4 沒有。
+2. **升級到 driver 580.142。** FP8 白撿 4%，加上記憶體回報和 ISA fallback 修正。
+3. **用 vLLM，不要用 SGLang** — SM121 上的 NVFP4 模型，SGLang 直接 crash。FP8 走 vLLM 是測試過、穩定的路徑。
+4. **不要嘗試 patch 繞過去。** 把 SM121 加進 vLLM 的 `FP4_ARCHS` 會產生垃圾輸出。SGLang 的原生 NVFP4 路徑會 crash。限制在硬體。
+
+**什麼時候值得重新檢查：** vLLM 或 SGLang 宣布 SM121 原生 FP4 kernel，或 CUTLASS 4.x 出 SM121 FP4 支援（用 bit-manipulation 繞過缺失指令）。在那之前，FP8 53.8 tok/s 就是天花板。
+
+---
+
+*同系列文章：[Part 7 — Gemma 4 NVFP4 52 tok/s](/zh-TW/blog/dgx-spark-gemma4-26b-nvfp4-52-toks) · [Part 8 — vLLM vs Ollama](/zh-TW/blog/dgx-spark-vllm-vs-ollama-same-model) · [Part 14 — Gemma 4 全家桶](/zh-TW/blog/dgx-spark-gemma4-complete-guide) · [Part 18 — Scaffold 三模型遷移](/zh-TW/blog/swe-bench-scaffold-transfers-three-models)*

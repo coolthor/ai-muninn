@@ -1,0 +1,148 @@
+---
+title: "[Benchmark] NVFP4 Is a Trap on GB10: FP8 Wins by 32% (vLLM + SGLang Tested)"
+description: "NVFP4 should be faster than FP8 — fewer bits, less bandwidth. On DGX Spark's GB10 (SM121), it's 32% slower. Root cause: missing hardware instruction. Dual-engine proof with vLLM and SGLang."
+date: "2026-04-21"
+updatedAt: "2026-04-21"
+tags: ["NVFP4", "FP8", "DGX Spark", "GB10", "SM121", "vLLM", "SGLang", "Qwen 3.6", "benchmark", "quantization"]
+series: "DGX Spark"
+part: 19
+faq:
+  - q: "Why is NVFP4 slower than FP8 on DGX Spark GB10?"
+    a: "GB10's SM121 GPU lacks the cvt.rn.satfinite.e2m1x2.f32 PTX instruction for native FP4↔FP32 conversion. SM120 (RTX 5090) and SM100 (B200) have it in hardware. On SM121, NVFP4 either falls back to Marlin dequant (40.8 tok/s, -21%) or crashes. This is a silicon-level limitation — no driver or firmware update can fix it."
+  - q: "What's the fastest Qwen 3.6 inference speed on DGX Spark?"
+    a: "53.8 tok/s with Qwen 3.6-35B-A3B FP8 on vLLM 0.19.1 with NVIDIA driver 580.142. Upgrading from driver 580.126 gave a free +4% boost."
+  - q: "Does SGLang work on DGX Spark with Qwen 3.6?"
+    a: "Not reliably. SGLang 0.5.4 (spark image) doesn't recognize Qwen 3.6's architecture. SGLang 0.5.10 recognizes it but crashes on CUDA kernel execution with NVFP4. FP8 on SGLang was not tested because the NVFP4 crashes blocked the pipeline."
+  - q: "Should I use NVFP4 or FP8 on DGX Spark?"
+    a: "FP8. Always. NVFP4 on GB10 (SM121) is 21-32% slower due to hardware limitations, and SGLang NVFP4 crashes entirely. FP8 on vLLM 0.19.1 with driver 580.142 gives 53.8 tok/s — that's the ceiling for now."
+---
+
+import { TLDRCard } from "@/components/blog/TLDRCard";
+
+<TLDRCard>
+NVFP4 on DGX Spark's GB10 (SM121) is **32% slower** than FP8 — not faster. Root cause: SM121 lacks the `cvt.e2m1x2` hardware instruction that SM120 (RTX 5090) and SM100 (B200) have natively. Qwen 3.6-35B-A3B FP8 on vLLM hits **53.8 tok/s** (driver 580.142). NVFP4 on vLLM falls back to Marlin dequant at **40.8 tok/s**. SGLang NVFP4 crashes entirely. This is silicon — no driver update fixes it.
+</TLDRCard>
+
+<VideoEmbed src="/videos/dgx-spark-nvfp4-trap-gb10.mp4" />
+
+## White-Box Version: Why Smaller Numbers Aren't Always Faster
+
+[NVFP4](https://developer.nvidia.com/blog/introducing-nvfp4-for-efficient-and-accurate-low-precision-inference/) is NVIDIA's 4-bit floating point format — half the bits of FP8, so in theory it should move data faster and use less memory. On most Blackwell GPUs (RTX 5090, B200), it does. But DGX Spark uses a different chip — the GB10, codenamed SM121 — and this chip is missing a key instruction that makes FP4 math work at full speed.
+
+The result: FP4 on DGX Spark is actually slower than FP8. I tested two inference engines ([vLLM](https://github.com/vllm-project/vllm) and [SGLang](https://github.com/sgl-project/sglang)) to confirm this isn't a software problem. It's hardware. If you have a DGX Spark, use FP8 — it's 32% faster than NVFP4 and actually works.
+
+---
+
+## Preface
+
+[Part 7](/en/blog/dgx-spark-gemma4-26b-nvfp4-52-toks) showed NVFP4 running Gemma 4 at 52 tok/s on GB10. [Part 8](/en/blog/dgx-spark-vllm-vs-ollama-same-model) confirmed vLLM beats Ollama by 30% on the same model. Both articles used NVFP4 and everything looked fine.
+
+Then I tried [Qwen 3.6-35B-A3B](https://huggingface.co/Qwen/Qwen3.6-35B-A3B-FP8) — a model that ships with both NVFP4 and FP8 checkpoints — and the numbers didn't add up. NVFP4 was *slower*. So I spent a day testing every combination of engine, quantization format, and driver version to find out why.
+
+The answer is in the silicon.
+
+## 40.8 vs 53.8 tok/s: FP8 Beats NVFP4 by 32%
+
+All tests: Qwen 3.6-35B-A3B on DGX Spark (GB10, 128GB unified memory), single-user generation.
+
+| Engine | Quantization | Driver | tok/s | Notes |
+|--------|-------------|--------|-------|-------|
+| vLLM 0.19.1 | **FP8** | 580.142 | **53.8** | Best config |
+| vLLM 0.19.1 | **FP8** | 580.126 | 51.8 | Previous driver |
+| vLLM 0.19.1 | NVFP4 | 580.142 | 40.8 | Marlin fallback (-24%) |
+| SGLang 0.5.4 (spark) | NVFP4 | 580.142 | — | Model not recognized |
+| SGLang 0.5.10 | NVFP4 | 580.142 | — | CUDA kernel crash |
+| SGLang 0.5.10 + no CUDA graph | NVFP4 | 580.142 | — | OOM → crash |
+
+FP8 with the latest driver is the only configuration that both works and performs well.
+
+## Root Cause: SM121 Is Missing a Hardware Instruction
+
+The GB10 chip in DGX Spark is [SM121](https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#compute-capabilities). It's Blackwell architecture, but it's not the same Blackwell as RTX 5090 (SM120) or B200 (SM100).
+
+The critical difference: SM121 does not have the `cvt.rn.satfinite.e2m1x2.f32` [PTX instruction](https://docs.nvidia.com/cuda/parallel-thread-execution/index.html). This instruction converts between FP4 (e2m1) and FP32 in hardware — a single clock cycle on SM120/SM100.
+
+Without it, SM121 has two options:
+
+1. **Software emulation** — the driver added `cvt.e2m1x2` support in PTX 8.6+ (driver 580.142), but it runs through software emulation. NVIDIA's changelog confirms this is ~30x slower than native hardware execution.
+2. **Fallback path** — vLLM detects that SM121 is not in `FP4_ARCHS` and routes through Marlin kernels, which decompress FP4 weights to BF16 before computation. This is the 40.8 tok/s path.
+
+**This is a silicon-level limitation.** No driver update, no firmware flash, no software patch can add a missing transistor circuit. The instruction simply does not exist on this die.
+
+For comparison:
+
+| GPU | Compute Capability | Native FP4 | NVFP4 Performance |
+|-----|-------------------|------------|-------------------|
+| B200 | SM100 | ✅ Yes | Full speed |
+| RTX 5090 | SM120 | ✅ Yes | Full speed |
+| **DGX Spark GB10** | **SM121** | **❌ No** | **Marlin fallback or crash** |
+
+## SGLang: Three Attempts, Three Failures
+
+I tried SGLang because maybe vLLM's fallback path was the bottleneck. Maybe SGLang had a different NVFP4 kernel that could work on SM121. It didn't.
+
+**Attempt 1: SGLang 0.5.4 (spark image)**
+
+The `lmsysorg/sglang:spark` Docker image exists specifically for DGX Spark with SM121 patches. But it ships with transformers 4.57.1, which doesn't recognize Qwen 3.6's `qwen3_5_moe` architecture. Dead on arrival.
+
+**Attempt 2: SGLang 0.5.10 (latest)**
+
+Upgrading to the latest SGLang with transformers 5.3.0 fixed model recognition. The `TRITON_PTXAS_PATH=/usr/local/cuda/bin/ptxas` workaround resolved the `sm_121a` compilation error. The model loaded, selected the native NVFP4 path — and then crashed on the first CUDA kernel call.
+
+The DeltaNet hybrid attention in Qwen 3.6 combined with NVFP4 on SM121 hits a kernel that simply doesn't exist.
+
+**Attempt 3: SGLang 0.5.10 + `--disable-cuda-graph`**
+
+Disabling CUDA graphs to reduce memory overhead. OOM immediately, even after lowering `--mem-fraction-static`. The model needs the memory that CUDA graphs would normally manage.
+
+## Driver 580.142: A Free +4% for FP8
+
+While NVFP4 was a dead end, upgrading from driver 580.126 to 580.142 gave an unexpected FP8 boost:
+
+| Driver | FP8 tok/s | Change |
+|--------|-----------|--------|
+| 580.126 | 51.8 | baseline |
+| 580.142 | **53.8** | **+3.9%** |
+
+Key changes in [580.142](https://docs.nvidia.com/dgx/dgx-spark/release-notes.html):
+
+- **UMA memory reporting fix** — GB10's unified memory pressure values were reported incorrectly. This may explain some of the SGLang OOM issues on older drivers.
+- **SM121 ISA fallback fix** — the driver no longer falls back to SM80 (Ampere) instruction paths. FP8 kernels now run native SM121 code instead of compatibility mode.
+- **Status upgrade** — from Beta to Production/Recommended.
+
+If you're running a DGX Spark, update to 580.142. It's a free speed boost for FP8 workloads.
+
+## What Was Gained
+
+### Most Time-Consuming: SGLang Compatibility Chain
+
+The three SGLang attempts took the most time — not because each one was hard, but because each failure revealed the *next* dependency. Old transformers → upgrade → ptxas error → workaround → kernel crash → disable CUDA graph → OOM. Five links in a chain, each one requiring a full model load cycle (~3 minutes) to discover.
+
+### Transferable Diagnostic: Check Compute Capability Before Quantization Format
+
+Before choosing a quantization format, check what your GPU actually supports at the silicon level:
+
+```bash
+python3 -c "import torch; print(torch.cuda.get_device_capability())"
+```
+
+If the output is `(12, 1)` — that's SM121, and NVFP4 will not run at native speed. Cross-reference against the [CUDA compute capability table](https://developer.nvidia.com/cuda-gpus) to verify which instructions your hardware supports.
+
+### Universal Pattern
+
+Fewer bits does not mean faster inference. The path from weight format to actual computation passes through hardware instructions — and if the instruction doesn't exist, the software workaround will always be slower than a larger format with native support.
+
+## Conclusion
+
+For DGX Spark (GB10/SM121) owners:
+
+1. **Use FP8, not NVFP4.** FP8 is 32% faster because it has native hardware support on SM121. NVFP4 does not.
+2. **Update to driver 580.142.** Free +4% on FP8, plus fixes for memory reporting and ISA fallback.
+3. **Use vLLM, not SGLang** — for NVFP4 models on SM121, SGLang crashes. For FP8, vLLM is the tested, stable path.
+4. **Don't try to patch around it.** Adding SM121 to vLLM's `FP4_ARCHS` produces garbage output. SGLang's native NVFP4 path crashes. The limitation is hardware.
+
+**When to revisit:** If vLLM or SGLang announce SM121-native FP4 kernels, or if CUTLASS 4.x ships SM121 FP4 support via bit-manipulation workarounds. Until then, FP8 at 53.8 tok/s is the ceiling.
+
+---
+
+*Also in this series: [Part 7 — Gemma 4 NVFP4 at 52 tok/s](/en/blog/dgx-spark-gemma4-26b-nvfp4-52-toks) · [Part 8 — vLLM vs Ollama](/en/blog/dgx-spark-vllm-vs-ollama-same-model) · [Part 14 — Gemma 4 Complete Guide](/en/blog/dgx-spark-gemma4-complete-guide) · [Part 18 — Scaffold Transfers Three Models](/en/blog/swe-bench-scaffold-transfers-three-models)*
