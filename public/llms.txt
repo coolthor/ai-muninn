@@ -102,6 +102,10 @@ experimentation with real hardware and production systems.
   https://ai-muninn.com/en/blog/dgx-spark-nvfp4-trap-gb10-fp8-wins
   SM121 lacks native FP4 hardware instruction (cvt.e2m1x2). NVFP4 40.8 tok/s vs FP8 53.8 tok/s on Qwen 3.6. SGLang NVFP4 crashes entirely. Driver 580.142 gives free +4% FP8 boost.
 
+- [Part 21] TMMLU+ Paired Eval: Qwen 3.6 35B Sweeps Gemma 4 26B 51-of-51 on Traditional Chinese
+  https://ai-muninn.com/en/blog/tmmluplus-qwen-vs-gemma-traditional-chinese
+  22,690 multiple-choice questions, same harness, same DGX Spark. Qwen 75.07% vs Gemma 46.30%, Δ +28.77pp. Qwen wins all 51 paired subjects, including Taiwan-specific (geography_of_taiwan +41.9, traditional medicine +37.4). Both models flunk Taiwanese Hokkien at near-random levels — data scarcity, not model issue.
+
 ### Series: NemoClaw (NVIDIA's AI agent framework on DGX Spark)
 
 - [Part 1] NemoClaw Explained: NVIDIA's All-in-One AI Agent Framework for DGX Spark

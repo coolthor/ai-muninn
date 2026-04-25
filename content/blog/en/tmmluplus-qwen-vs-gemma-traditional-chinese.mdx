@@ -1,0 +1,176 @@
+---
+title: "[Benchmark] TMMLU+ Paired Eval: Qwen 3.6 35B Sweeps Gemma 4 26B 51-of-51 on Traditional Chinese"
+description: "Two MoE models on the same DGX Spark, same harness, same 22,690 questions. Qwen 3.6 35B-A3B scored 75.07%, Gemma 4 26B-A4B scored 46.30%. Qwen won every single one of the 51 subjects — including Taiwan-specific topics where I expected Gemma to win."
+date: "2026-04-25"
+updatedAt: "2026-04-25"
+tags: ["TMMLU+", "Traditional Chinese", "Qwen 3.6", "Gemma 4", "benchmark", "繁體中文", "DGX Spark", "vLLM", "lm-evaluation-harness"]
+series: "DGX Spark"
+part: 21
+faq:
+  - q: "What is TMMLU+ and why does it matter for Traditional Chinese?"
+    a: "TMMLU+ is a 22,690-question multiple-choice benchmark across 66 subjects, built by iKala specifically for Traditional Chinese (not Simplified). Subjects include Taiwan-specific content like geography_of_taiwan, taiwanese_hokkien, and tve_chinese_language. It's the closest thing to a benchmark that asks 'does this model actually understand Taiwan?'"
+  - q: "Did Qwen 3.6 really beat Gemma 4 on every subject?"
+    a: "Yes. Out of 51 paired subjects, Qwen 3.6 35B-A3B won all 51. The smallest gap was logic_reasoning (+8.6 percentage points) — still a clear win. The largest gap was culinary_skills (+43.5pp). Aggregate: Qwen 75.07% vs Gemma 46.30%, a 28.77 percentage-point spread."
+  - q: "Doesn't Google have more Traditional Chinese training data than Alibaba?"
+    a: "That was my prior too — I assumed Gemma would win Traditional Chinese (Qwen is Simplified-Chinese-trained, Google has been indexing Taiwan for two decades). Codex called me out during a /debate session for not having benchmark data to back up 'Gemma should be better at TC.' This run is the data. Even on Taiwan-specific subjects (geography_of_taiwan +41.9pp, traditional_chinese_medicine +37.4pp), Qwen wins decisively. The 'Google has TC corpus' assumption doesn't hold up against measurement."
+  - q: "What's the one subject where both models genuinely fail?"
+    a: "Taiwanese Hokkien (台語). Gemma scored 32.6%, Qwen scored 41.9% — both close to the 25% random baseline. Hokkien written form isn't standardized (POJ vs 漢羅 vs 全漢 vs 台羅), tokenizers fall back to byte-level, and high-quality written corpus probably totals only a few hundred MB. Fine-tuning won't fix this — it's a fundamental data scarcity problem."
+---
+
+import { TLDRCard } from "@/components/blog/TLDRCard";
+
+<TLDRCard>
+Two MoE models, one DGX Spark, 22,690 multiple-choice questions in Traditional Chinese. **Qwen 3.6 35B-A3B: 75.07%. Gemma 4 26B-A4B: 46.30%.** Qwen swept all 51 subjects. The "Google has more Traditional Chinese data" prior failed against measurement — even on Taiwan-specific topics like `geography_of_taiwan`, Qwen won by 41.9 percentage points. Both models flunked Taiwanese Hokkien at near-random levels.
+</TLDRCard>
+
+<VideoEmbed src="/videos/tmmluplus-qwen-vs-gemma-traditional-chinese.mp4" />
+
+## Plain-Language Version: A test that doesn't fake the answer
+
+[TMMLU+](https://huggingface.co/datasets/ikala/tmmluplus) is a Traditional Chinese exam built by [iKala](https://ikala.ai/). 22,690 multiple-choice questions across 66 subjects — Taiwan elementary school, high school, vocational, plus professional licenses (lawyer, doctor, accountant, vet). Scoring well requires actually understanding Traditional Chinese, Taiwan culture, and Taiwan-specific topics.
+
+I ran two open-source MoE models — Google's [Gemma 4 26B-A4B](https://huggingface.co/google/gemma-4-26B-A4B-it) and Alibaba's [Qwen 3.6 35B-A3B](https://huggingface.co/Qwen/Qwen3.6-35B-A3B) — on the same hardware, same harness, same questions. Both finished in about 3.6 hours each.
+
+The result wasn't close. Qwen scored 75%, Gemma scored 46%. Qwen won every single subject.
+
+The one place both models failed: Taiwanese Hokkien. They scored 33% and 42% — near the 25% random baseline. That's not a model problem; it's a data problem. Hokkien written form isn't standardized, and the public corpus is tiny.
+
+---
+
+## Preface
+
+My prior going in was that Qwen would do *worse* than Gemma on Traditional Chinese. Qwen is trained primarily on Simplified Chinese, and Google has been indexing the Taiwanese internet for two decades — Gemma should have the advantage. I'd never seen anyone benchmark this on the current generation, so it was a soft assumption.
+
+Then [Codex](https://github.com/openai/codex) pushed back during a `/debate` session: *you keep saying "Gemma should be better at TC" but you have no benchmark to back it up.*
+
+Fair. So I went and got the benchmark.
+
+---
+
+## Setup: lm-eval-harness + vLLM + DGX Spark
+
+```
+Hardware:    NVIDIA GB10 (DGX Spark), 128GB unified memory, ARM64 Grace
+Harness:     lm-evaluation-harness (EleutherAI)
+Backend:     local-completions API hitting vLLM Docker container
+Quantization: FP8 Dynamic (RedHatAI / Qwen native)
+Few-shot:    5
+Concurrency: 8
+Dataset:     ikala/tmmluplus (22,690 questions, 66 subjects)
+```
+
+```bash
+lm_eval \
+  --model local-completions \
+  --model_args base_url=http://localhost:8000/v1/completions,model=$MODEL,tokenizer=$PATH,num_concurrent=8 \
+  --tasks tmmluplus \
+  --num_fewshot 5 \
+  --output_path ~/tmmlu-runs/$MODEL \
+  --trust_remote_code
+```
+
+One pin: `datasets==2.21` is required because TMMLU+ ships a `tmmluplus.py` builder script, which `datasets>=4` dropped support for. If you hit `RuntimeError: Dataset scripts are no longer supported`, downgrade.
+
+---
+
+## Headline result: 75.07% vs 46.30%, no Gemma wins
+
+|                  | Gemma 4 26B-A4B | **Qwen 3.6 35B-A3B** | Δ |
+|------------------|-----------------|----------------------|---|
+| **Aggregate**    | 46.30%          | **75.07%**           | **+28.77** |
+| STEM             | 54.37%          | 77.89%               | +23.52 |
+| Humanities       | 41.07%          | 65.23%               | +24.16 |
+| Other            | 41.20%          | 72.14%               | +30.94 |
+| Social Sciences  | 50.77%          | 80.72%               | +29.95 |
+
+Of 51 paired subjects, Qwen won 51. Gemma won 0.
+
+For context against the (frozen since 2024) [official TMMLU+ leaderboard](https://huggingface.co/datasets/ikala/tmmluplus):
+
+| Model | TMMLU+ |
+|-------|--------|
+| GPT-5 | 88.60 |
+| **Qwen 3.6 35B-A3B (this run)** | **75.07** |
+| gpt-oss:120b | 69.14 |
+| Gemini-1.5-pro | 64.65 |
+| Qwen-72B (older Qwen) | 64.27 |
+| **Gemma 4 26B-A4B (this run)** | **46.30** |
+
+Qwen 3.6 35B-A3B with 3B active parameters beats Qwen-72B (72B dense) by 11 points. Gemma 4 26B sits below the older Qwen-72B by 18 points.
+
+---
+
+## Taiwan-specific subjects: where I expected Gemma to win
+
+My prior was: *Google indexes the Taiwanese internet. Gemma should know Taiwan-specific content better than a Mainland-trained Qwen.*
+
+The data:
+
+| Subject | Gemma | Qwen | Δ |
+|---------|-------|------|---|
+| geography_of_taiwan (台灣地理) | 40.8 | **82.7** | +41.9 |
+| tve_natural_sciences (高職自然) | 54.0 | **88.9** | +34.9 |
+| tve_design (高職設計) | 53.3 | **86.2** | +32.9 |
+| tve_chinese_language (高職國文) | 66.5 | **90.5** | +24.0 |
+| tve_mathematics (高職數學) | 29.3 | **46.7** | +17.3 |
+| traditional_chinese_medicine_clinical | 41.0 | **78.4** | +37.4 |
+| chinese_language_and_literature | 33.7 | **76.4** | +42.7 |
+
+Every Taiwan-specific subject I checked: Qwen wins by 17 to 42 percentage points. The "Google has more TC data" assumption doesn't survive contact with measurement.
+
+The mechanism is probably: Qwen's training corpus is large enough that even if it's primarily Simplified Chinese, the cross-lingual transfer to Traditional Chinese ends up stronger than whatever curated Traditional Chinese subset Google chose for Gemma. Volume beats curation when both are sloppy.
+
+---
+
+## The shared blind spot: Taiwanese Hokkien (台語)
+
+The one place both models genuinely fail:
+
+| Subject | Gemma | Qwen | Random baseline |
+|---------|-------|------|-----------------|
+| taiwanese_hokkien (台語) | 32.6 | 41.9 | 25.0 |
+
+Qwen still wins by 9.3 points, but at 41.9% it's only 17 points above random — not useful for any production task involving Hokkien.
+
+This isn't a fine-tuning problem you can solve with a weekend. The reasons:
+
+1. **Written form isn't standardized.** Hokkien gets written in POJ (romanized), 漢羅 (Hokkien-Hanzi mix), 全漢 (Hanzi-only), 台羅, or注音閩南語 — different orthographies, different communities.
+2. **Tokenizers don't have native Hokkien tokens.** Both Qwen and Gemma fall back to byte-level encoding for many Hokkien characters, which is token-inefficient.
+3. **Public corpus is tiny.** PTT 台語板, 台文戰線, 自由時報's台語 column, 台日大辭典 — total written Hokkien corpus is on the order of hundreds of megabytes. For a 35B model, that's not enough.
+
+If you need Hokkien capability, look at [Yentinglin's Taiwan-LLM family](https://huggingface.co/yentinglin/Llama-3-Taiwan-70B-Instruct), which has spent years curating Taiwanese corpora. A LoRA on top of Qwen 3.6 won't beat them — and trying to do it solo is reinventing a wheel that academics built better.
+
+---
+
+## What Was Gained
+
+### What cost the most time
+
+`datasets>=4` dropping loading-script support. The first run failed with `RuntimeError: Dataset scripts are no longer supported, but found tmmluplus.py`. Downgrading to `datasets==2.21` fixed it. If you're running any older HuggingFace dataset that ships a builder script, pin the dependency from the start.
+
+### Transferable diagnostic: paired eval is non-negotiable
+
+Single-model benchmark numbers are noise without a paired baseline. Qwen 3.6 35B-A3B at 75.07% sounds impressive. Gemma 4 26B-A4B at 46.30% sounds bad. But you only know which signal you're looking at when both ran on the same harness, same hardware, same day. Pairing also reveals what's a model property versus what's a benchmark structural artifact — useful when scores look surprising in either direction.
+
+### Universal pattern
+
+When your prior is "X should be better at Z because of training data composition," run the benchmark before acting on it. Training-corpus assumptions are usually inherited from someone else's intuition, not from a paired measurement on the current generation of models. My prior was off by 28 points.
+
+---
+
+## Conclusion
+
+Checklist if you're choosing a local model for Traditional Chinese work in April 2026:
+
+1. **Default to Qwen 3.6 35B-A3B FP8** for Traditional Chinese writing, blogging, debate. It runs at 3B active per token on a DGX Spark and beats Gemma by 28 percentage points on TMMLU+.
+2. **Use Gemma 4 26B-A4B for English coding agents** ([SWE-bench Lite 38.67%](/en/blog/swe-bench-lite-gemma4-26b-38-percent), audio multimodality, smaller VRAM footprint).
+3. **For Taiwanese Hokkien** — neither model is good enough. Use Yentinglin's Llama-3-Taiwan-70B-Instruct or accept the gap.
+4. **Run the paired benchmark before deciding.** "Common knowledge" about which model is better at Chinese hasn't been calibrated against the current generation. Mine was wrong by 28 points.
+
+Run config, full subject-level results, and the comparison script are in `~/tmmlu-runs/` on my GX10. The two `results_*.json` files weigh 30KB each and could be re-ran in 7 hours total on a single GB10.
+
+---
+
+*Also in this series:*
+- *[Part 17: SWE-bench Lite 38.67% with a 26B Local Model](/en/blog/swe-bench-lite-gemma4-26b-38-percent)*
+- *[Part 18: Same Scaffold, Three Models — 16% → 38% → 48% on SWE-bench Lite](/en/blog/swe-bench-scaffold-transfers-three-models)*

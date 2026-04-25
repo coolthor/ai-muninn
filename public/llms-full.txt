@@ -1,11 +1,653 @@
 # ai-muninn — Full Site Content
 # https://ai-muninn.com
-# Generated: 2026-04-21
-# Articles: 57
+# Generated: 2026-04-25
+# Articles: 59
 
 This file contains the full text of all articles on ai-muninn.com.
 It is intended for AI tools that need complete site context.
 For the article index only, see /llms.txt.
+
+---
+
+# [Benchmark] TMMLU+ Paired Eval: Qwen 3.6 35B Sweeps Gemma 4 26B 51-of-51 on Traditional Chinese
+URL: https://ai-muninn.com/en/blog/tmmluplus-qwen-vs-gemma-traditional-chinese
+Date: 2026-04-25
+Series: DGX Spark (Part 20)
+
+import { TLDRCard } from "@/components/blog/TLDRCard";
+
+
+Two MoE models, one DGX Spark, 22,690 multiple-choice questions in Traditional Chinese. **Qwen 3.6 35B-A3B: 75.07%. Gemma 4 26B-A4B: 46.30%.** Qwen swept all 51 subjects. The "Google has more Traditional Chinese data" prior failed against measurement — even on Taiwan-specific topics like `geography_of_taiwan`, Qwen won by 41.9 percentage points. Both models flunked Taiwanese Hokkien at near-random levels.
+
+
+<VideoEmbed src="/videos/tmmluplus-qwen-vs-gemma-traditional-chinese.mp4" />
+
+## Plain-Language Version: A test that doesn't fake the answer
+
+[TMMLU+](https://huggingface.co/datasets/ikala/tmmluplus) is a Traditional Chinese exam built by [iKala](https://ikala.ai/). 22,690 multiple-choice questions across 66 subjects — Taiwan elementary school, high school, vocational, plus professional licenses (lawyer, doctor, accountant, vet). Scoring well requires actually understanding Traditional Chinese, Taiwan culture, and Taiwan-specific topics.
+
+I ran two open-source MoE models — Google's [Gemma 4 26B-A4B](https://huggingface.co/google/gemma-4-26B-A4B-it) and Alibaba's [Qwen 3.6 35B-A3B](https://huggingface.co/Qwen/Qwen3.6-35B-A3B) — on the same hardware, same harness, same questions. Both finished in about 3.6 hours each.
+
+The result wasn't close. Qwen scored 75%, Gemma scored 46%. Qwen won every single subject.
+
+The one place both models failed: Taiwanese Hokkien. They scored 33% and 42% — near the 25% random baseline. That's not a model problem; it's a data problem. Hokkien written form isn't standardized, and the public corpus is tiny.
+
+---
+
+## Preface
+
+My prior going in was that Qwen would do *worse* than Gemma on Traditional Chinese. Qwen is trained primarily on Simplified Chinese, and Google has been indexing the Taiwanese internet for two decades — Gemma should have the advantage. I'd never seen anyone benchmark this on the current generation, so it was a soft assumption.
+
+Then [Codex](https://github.com/openai/codex) pushed back during a `/debate` session: *you keep saying "Gemma should be better at TC" but you have no benchmark to back it up.*
+
+Fair. So I went and got the benchmark.
+
+---
+
+## Setup: lm-eval-harness + vLLM + DGX Spark
+
+```
+Hardware:    NVIDIA GB10 (DGX Spark), 128GB unified memory, ARM64 Grace
+Harness:     lm-evaluation-harness (EleutherAI)
+Backend:     local-completions API hitting vLLM Docker container
+Quantization: FP8 Dynamic (RedHatAI / Qwen native)
+Few-shot:    5
+Concurrency: 8
+Dataset:     ikala/tmmluplus (22,690 questions, 66 subjects)
+```
+
+```bash
+lm_eval \
+  --model local-completions \
+  --model_args base_url=http://localhost:8000/v1/completions,model=$MODEL,tokenizer=$PATH,num_concurrent=8 \
+  --tasks tmmluplus \
+  --num_fewshot 5 \
+  --output_path ~/tmmlu-runs/$MODEL \
+  --trust_remote_code
+```
+
+One pin: `datasets==2.21` is required because TMMLU+ ships a `tmmluplus.py` builder script, which `datasets>=4` dropped support for. If you hit `RuntimeError: Dataset scripts are no longer supported`, downgrade.
+
+---
+
+## Headline result: 75.07% vs 46.30%, no Gemma wins
+
+|                  | Gemma 4 26B-A4B | **Qwen 3.6 35B-A3B** | Δ |
+|------------------|-----------------|----------------------|---|
+| **Aggregate**    | 46.30%          | **75.07%**           | **+28.77** |
+| STEM             | 54.37%          | 77.89%               | +23.52 |
+| Humanities       | 41.07%          | 65.23%               | +24.16 |
+| Other            | 41.20%          | 72.14%               | +30.94 |
+| Social Sciences  | 50.77%          | 80.72%               | +29.95 |
+
+Of 51 paired subjects, Qwen won 51. Gemma won 0.
+
+For context against the (frozen since 2024) [official TMMLU+ leaderboard](https://huggingface.co/datasets/ikala/tmmluplus):
+
+| Model | TMMLU+ |
+|-------|--------|
+| GPT-5 | 88.60 |
+| **Qwen 3.6 35B-A3B (this run)** | **75.07** |
+| gpt-oss:120b | 69.14 |
+| Gemini-1.5-pro | 64.65 |
+| Qwen-72B (older Qwen) | 64.27 |
+| **Gemma 4 26B-A4B (this run)** | **46.30** |
+
+Qwen 3.6 35B-A3B with 3B active parameters beats Qwen-72B (72B dense) by 11 points. Gemma 4 26B sits below the older Qwen-72B by 18 points.
+
+---
+
+## Taiwan-specific subjects: where I expected Gemma to win
+
+My prior was: *Google indexes the Taiwanese internet. Gemma should know Taiwan-specific content better than a Mainland-trained Qwen.*
+
+The data:
+
+| Subject | Gemma | Qwen | Δ |
+|---------|-------|------|---|
+| geography_of_taiwan (台灣地理) | 40.8 | **82.7** | +41.9 |
+| tve_natural_sciences (高職自然) | 54.0 | **88.9** | +34.9 |
+| tve_design (高職設計) | 53.3 | **86.2** | +32.9 |
+| tve_chinese_language (高職國文) | 66.5 | **90.5** | +24.0 |
+| tve_mathematics (高職數學) | 29.3 | **46.7** | +17.3 |
+| traditional_chinese_medicine_clinical | 41.0 | **78.4** | +37.4 |
+| chinese_language_and_literature | 33.7 | **76.4** | +42.7 |
+
+Every Taiwan-specific subject I checked: Qwen wins by 17 to 42 percentage points. The "Google has more TC data" assumption doesn't survive contact with measurement.
+
+The mechanism is probably: Qwen's training corpus is large enough that even if it's primarily Simplified Chinese, the cross-lingual transfer to Traditional Chinese ends up stronger than whatever curated Traditional Chinese subset Google chose for Gemma. Volume beats curation when both are sloppy.
+
+---
+
+## The shared blind spot: Taiwanese Hokkien (台語)
+
+The one place both models genuinely fail:
+
+| Subject | Gemma | Qwen | Random baseline |
+|---------|-------|------|-----------------|
+| taiwanese_hokkien (台語) | 32.6 | 41.9 | 25.0 |
+
+Qwen still wins by 9.3 points, but at 41.9% it's only 17 points above random — not useful for any production task involving Hokkien.
+
+This isn't a fine-tuning problem you can solve with a weekend. The reasons:
+
+1. **Written form isn't standardized.** Hokkien gets written in POJ (romanized), 漢羅 (Hokkien-Hanzi mix), 全漢 (Hanzi-only), 台羅, or注音閩南語 — different orthographies, different communities.
+2. **Tokenizers don't have native Hokkien tokens.** Both Qwen and Gemma fall back to byte-level encoding for many Hokkien characters, which is token-inefficient.
+3. **Public corpus is tiny.** PTT 台語板, 台文戰線, 自由時報's台語 column, 台日大辭典 — total written Hokkien corpus is on the order of hundreds of megabytes. For a 35B model, that's not enough.
+
+If you need Hokkien capability, look at [Yentinglin's Taiwan-LLM family](https://huggingface.co/yentinglin/Llama-3-Taiwan-70B-Instruct), which has spent years curating Taiwanese corpora. A LoRA on top of Qwen 3.6 won't beat them — and trying to do it solo is reinventing a wheel that academics built better.
+
+---
+
+## What Was Gained
+
+### What cost the most time
+
+`datasets>=4` dropping loading-script support. The first run failed with `RuntimeError: Dataset scripts are no longer supported, but found tmmluplus.py`. Downgrading to `datasets==2.21` fixed it. If you're running any older HuggingFace dataset that ships a builder script, pin the dependency from the start.
+
+### Transferable diagnostic: paired eval is non-negotiable
+
+Single-model benchmark numbers are noise without a paired baseline. Qwen 3.6 35B-A3B at 75.07% sounds impressive. Gemma 4 26B-A4B at 46.30% sounds bad. But you only know which signal you're looking at when both ran on the same harness, same hardware, same day. Pairing also reveals what's a model property versus what's a benchmark structural artifact — useful when scores look surprising in either direction.
+
+### Universal pattern
+
+When your prior is "X should be better at Z because of training data composition," run the benchmark before acting on it. Training-corpus assumptions are usually inherited from someone else's intuition, not from a paired measurement on the current generation of models. My prior was off by 28 points.
+
+---
+
+## Conclusion
+
+Checklist if you're choosing a local model for Traditional Chinese work in April 2026:
+
+1. **Default to Qwen 3.6 35B-A3B FP8** for Traditional Chinese writing, blogging, debate. It runs at 3B active per token on a DGX Spark and beats Gemma by 28 percentage points on TMMLU+.
+2. **Use Gemma 4 26B-A4B for English coding agents** ([SWE-bench Lite 38.67%](/en/blog/swe-bench-lite-gemma4-26b-38-percent), audio multimodality, smaller VRAM footprint).
+3. **For Taiwanese Hokkien** — neither model is good enough. Use Yentinglin's Llama-3-Taiwan-70B-Instruct or accept the gap.
+4. **Run the paired benchmark before deciding.** "Common knowledge" about which model is better at Chinese hasn't been calibrated against the current generation. Mine was wrong by 28 points.
+
+Run config, full subject-level results, and the comparison script are in `~/tmmlu-runs/` on my GX10. The two `results_*.json` files weigh 30KB each and could be re-ran in 7 hours total on a single GB10.
+
+---
+
+*Also in this series:*
+- *[Part 17: SWE-bench Lite 38.67% with a 26B Local Model](/en/blog/swe-bench-lite-gemma4-26b-38-percent)*
+- *[Part 18: Same Scaffold, Three Models — 16% → 38% → 48% on SWE-bench Lite](/en/blog/swe-bench-scaffold-transfers-three-models)*
+
+---
+
+# [Hands-On] Making NVFP4 17% Faster on GB10 with a Triton FP8 Bypass
+URL: https://ai-muninn.com/en/blog/dgx-spark-nvfp4-fp8-triton-patch
+Date: 2026-04-22
+Series: DGX Spark (Part 20)
+
+import { TLDRCard } from "@/components/blog/TLDRCard";
+
+
+[Part 19](/en/blog/dgx-spark-nvfp4-trap-gb10-fp8-wins) showed NVFP4 hits a Marlin BF16 fallback on GB10, capping at 40.8 tok/s. This post fights back: a Triton kernel dequants NVFP4 → FP8, then runs on FP8 tensor cores. Result: **47.6 tok/s (+17%)**. Only 12% behind native FP8's 53.8. Monkey-patches vLLM with no source changes. Full code included.
+
+
+## The Setup: Hardware Won't Help, So Software Must
+
+[Last time](/en/blog/dgx-spark-nvfp4-trap-gb10-fp8-wins) we discovered that GB10 (SM121) lacks the FP4 hardware instruction `cvt.rn.satfinite.e2m1x2.f32`. NVFP4 falls back to Marlin's BF16 dequant path — 40.8 tok/s, 32% slower than FP8.
+
+The conclusion was "just use FP8." But that assumes an FP8 checkpoint exists.
+
+Here's the key insight: **GB10 has no FP4 tensor cores, but it does have FP8 tensor cores.** Can we dequant NVFP4 weights to FP8 and use the FP8 hardware instead?
+
+Yes.
+
+---
+
+## What Marlin Wastes
+
+vLLM's NVFP4 path on SM121:
+
+```
+NVFP4 weights → Marlin dequant → BF16 → BF16 GEMM
+```
+
+Marlin targets SM75+ compatibility, so it dequants to BF16. But on GB10, FP8 tensor cores are **1.6–4x faster** than BF16 for the same matrix sizes. Marlin leaves that performance on the table.
+
+Our path:
+
+```
+NVFP4 weights → Triton dequant → FP8 → FP8 tensor core GEMM
+```
+
+## The NVFP4 Dequant Formula
+
+NVFP4 (compressed-tensors format) stores three tensors per layer:
+
+| Tensor | Type | Shape |
+|--------|------|-------|
+| `weight_packed` | uint8 | (N, K/2) — two FP4 values per byte |
+| `weight_scale` | float8_e4m3fn | (N, K/16) — per-group block scale |
+| `weight_global_scale` | float32 | (1,) — per-tensor global scale |
+
+FP4 E2M1 has exactly 16 possible values:
+
+```
+0, ±0.5, ±1.0, ±1.5, ±2.0, ±3.0, ±4.0, ±6.0
+```
+
+The dequant formula:
+
+```
+value = fp4_lut[nibble] × block_scale ÷ global_scale
+```
+
+**Gotcha**: `global_scale` stores the *quantization* scale (not the dequant scale), so you **divide** by it. I got this wrong on the first attempt — dequanted values hit ±100 million, got clamped to FP8's ±448 range, and produced garbage.
+
+## The Triton Kernel
+
+FP4 E2M1 → FP8 E4M3 is a lookup table + scale multiply — ideal for GPU parallelism:
+
+```python
+@triton.jit
+def _nvfp4_dequant_to_fp8_kernel(
+    packed_ptr, scale_ptr, global_scale_ptr, out_ptr,
+    K, K_packed, n_scale_cols, group_size, BLOCK_K: tl.constexpr,
+):
+    row = tl.program_id(0)
+    col_offsets = tl.program_id(1) * BLOCK_K + tl.arange(0, BLOCK_K)
+
+    global_scale_inv = 1.0 / tl.load(global_scale_ptr)
+    packed = tl.load(packed_ptr + row * K_packed + col_offsets, ...)
+
+    # Unpack two FP4 values per byte
+    low_nibble = packed & 0x0F
+    high_nibble = (packed >> 4) & 0x0F
+
+    # LUT decode + sign handling
+    low_val = fp4_lut_decode(low_nibble)
+    high_val = fp4_lut_decode(high_nibble)
+
+    # Apply scales
+    low_val *= block_scale * global_scale_inv
+    high_val *= block_scale * global_scale_inv
+
+    # Store as FP8 E4M3
+    tl.store(out_ptr + ..., low_val.to(tl.float8e4nv), ...)
+```
+
+The full kernel is ~80 lines of Triton. No CUDA, no CUTLASS templates.
+
+## Micro-Benchmarks
+
+Tested with real Qwen 3.6-35B-A3B NVFP4 weights on GB10.
+
+### Dequant Speed
+
+| Method | Time | Speedup |
+|--------|------|---------|
+| Python FP4→BF16 (simulating Marlin) | 0.226 ms | baseline |
+| **Triton FP4→FP8** | **0.010 ms** | **23x** |
+
+### Single-Layer End-to-End (dequant + GEMM, batch=32)
+
+| Path | Time | Speedup |
+|------|------|---------|
+| A: FP4→BF16 + BF16 GEMM | 0.229 ms | baseline |
+| **B: Triton FP4→FP8 + FP8 GEMM** | **0.060 ms** | **3.8x** |
+| C: Pure FP8 GEMM (ceiling) | 0.029 ms | 7.9x |
+
+The Triton dequant itself is 0.01ms — essentially free. The gap to ceiling is activation FP8 quantization overhead.
+
+## Integrating with vLLM
+
+No source modifications. A monkey-patch replaces two methods on `MarlinNvFp4LinearKernel`:
+
+**`process_weights_after_loading`**: Skip Marlin's repack. Instead, run the Triton kernel once to convert all FP4 weights to FP8. Store the result as `layer._fp8_weight`. Free the original FP4 tensors to reclaim VRAM.
+
+**`apply_weights`**: Quantize activations to FP8, then call `torch._scaled_mm` for the FP8 GEMM. No Marlin involved.
+
+**Launch**: Set `VLLM_NVFP4_GEMM_BACKEND=marlin` to force vLLM to select the Marlin kernel (which our patch intercepts). Use a wrapper script to apply the patch before model loading.
+
+Two pitfalls we hit:
+
+- **`_scaled_mm` matrix layout**: The B matrix must be column-major. Store `(N, K)` contiguous, `.t()` at runtime gives the col-major `(K, N)` view.
+- **`torch.compile` compatibility**: Use pure torch ops for activation quantization (not vLLM custom ops) so the inductor can trace and fuse the graph.
+
+## Result: 47.6 tok/s
+
+Qwen 3.6-35B-A3B NVFP4, DGX Spark, vLLM 0.19.1, driver 580.142.
+
+| Approach | tok/s | vs Marlin |
+|----------|-------|-----------|
+| Marlin BF16 fallback (stock) | 40.8 | baseline |
+| FlashInfer CUTLASS (vLLM 0.19 default) | 42.5 | +4.2% |
+| **Triton FP8 patch** | **47.6** | **+16.7%** |
+| Native FP8 (FP8 checkpoint) | 53.8 | +31.9% |
+
+**NVFP4 goes from 40.8 → 47.6 tok/s, a 17% speedup.** The gap to native FP8 shrinks from 32% to 12%.
+
+## Where the Last 12% Lives
+
+Three sources:
+
+1. **Dequant precision loss**: FP4 → FP8 conversion isn't as precise as direct FP8 quantization from BF16/FP32. The original FP8 model was carefully quantized; our path adds an extra conversion step.
+
+2. **Activation quantization overhead**: Every forward pass quantizes activations from BF16 to FP8. `torch.compile` fuses this, but it's not zero-cost.
+
+3. **No fused kernel**: A CUTLASS-level fused dequant+GEMM would dequant in shared memory while computing — eliminating the intermediate FP8 tensor entirely. That's a 1–2 week engineering effort requiring CUTLASS 3.x template metaprogramming.
+
+## When to Use This
+
+**Use it**: Model only ships NVFP4, no FP8 checkpoint exists, you're on DGX Spark and want more than 40.8 tok/s.
+
+**Skip it**: FP8 checkpoint available. Native FP8 = 53.8 tok/s, always faster than the bypass.
+
+## Conclusion
+
+Part 19 said "NVFP4 is a trap on GB10, use FP8." Part 20 amends that: **NVFP4 is recoverable on GB10, with a ceiling.**
+
+A 30-line Triton kernel plus a monkey-patch, built in an afternoon, delivers 17% more throughput. No vLLM source changes, no CUDA, no waiting for upstream fixes.
+
+If you're running NVFP4 models on DGX Spark, the patch works today. If you want to contribute to vLLM, here's a clear direction: replace the BF16 Marlin fallback with FP8 tensor cores on SM121.
+
+## Full Code
+
+Two files. `nvfp4_fp8_patch.py` is the core patch, `serve_nvfp4_fp8.py` is the launch wrapper.
+
+### nvfp4_fp8_patch.py
+
+```python
+"""
+Monkey-patch vLLM's NVFP4 Marlin fallback to use Triton FP4→FP8 dequant + FP8 GEMM.
+For NVIDIA GB10 (SM121) which has FP8 tensor cores but no FP4 tensor cores.
+
+Intercepts two methods:
+  - process_weights_after_loading: skip Marlin repack, convert to FP8 via Triton
+  - apply_weights: FP8 GEMM via torch._scaled_mm
+
+Prerequisites:
+  - vLLM 0.19+
+  - VLLM_NVFP4_GEMM_BACKEND=marlin (force Marlin so our patch intercepts it)
+  - TRITON_PTXAS_PATH=/usr/local/cuda/bin/ptxas (Triton compilation on SM121)
+"""
+
+import torch
+import triton
+import triton.language as tl
+import logging
+import sys
+
+logger = logging.getLogger("nvfp4_fp8_patch")
+
+
+# ============================================================
+# Triton kernel: NVFP4 packed uint8 → FP8 E4M3
+#
+# Each byte holds 2 FP4 E2M1 values (low 4 bits + high 4 bits).
+# FP4 E2M1 has only 16 possible values: 0, ±0.5, ±1, ±1.5, ±2, ±3, ±4, ±6
+# We decode via LUT, multiply by block scale, divide by global scale.
+#
+# Dequant formula: value = fp4_lut[nibble] × block_scale ÷ global_scale
+# Note: global_scale stores the quantization scale — divide, don't multiply!
+# ============================================================
+
+@triton.jit
+def _nvfp4_dequant_to_fp8_kernel(
+    packed_ptr,        # input: uint8 packed weights (N, K/2)
+    scale_ptr,         # input: float8_e4m3fn block scales (N, K/group_size)
+    global_scale_ptr,  # input: float32 global scale (1,)
+    out_ptr,           # output: float8_e4m3fn (N, K)
+    K: tl.constexpr,
+    K_packed: tl.constexpr,     # K // 2
+    n_scale_cols: tl.constexpr, # K // group_size
+    group_size: tl.constexpr,   # typically 16
+    BLOCK_K: tl.constexpr,      # tile size
+):
+    row = tl.program_id(0)
+    col_block = tl.program_id(1)
+    col_offsets = col_block * BLOCK_K + tl.arange(0, BLOCK_K)
+    mask = col_offsets < K_packed
+
+    # global_scale stores quantize scale; invert for dequant
+    global_scale_inv = 1.0 / tl.load(global_scale_ptr)
+
+    # Load packed bytes
+    packed = tl.load(packed_ptr + row * K_packed + col_offsets, mask=mask, other=0).to(tl.uint8)
+
+    # Split low and high nibbles
+    low_nibble = packed & 0x0F
+    high_nibble = (packed >> 4) & 0x0F
+
+    # Separate sign bit (bit 3) and magnitude bits (bits 0-2)
+    low_sign = ((low_nibble >> 3) & 1).to(tl.float32)
+    low_mag = (low_nibble & 0x07).to(tl.uint8)
+    high_sign = ((high_nibble >> 3) & 1).to(tl.float32)
+    high_mag = (high_nibble & 0x07).to(tl.uint8)
+
+    # FP4 E2M1 LUT: magnitude index → float value
+    # 0→0, 1→0.5, 2→1.0, 3→1.5, 4→2.0, 5→3.0, 6→4.0, 7→6.0
+    low_val = tl.where(low_mag == 0, 0.0,
+              tl.where(low_mag == 1, 0.5,
+              tl.where(low_mag == 2, 1.0,
+              tl.where(low_mag == 3, 1.5,
+              tl.where(low_mag == 4, 2.0,
+              tl.where(low_mag == 5, 3.0,
+              tl.where(low_mag == 6, 4.0, 6.0)))))))
+    low_val = tl.where(low_sign > 0.5, -low_val, low_val)
+
+    high_val = tl.where(high_mag == 0, 0.0,
+               tl.where(high_mag == 1, 0.5,
+               tl.where(high_mag == 2, 1.0,
+               tl.where(high_mag == 3, 1.5,
+               tl.where(high_mag == 4, 2.0,
+               tl.where(high_mag == 5, 3.0,
+               tl.where(high_mag == 6, 4.0, 6.0)))))))
+    high_val = tl.where(high_sign > 0.5, -high_val, high_val)
+
+    # Compute block scale indices
+    actual_col_low = col_offsets * 2
+    actual_col_high = col_offsets * 2 + 1
+
+    block_scale_low = tl.load(
+        scale_ptr + row * n_scale_cols + actual_col_low // group_size,
+        mask=actual_col_low < K, other=0.0).to(tl.float32)
+    block_scale_high = tl.load(
+        scale_ptr + row * n_scale_cols + actual_col_high // group_size,
+        mask=actual_col_high < K, other=0.0).to(tl.float32)
+
+    # Dequant + clamp to FP8 E4M3 range (±448)
+    low_val = tl.minimum(tl.maximum(low_val * block_scale_low * global_scale_inv, -448.0), 448.0)
+    high_val = tl.minimum(tl.maximum(high_val * block_scale_high * global_scale_inv, -448.0), 448.0)
+
+    # Write FP8 output
+    tl.store(out_ptr + row * K + actual_col_low, low_val.to(tl.float8e4nv), mask=actual_col_low < K)
+    tl.store(out_ptr + row * K + actual_col_high, high_val.to(tl.float8e4nv), mask=actual_col_high < K)
+
+
+def nvfp4_to_fp8(weight_packed, weight_scale, weight_global_scale):
+    """Convert NVFP4 packed weights to FP8 E4M3 via Triton kernel."""
+    N, K_packed = weight_packed.shape
+    K = K_packed * 2
+    n_scale_cols = weight_scale.shape[1]
+    group_size = K // n_scale_cols
+
+    out = torch.empty(N, K, device=weight_packed.device, dtype=torch.float8_e4m3fn)
+    BLOCK_K = 256
+    grid = (N, triton.cdiv(K_packed, BLOCK_K))
+
+    _nvfp4_dequant_to_fp8_kernel[grid](
+        weight_packed, weight_scale, weight_global_scale, out,
+        K=K, K_packed=K_packed,
+        n_scale_cols=n_scale_cols, group_size=group_size,
+        BLOCK_K=BLOCK_K,
+    )
+    return out
+
+
+# ============================================================
+# Replacement methods for vLLM's MarlinNvFp4LinearKernel
+# ============================================================
+
+def _patched_process_weights(self, layer: torch.nn.Module) -> None:
+    """Skip Marlin repack. Convert NVFP4 → FP8 once at load time.
+
+    Frees original FP4 weights after conversion to save VRAM.
+    Stores FP8 weights in layer._fp8_weight for runtime use.
+    """
+    logger.warning_once(
+        "[nvfp4_fp8_patch] SM121 detected. Skipping Marlin repack, "
+        "will use Triton FP4→FP8 dequant + FP8 tensor core GEMM."
+    )
+
+    weight_packed = layer.weight.data           # uint8 (N, K/2)
+    weight_scale = layer.weight_scale.data      # float8_e4m3fn (N, K/group)
+    weight_global_scale = layer.weight_global_scale.data  # float32
+
+    # One-time dequant: NVFP4 → FP8
+    w_fp8 = nvfp4_to_fp8(weight_packed, weight_scale, weight_global_scale)
+
+    # Store as (N, K) contiguous. At runtime, .t() produces a col-major
+    # (K, N) view — required by torch._scaled_mm for the B matrix.
+    layer._fp8_weight = torch.nn.Parameter(w_fp8.contiguous(), requires_grad=False)
+    layer._fp8_w_scale = torch.nn.Parameter(
+        torch.ones(1, 1, device=w_fp8.device, dtype=torch.float32),
+        requires_grad=False,
+    )
+
+    # Free original FP4 weights to reclaim VRAM
+    layer.weight = torch.nn.Parameter(
+        torch.empty(0, dtype=torch.uint8, device=weight_packed.device),
+        requires_grad=False,
+    )
+    layer.weight_scale = torch.nn.Parameter(
+        torch.empty(0, dtype=torch.float8_e4m3fn, device=weight_scale.device),
+        requires_grad=False,
+    )
+
+    logger.info(
+        f"[nvfp4_fp8_patch] Pre-converted layer to FP8: "
+        f"{weight_packed.shape} → {w_fp8.shape}, "
+        f"weight range: [{w_fp8.float().min():.4f}, {w_fp8.float().max():.4f}]"
+    )
+
+
+def _patched_apply_weights(self, layer, x, bias=None):
+    """FP8 tensor core GEMM using pre-converted weights.
+
+    Activation quantization uses pure torch ops so torch.compile/inductor
+    can trace and fuse the graph (vLLM custom ops break inductor here).
+    """
+    orig_shape = x.shape
+    x_2d = x.reshape(-1, orig_shape[-1])
+
+    # Activation → FP8 (per-tensor dynamic quantization)
+    amax = x_2d.float().abs().amax()
+    a_scale = (amax / 448.0).clamp(min=1e-12)
+    x_fp8 = (x_2d.float() / a_scale).clamp(-448, 448).to(torch.float8_e4m3fn)
+    a_scale = a_scale.reshape(1, 1)
+
+    # FP8 GEMM: (M, K) @ (K, N) → (M, N)
+    out = torch._scaled_mm(
+        x_fp8,
+        layer._fp8_weight.t(),  # (N,K).t() = col-major (K,N)
+        scale_a=a_scale,
+        scale_b=layer._fp8_w_scale,
+        out_dtype=x.dtype,
+    )
+
+    if bias is not None:
+        out = out + bias
+
+    return out.reshape(*orig_shape[:-1], out.shape[-1])
+
+
+# ============================================================
+# Patch installation: detect SM121, replace Marlin methods
+# ============================================================
+
+_patched = False
+
+def patch():
+    """Install the monkey-patch. Only activates on SM121 (GB10)."""
+    global _patched
+    if _patched:
+        return True
+
+    if torch.cuda.is_available():
+        cap = torch.cuda.get_device_capability()
+        if cap != (12, 1):
+            logger.info(f"SM{cap[0]}{cap[1]} detected, FP8 patch not needed")
+            return False
+
+    try:
+        from vllm.model_executor.kernels.linear.nvfp4.marlin import (
+            MarlinNvFp4LinearKernel,
+        )
+        MarlinNvFp4LinearKernel.process_weights_after_loading = _patched_process_weights
+        MarlinNvFp4LinearKernel.apply_weights = _patched_apply_weights
+
+        _patched = True
+        logger.warning(
+            "[nvfp4_fp8_patch] Installed! MarlinNvFp4LinearKernel now uses "
+            "pre-converted FP8 weights + FP8 tensor core GEMM."
+        )
+        return True
+    except ImportError as e:
+        logger.error(f"Failed to patch: {e}")
+        return False
+```
+
+### serve_nvfp4_fp8.py
+
+```python
+"""
+Launch wrapper: install FP8 patch, then start vllm serve.
+
+The patch runs at import time (outside __main__ guard) so spawned workers
+also get patched. Only the parent process calls vllm_main().
+
+Environment variables:
+  MODEL_PATH     Model path (default: /model)
+  PORT           API port (default: 8000)
+  MAX_MODEL_LEN  Max context length (default: 4096)
+  GPU_MEM_UTIL   GPU memory utilization (default: 0.90)
+
+Docker usage:
+  docker run --gpus all \
+    -e VLLM_NVFP4_GEMM_BACKEND=marlin \
+    -e TRITON_PTXAS_PATH=/usr/local/cuda/bin/ptxas \
+    -e MODEL_PATH=/model \
+    -v /path/to/nvfp4/model:/model \
+    -v /path/to/scripts:/scripts \
+    --entrypoint python3 <vllm-image> /scripts/serve_nvfp4_fp8.py
+"""
+import sys
+import os
+import logging
+
+# Patch at import time so spawned workers inherit it
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import nvfp4_fp8_patch
+nvfp4_fp8_patch.patch()
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO,
+                        format="%(asctime)s %(name)s %(levelname)s %(message)s")
+
+    model_path = os.environ.get("MODEL_PATH", "/model")
+    port = os.environ.get("PORT", "8000")
+    max_model_len = os.environ.get("MAX_MODEL_LEN", "4096")
+    gpu_mem = os.environ.get("GPU_MEM_UTIL", "0.90")
+
+    sys.argv = [
+        "vllm", "serve", model_path,
+        "--port", port,
+        "--max-model-len", max_model_len,
+        "--gpu-memory-utilization", gpu_mem,
+        "--trust-remote-code",
+    ]
+
+    from vllm.entrypoints.cli.main import main as vllm_main
+    vllm_main()
+```
+
+---
+
+*Series: [Part 19 — NVFP4 Is a Trap](/en/blog/dgx-spark-nvfp4-trap-gb10-fp8-wins) · [Part 14 — Gemma 4 Complete Guide](/en/blog/dgx-spark-gemma4-complete-guide) · [Part 8 — vLLM vs Ollama](/en/blog/dgx-spark-vllm-vs-ollama-same-model)*
 
 ---
 
