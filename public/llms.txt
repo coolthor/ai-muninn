@@ -265,6 +265,10 @@ A separate listicle-format series for non-technical Traditional Chinese readers.
   https://ai-muninn.com/zh-TW/blog/ai-ask-right-express-3-openers
   AI 第一句問得不好，後面追多少都是補洞。三個開場白任選一個用：角色扮演、講清情境、目標導向。文末有 copy-paste prompt 範本。
 
+- [Part 3] ChatGPT、Claude、Gemini 30 秒選好你該用哪個
+  https://ai-muninn.com/zh-TW/blog/ai-ask-right-express-pick-ai-30s
+  三個主流 AI 各有強項：第一次接觸選 ChatGPT、寫長文選 Claude、用 Google Workspace 選 Gemini。文末有對照表 + 30 秒決策流程。
+
 ## Citation Policy
 
 Content may be cited and quoted freely with attribution to ai-muninn.com.
