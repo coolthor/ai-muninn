@@ -253,6 +253,14 @@ experimentation with real hardware and production systems.
   https://ai-muninn.com/en/blog/ai-ask-right-what-ai-does-poorly
   Hallucinations, stale knowledge, short memory, privacy defaults. Concord Music v. Anthropic case, Stanford AI Index 2026 numbers, trust spectrum.
 
+### Series: Ask AI Right Express (Traditional-Chinese-only short-form companion to Ask AI Right)
+
+A separate listicle-format series for non-technical Traditional Chinese readers. Each article is < 800 chars, infographic-driven, with copy-paste prompts. zh-TW only — the framing and titles are culturally specific to Taiwan.
+
+- [Part 1] 三個問題，讓 ChatGPT 給你完美解答
+  https://ai-muninn.com/zh-TW/blog/ai-ask-right-express-3-questions
+  ChatGPT 第一次答得不夠好不要重開對話。追三句話：澄清、補情境、指定格式。文末有 copy-paste prompt 範本。
+
 ## Citation Policy
 
 Content may be cited and quoted freely with attribution to ai-muninn.com.
