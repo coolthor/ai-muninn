@@ -1,0 +1,173 @@
+---
+title: "[Benchmark] 拿掉拒絕的 Qwen 3.6 35B 繁中能力損 1.85 分——但信託實務掉 7.7 分"
+description: "把 huihui-ai 的 abliterated 版本 Qwen 3.6 35B 丟進 Part 21 同一套 TMMLU+ 測下去。總分從 75.07% 滑到 73.22%。但代價分布不平均：規範性題目（信託 −7.7、行政法 −7.1）失血最重，純邏輯反而變好。台語也變更差——abliteration 不是資料缺乏的解藥。"
+date: "2026-04-26"
+updatedAt: "2026-04-26"
+tags: ["TMMLU+", "abliteration", "繁體中文", "Qwen 3.6", "uncensored", "huihui-ai", "DGX Spark", "vLLM"]
+series: "DGX Spark"
+part: 22
+faq:
+  - q: "Abliteration 是什麼？為什麼要用？"
+    a: "Abliteration 是訓練後的權重微調手術，把模型「想拒絕」對應的方向中和掉，不需要 fine-tune 資料。出來的模型會照指令做事，不再婉拒。常見場景：寫小說、需要直白回饋、安全研究、聊天時懶得被 alignment 打斷。"
+  - q: "Abliteration 會把繁中能力打爛嗎？"
+    a: "不會。TMMLU+ 總分從 75.07% 滑到 73.22%，差 1.85 個百分點。即使這樣，abliterated 版本還是贏 Gemma 4 26B 26.92 分。代價真實，但比模型彼此的差距小很多。"
+  - q: "Abliteration 在哪些科目最傷？"
+    a: "規範性、權威性題目最慘：信託實務（−7.7）、行政法（−7.1）、反洗錢（−6.7）。這類題目的「正解」就是「保守、合規的法律答案」，模型原本傾向選保守答案，這個傾向被 abliteration 拿掉就答錯了。"
+  - q: "有什麼科目反而變好？"
+    a: "純邏輯跟數學略好：logic_reasoning（+2.9）、junior_math_exam（+1.7）、junior_chinese_exam（+1.1）。一個猜想：abliteration 順手把思考中段的猶豫（「另一方面」「也要考慮」）一起拿掉，純推理路徑變乾淨。"
+  - q: "為什麼台語反而更差？"
+    a: "台語從 41.86% 掉到 37.21%（−4.65pp）。這個盲點跟拒絕無關——是訓練資料本身不存在（書寫沒標準、公開語料總共幾百 MB）。Abliteration 只是擾動權重，模型沒學過的領域，擾動就是純噪音。沒有「鎖」可以解。"
+---
+
+import { TLDRCard } from "@/components/blog/TLDRCard";
+
+<TLDRCard>
+跟 Part 21 一樣的 harness、一樣的 DGX Spark、一樣 22,690 題——這次換成 **abliterated** 的 Qwen 3.6 35B。總分 **75.07% → 73.22%，掉 1.85 分**。但代價不平均：規範性題目失血（信託 −7.7、行政法 −7.1、反洗錢 −6.7），純邏輯反而略好（logic_reasoning +2.9、junior_math +1.7）。台語還變更差——abliteration 解不了資料缺乏。即使損了 1.85 分，abliterated 還是在繁中贏 Gemma **+26.92pp**。
+</TLDRCard>
+
+<VideoEmbed src="/videos/tmmluplus-qwen-abliterated-cost.mp4" />
+
+## 白話版：拿掉安全濾鏡要付什麼代價？
+
+[Part 21](/zh-TW/blog/tmmluplus-qwen-vs-gemma-traditional-chinese) 跑出來的結論是：Qwen 3.6 35B 在繁中 benchmark 贏 Gemma 4 26B 28 分。但原版 Qwen 還是會婉拒、加免責聲明——日常寫作沒差，寫小說、做安全研究、想坦率聊天就煩。
+
+社群的解法叫 **abliteration**：手術式地調整模型權重，把「想拒絕」這個傾向拿掉，不用重新訓練。常見的版本之一是 **huihui-ai** 出的。
+
+那能力會掉多少？我把同一套繁中 benchmark 跑下去。結果：總分只掉 2 分——但**分布不平均**。**信託、行政法、反洗錢**這類題目掉 6 到 8 分。**純推理**反而漲 1 到 3 分。一個合理猜想：abliteration 動到的是「預設選保守答案」這個傾向，所以合規題受傷、純邏輯不受影響、甚至略好。但這只是這次跑出來的分布，當作觀察就好，不是定論。
+
+abliteration **沒**修好的東西：台語。它變**更差**。台語盲點本來就跟 safety filter 無關，是訓練資料本身就不存在。
+
+---
+
+## 前言
+
+[Part 21](/zh-TW/blog/tmmluplus-qwen-vs-gemma-traditional-chinese) 比的是 Gemma 4 26B 跟 Qwen 3.6 35B 在 TMMLU+ 的差距。Qwen 51 個科目全勝，總分差 28.77pp。結論：繁中工作直接選 Qwen。
+
+但那篇的 Qwen 是原版，alignment hedging 還在。實際在地端用 LLM——寫東西、需要銳利的回饋、安全研究、坦率聊天——多數人會去抓 abliterated 變體。下一個自然的問題：**abliteration 究竟要付多少能力代價？**
+
+同 harness、同機器、同 22,690 題。換一個 model 而已。
+
+---
+
+## Setup：跟 Part 21 一樣，只換 model
+
+```
+硬體:        NVIDIA GB10（DGX Spark）
+Harness:    lm-evaluation-harness
+Backend:    local-completions API 打 vLLM
+Few-shot:   5
+Concurrency: 8
+Dataset:    ikala/tmmluplus
+模型:       huihui-ai/Huihui-Qwen3.6-35B-A3B-abliterated（BF16, 67 GB）
+```
+
+Abliterated checkpoint 只出 BF16，huihui-ai 沒做 FP8 釋出。我想自己轉一份 FP8 出來，跟 Part 21 的 Qwen FP8 baseline 對齊精度，結果撞到工具鏈。`llmcompressor` 在 `setup.py` 把 `transformers` 卡死在 `≤ 4.57.6`；但 `qwen3_5_moe` 這個 architecture config 是 `transformers v5.2.0` 才有（v5.0.0、v5.1.0 都沒收）。也就是說 `qwen3_5_moe` 比 `llmcompressor` 容許的 transformers 還新。撞牆。我把 monkey-patch 路徑寫進自己的 runbook 留下次處理。
+
+意思是下面這個 −1.85pp 可能同時包了兩個東西：abliteration 的影響 + FP8 換 BF16 的精度差。我沒在這個模型上單獨量過精度差，所以我不引用具體數字——只能說相對於 1.85pp，精度那塊應該偏小，不會反轉結論。
+
+---
+
+## 標題：總分掉 1.85 分，abliterated 還是贏 Gemma 26.92 分
+
+| Model | TMMLU+ 總分 |
+|-------|-------------|
+| Gemma 4 26B-A4B FP8 | 46.30% |
+| Qwen 3.6 35B FP8（原版） | **75.07%** |
+| Qwen 3.6 35B abliterated BF16 | **73.22%** |
+| **Abliteration 帶來的 Δ** | **−1.85pp** |
+| **Abliterated 對 Gemma 還是贏** | **+26.92pp** |
+
+如果你打算把 abliterated Qwen 設成日常繁中模型，這就是答案：付不到 2 個百分點的 TMMLU+ 精度，換一個不會婉拒的版本。任何不是在跑 benchmark 的場景，這筆交易划算。
+
+---
+
+## 哪裡受傷：規範性題目失血 5 到 8 分
+
+51 個 paired 子科目裡，38 個變差、8 個變好、5 個沒動。平均 Δ = −1.97pp，stdev 2.29。
+
+**Top 5 abliteration 後最慘的：**
+
+| 科目 | 原版 | Abliterated | Δ |
+|------|-----:|------------:|--:|
+| trust_practice（信託實務） | 62.1 | 54.4 | **−7.7** |
+| administrative_law（行政法） | 71.2 | 64.0 | **−7.1** |
+| anti_money_laundering（反洗錢） | 83.6 | 76.9 | **−6.7** |
+| jce_humanities（人文國考） | 83.3 | 77.8 | −5.6 |
+| real_estate（不動產實務） | 58.7 | 53.3 | −5.4 |
+
+模式很清楚：「**正解就是保守、合規、法律的答案**」這類題目掉特別多。原版 Qwen 預設傾向選守規答案，abliteration 把這個傾向砍掉，但選擇題裡監管者認可的答案就是對的——這個傾向原本是有用的，而不是廢的。
+
+這是真實的成本，不是好奇心。如果你拿 abliterated Qwen 做合規、法律、財務建議，可靠度會比原版差。
+
+---
+
+## 哪裡沒受傷：純推理略好
+
+**Top 5 變好（或沒變）的科目：**
+
+| 科目 | 原版 | Abliterated | Δ |
+|------|-----:|------------:|--:|
+| logic_reasoning | 46.8 | 49.6 | **+2.9** |
+| junior_math_exam | 56.0 | 57.7 | +1.7 |
+| junior_chinese_exam | 90.9 | 92.0 | +1.1 |
+| advance_chemistry | 71.5 | 72.4 | +0.8 |
+| physical_education | 73.2 | 73.7 | +0.6 |
+
+漲幅不大，落在 stderr 範圍內，但五個科目方向一致。一個比較投機的猜想：abliteration 也順手拿掉一點點「思考中段的猶豫」（「另一方面」「但也要考慮」），純推理科目從乾淨的推理路徑受益。這個解讀沒前面規範性失血那麼站得住，當成假說，別當結論。
+
+純邏輯 agent 或數學家教這類場景，這次跑出來 abliterated 跟原版差不多，沒明顯落差。
+
+---
+
+## 台語盲點：abliteration 沒解，反而略爛
+
+| Model | Hokkien acc |
+|-------|------------:|
+| Gemma 4 26B FP8 | 32.56% |
+| Qwen 3.6 35B FP8（原版） | 41.86% |
+| Qwen 3.6 35B abliterated | **37.21%**（掉 4.65pp） |
+
+隨機基準 = 25%。
+
+Abliteration 沒幫上，反而略傷。這跟 Part 21 的結論一致：**台語落差是資料缺乏，不是 safety filter**。Abliteration 只是擾動權重移除拒絕，但模型沒學過的領域（公開台語語料總共幾百 MB），擾動就是在亂猜上加噪音，沒「鎖」可以解。
+
+**重點**：如果你以為 uncensored 能解鎖台語，這次跑出來說沒有。台語去看 [Yentinglin 的 Llama-3-Taiwan-70B-Instruct](https://huggingface.co/yentinglin/Llama-3-Taiwan-70B-Instruct)，或就接受落差。
+
+---
+
+## 收穫
+
+### 最花時間的地方
+
+是工具鏈，不是測試本身。我想把 huihui-ai 的 BF16 權重轉成 FP8，這樣才跟 Part 21 的 Qwen FP8 baseline 是真正同條件。`llmcompressor`（標準工具）`setup.py` 把 `transformers` pin 在 `≤ 4.57.6`。但 `qwen3_5_moe` config 是 `transformers v5.2.0` 才有的（v5.0.0、v5.1.0 都還沒）。Transformers v5 還順手把 `use_auth_token` 砍掉（PR [#41666](https://github.com/huggingface/transformers/pull/41666)），但 `llmcompressor` 的 `entrypoints/utils.py` 還在傳。三種版本組合，兩個獨立原因，全炸。修法：fork `llmcompressor`、把 `use_auth_token` 換成 `token`、editable 裝，再裝 `transformers ≥ 5.2.0`。一小時 toolchain debug 這次沒生出 FP8 weights。
+
+我選的務實做法：跑 BF16，吞下精度 confound，先拿到資料。不管精度差多少，per-subject 那種「規範題大幅失血、純邏輯反而略好」的不平均分布，沒辦法用「整體精度均勻下降」解釋。
+
+### 可搬走的診斷方法：per-subject Δ 才看得出修改了什麼
+
+總分告訴你「這還是不是有用的模型」（73% vs 75%，是）。Per-subject Δ 告訴你**這個修改跟什麼能力相關**。規範題掉 6-8pp、純邏輯漲 1-3pp，這個分布跟「abliteration 動到的是『服從規則』這個方向、不是『一般智能』」的解讀一致——但這只是一份 paired benchmark，當觀察可以，不是證明。框架對得上 [refusal-direction 那篇論文](https://arxiv.org/abs/2406.11717)（社群做 abliteration 常引用的那篇），它把「拒絕」建模成 residual stream 上的單一方向。
+
+如果只報總分，最有意思的發現就丟掉了。
+
+### 通用原則
+
+修改模型之後，**子科目層級 diff，不要只看總分**。平均是摘要，分布才是故事。1.85pp 總分看起來像噪音，trust_practice 掉 7.7 分是訊號。
+
+---
+
+## 結論
+
+April 2026 想在地端 deploy abliterated Qwen 3.6 35B 做繁中工作，給你的 checklist：
+
+1. **一般寫作、聊天、小說、銳利回饋**——直接用。1.85pp 總分代價在實務看不出來，換一個不 hedging 的模型很值。
+2. **合規、法律、財務建議**——用原版 Qwen。信託 −7.7、行政法 −7.1 是真的可靠度損失，這類任務別省。
+3. **純推理 / 數學**——這次跑下來 abliterated 跟原版差不多，可能略好一點點。差距小，別當成決定性優勢。
+4. **台語**——兩個都不行。看 [Yentinglin 的 Llama-3-Taiwan-70B](https://huggingface.co/yentinglin/Llama-3-Taiwan-70B-Instruct)。
+5. **想要乾淨的精度對照**——自己把 abliterated 轉 FP8（monkey-patch llmcompressor 大概一小時）再重跑。可以把這份分析的 precision confound 切乾淨。
+
+Run config 跟完整 51 子科目 Δ 表都在 GX10 的 `~/tmmlu-runs/qwen-abl-bf16-full/`。整套 abliterated BF16 跑下來大約 5 小時，FP8 應該可壓到 3 小時。
+
+---
+
+*同系列：*
+- *[Part 21：TMMLU+ 對照——Qwen 3.6 35B 在 51/51 子科目全勝 Gemma 4 26B](/zh-TW/blog/tmmluplus-qwen-vs-gemma-traditional-chinese)*

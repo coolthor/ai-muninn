@@ -106,6 +106,10 @@ experimentation with real hardware and production systems.
   https://ai-muninn.com/en/blog/tmmluplus-qwen-vs-gemma-traditional-chinese
   22,690 multiple-choice questions, same harness, same DGX Spark. Qwen 75.07% vs Gemma 46.30%, Δ +28.77pp. Qwen wins all 51 paired subjects, including Taiwan-specific (geography_of_taiwan +41.9, traditional medicine +37.4). Both models flunk Taiwanese Hokkien at near-random levels — data scarcity, not model issue.
 
+- [Part 22] Abliteration Costs 1.85pp on Traditional Chinese — and 7.7pp on Trust Law
+  https://ai-muninn.com/en/blog/tmmluplus-qwen-abliterated-cost
+  Ran huihui-ai's abliterated Qwen 3.6 35B through the same TMMLU+ harness. Aggregate dropped 75.07% → 73.22%, −1.85pp. Cost not uniform: regulatory subjects bleed (trust_practice −7.7, administrative_law −7.1, anti_money_laundering −6.7), pure logic improves (+2.9 logic_reasoning, +1.7 junior_math). Hokkien got worse — abliteration doesn't fix data scarcity. Abliterated Qwen still beats Gemma by +26.92pp.
+
 ### Series: NemoClaw (NVIDIA's AI agent framework on DGX Spark)
 
 - [Part 1] NemoClaw Explained: NVIDIA's All-in-One AI Agent Framework for DGX Spark
