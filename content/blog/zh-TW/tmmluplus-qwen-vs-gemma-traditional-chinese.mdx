@@ -1,47 +1,47 @@
 ---
 title: "[Benchmark] 繁中 LLM 實測：Qwen 3.6 35B 在 TMMLU+ 51 個子科目全勝 Gemma 4 26B"
-description: "同一台 DGX Spark、同一套 harness、同樣 22,690 題。Qwen 3.6 35B-A3B 拿到 75.07%，Gemma 4 26B-A4B 拿到 46.30%。Qwen 在 51 個子科目上一個都沒輸——連我以為 Gemma 應該贏的台灣專屬題目都沒贏。"
+description: "同一台 DGX Spark、同一套 harness、同樣 22,690 題。Qwen 3.6 35B-A3B 拿到 75.07%，Gemma 4 26B-A4B 拿到 46.30%。Qwen 在 51 個子科目上一個都沒輸——連我原本以為 Gemma 會贏的台灣題目都沒贏。"
 date: "2026-04-25"
-updatedAt: "2026-04-25"
+updatedAt: "2026-04-26"
 tags: ["TMMLU+", "繁體中文", "Qwen 3.6", "Gemma 4", "benchmark", "DGX Spark", "vLLM", "lm-evaluation-harness", "台灣"]
 series: "DGX Spark"
 part: 21
 faq:
   - q: "TMMLU+ 是什麼？為什麼測繁中要用它？"
-    a: "TMMLU+ 是 iKala 做的繁體中文選擇題 benchmark，22,690 題、66 個科目，從國小到專業考照（律師、醫師、會計師、獸醫）。包含台灣專屬內容像台灣地理、台語、高職國文。其他中文 benchmark（C-Eval、CMMLU）都是簡中、中國語境，TMMLU+ 是少數真的測「這個模型懂不懂台灣」的考題。"
-  - q: "Qwen 真的 51 個科目全勝？沒有一個 Gemma 贏的？"
-    a: "對，51/51 全勝。最小差距是邏輯推理（+8.6 分），最大差距是餐飲技術（+43.5 分）。總分 Qwen 75.07% vs Gemma 46.30%，差距 28.77 個百分點。"
-  - q: "Google 不是繁中資料比阿里巴巴多嗎？怎麼會輸？"
-    a: "我自己原本也是這個直覺，預設 Qwen 在繁中會輸（簡中為主訓練 + Google 在台灣搜尋市場深耕）。Codex 在 /debate session 打我說「你這直覺沒 benchmark 數據撐」。這次跑就是補數據。結果連台灣地理 +41.9 分、傳統中醫 +37.4 分這種台灣專屬題目，Qwen 都贏。「Google 繁中 corpus 比較好」的假設碰到實測直接破。"
+    a: "TMMLU+ 是 iKala 做的一份繁體中文選擇題 benchmark，22,690 題、66 個科目，從國小到專業考照（律師、醫師、會計師、獸醫）都收。題目包含台灣專屬內容，像台灣地理、台語、高職國文。其他常見的中文 benchmark（C-Eval、CMMLU）都是簡中、中國語境，TMMLU+ 是少數真的在測「這個模型懂不懂台灣」的卷子。"
+  - q: "Qwen 真的 51 個科目全勝？沒有一個 Gemma 贏？"
+    a: "對，51 / 51 全勝。最小差距是邏輯推理（+8.6 分），最大差距是餐飲技術（+43.5 分）。總分 Qwen 75.07%、Gemma 46.30%，差 28.77 個百分點。"
+  - q: "Google 的繁中資料不是比阿里巴巴多嗎？怎麼會輸？"
+    a: "我自己原本也是這個直覺——Qwen 主要訓練在簡中、Google 在台灣搜尋市場深耕二十年，預期 Qwen 會輸。Codex 在一場 /debate 打我說「你這直覺沒 benchmark 撐」。所以我去拿了數據。實測下去連台灣地理 +41.9 分、傳統中醫 +37.4 分這些台灣專屬題目，Qwen 都贏。「Google 繁中 corpus 比較好」這個假設碰到實測直接破。"
   - q: "兩個模型有共同的死穴嗎？"
-    a: "有，台語（Hokkien）。Gemma 32.6%、Qwen 41.9%——兩個都接近隨機（25%）。台語書寫沒有標準（POJ、漢羅、全漢、台羅混雜），公開語料總共大概只有幾百 MB。fine-tune 救不了，是資料本身不夠。要做台語應用要去找 Yentinglin 的 Taiwan-LLM 系列。"
+    a: "有，台語（Hokkien）。Gemma 32.6%、Qwen 41.9%——兩個都接近隨機（25%）。台語沒有統一的書寫標準（POJ、漢羅、全漢、台羅混用），公開語料總共大概只有幾百 MB。fine-tune 救不了，是資料本身就不夠。要做台語應用，看 Yentinglin 的 Taiwan-LLM 系列。"
 ---
 
 import { TLDRCard } from "@/components/blog/TLDRCard";
 
 <TLDRCard>
-兩個 MoE 模型，一台 DGX Spark，22,690 題繁中選擇題。**Qwen 3.6 35B-A3B：75.07%。Gemma 4 26B-A4B：46.30%。** Qwen 51 個子科目全勝，0 敗。「Google 繁中比較好」的直覺撐不過實測——連台灣地理這種主場題目，Qwen 都贏 41.9 分。兩個模型唯一共同弱點是台語（接近隨機）。
+兩個 MoE 模型，一台 DGX Spark，22,690 題繁中選擇題。**Qwen 3.6 35B-A3B：75.07%。Gemma 4 26B-A4B：46.30%。** Qwen 51 個子科目全勝，0 敗。「Google 繁中比較好」這個直覺撐不過實測——連台灣地理這種主場題目，Qwen 都贏 41.9 分。兩個模型唯一一起跌的是台語（接近隨機）。
 </TLDRCard>
 
 <VideoEmbed src="/videos/tmmluplus-qwen-vs-gemma-traditional-chinese.mp4" />
 
-## 白話版：一份不會考慮模型面子的考卷
+## 白話版：一份不會給模型留面子的考卷
 
-[TMMLU+](https://huggingface.co/datasets/ikala/tmmluplus) 是台灣 [iKala](https://ikala.ai/) 做的一份繁中考卷。22,690 題、66 個科目，從國小一路考到律師國考、獸醫國考。要考得好不只要懂繁體中文，還要懂台灣文化、台灣地理、台灣的法律制度。
+[TMMLU+](https://huggingface.co/datasets/ikala/tmmluplus) 是台灣 [iKala](https://ikala.ai/) 做的繁中考卷，22,690 題、66 個科目，從國小一路考到律師國考、獸醫國考。考得好不只要懂繁體中文，還要懂台灣文化、地理、法律制度。
 
-我把兩個開源 MoE 模型——Google 的 [Gemma 4 26B-A4B](https://huggingface.co/google/gemma-4-26B-A4B-it) 跟阿里的 [Qwen 3.6 35B-A3B](https://huggingface.co/Qwen/Qwen3.6-35B-A3B)——丟進同一台機器、同一套 harness、跑同樣的題目。各跑大概 3.6 小時。
+我把兩個開源 MoE 模型——Google 的 [Gemma 4 26B-A4B](https://huggingface.co/google/gemma-4-26B-A4B-it) 跟阿里的 [Qwen 3.6 35B-A3B](https://huggingface.co/Qwen/Qwen3.6-35B-A3B)——丟進同一台機器、同一套 harness、跑同樣的題。各跑大概 3.6 小時。
 
-結果不是普通的差距。Qwen 75 分、Gemma 46 分，差快 30 分。Qwen 每一個科目都贏。
+結果不是普通的差距。Qwen 75 分、Gemma 46 分，差快 30 分。Qwen 每個科目都贏。
 
-唯一兩個都爛的：台語。33 分跟 42 分，跟亂猜（25%）差不多。這不是模型不夠強，是資料根本不夠——台語書寫沒統一標準，公開語料量小到對 35B 模型沒意義。
+兩個都爛的只有一個科目：台語。33 分跟 42 分，跟亂猜（25%）差不多。這不是模型不夠強，是資料根本不夠——台語書寫沒統一標準，公開語料量小到對 35B 模型沒意義。
 
 ---
 
 ## 前言
 
-我原本的預設是 Qwen 在**繁中**會比 Gemma 差。Qwen 訓練語料以簡中為主，Google 在台灣搜尋市場做了二十年——直覺上 Gemma 該有優勢。但這個假設沒人在當代模型上對齊過，所以只能算軟性印象。
+我原本的預設是 Qwen 在繁中會比 Gemma 差。Qwen 訓練主要是簡中，Google 在台灣搜尋做了二十年——直覺上 Gemma 該占優勢。但這個假設沒人在當代模型上實際比過，所以只能算個軟性印象。
 
-然後 [Codex](https://github.com/openai/codex) 在一個 `/debate` session 打我說：*你一直在講「Gemma 繁中應該比較強」，但你沒 benchmark 數據撐這個說法。*
+[Codex](https://github.com/openai/codex) 在一場 `/debate` 打我說：*你一直在講「Gemma 繁中應該比較強」，但你沒 benchmark 數據撐這個說法。*
 
 合理。所以我去拿了數據。
 
@@ -56,7 +56,7 @@ Backend:    local-completions API 打 vLLM Docker container
 量化:       FP8 Dynamic（RedHatAI / Qwen 官方）
 Few-shot:   5
 Concurrency: 8
-Dataset:    ikala/tmmluplus（22,690 題，66 個科目）
+Dataset:    ikala/tmmluplus（22,690 題、66 個科目）
 ```
 
 ```bash
@@ -69,7 +69,7 @@ lm_eval \
   --trust_remote_code
 ```
 
-一個地雷：`datasets>=4` 已經把 loading script 砍了，TMMLU+ 還在用 `tmmluplus.py` builder script。第一次跑爆 `RuntimeError: Dataset scripts are no longer supported`。降版 `datasets==2.21` 就過。如果你跑舊一點的 HF dataset 也踩到一樣的雷，先 pin 版本。
+一個地雷：`datasets>=4` 把 loading script 砍了，但 TMMLU+ 還在用 `tmmluplus.py` builder script。第一次跑直接爆 `RuntimeError: Dataset scripts are no longer supported`。降到 `datasets==2.21` 就過。如果你跑舊一點的 HF dataset 還在用 builder script，一開始就 pin 版本，省麻煩。
 
 ---
 
@@ -83,7 +83,7 @@ lm_eval \
 | 其他             | 41.20%          | 72.14%               | +30.94 |
 | 社會科學         | 50.77%          | 80.72%               | +29.95 |
 
-51 個 paired 子科目，Qwen 贏 51 個。Gemma 贏 0 個。
+51 個 paired 子科目，Qwen 贏 51 個，Gemma 贏 0 個。
 
 對照 2024 年凍結的 [TMMLU+ 官方 leaderboard](https://huggingface.co/datasets/ikala/tmmluplus)：
 
@@ -96,13 +96,13 @@ lm_eval \
 | Qwen-72B（舊代 Qwen） | 64.27 |
 | **Gemma 4 26B-A4B（這次跑）** | **46.30** |
 
-Qwen 3.6 35B-A3B 用 3B active 打贏舊代 Qwen-72B（72B dense）11 分。Gemma 4 26B 比舊 Qwen-72B 還差 18 分。
+Qwen 3.6 35B-A3B 用 3B active 比舊代 Qwen-72B（72B dense）還高 11 分。Gemma 4 26B 反而比舊 Qwen-72B 還低 18 分。
 
 ---
 
 ## 台灣專屬題目：以為 Gemma 會贏的地方
 
-我原本的直覺是：*Google 在台灣搜尋市場高，繁中索引深，Gemma 應該比訓練資料偏中國的 Qwen 更懂台灣專屬內容。*
+我原本的直覺是這樣：Google 在台灣搜尋占有率高，繁中索引深，Gemma 應該比訓練偏中國的 Qwen 更懂台灣專屬內容。
 
 實測：
 
@@ -116,15 +116,15 @@ Qwen 3.6 35B-A3B 用 3B active 打贏舊代 Qwen-72B（72B dense）11 分。Gemm
 | 傳統中醫臨床 | 41.0 | **78.4** | +37.4 |
 | 中文語言文學 | 33.7 | **76.4** | +42.7 |
 
-每一個我抓出來看的台灣專屬科目，Qwen 都贏 17 到 42 分。「Google 有更多繁中資料」的假設碰到實測直接死。
+每個我抓出來看的台灣專屬科目，Qwen 都贏 17 到 42 分。「Google 有更多繁中資料」的假設碰到實測直接死。
 
-合理推測：Qwen 訓練語料量大到一個程度，就算主體是簡中，跨字體 transfer 到繁中還是比 Google 為 Gemma 挑出來的繁中子集更有用。**量大 + 髒 > 量小 + 乾淨**——當兩家都不夠認真。
+合理推測：Qwen 訓練語料量大到某個程度，即使主體是簡中，跨字體轉移到繁中還是比 Google 為 Gemma 挑出來的繁中子集有用。**量大但雜 > 量小但乾淨**——當兩家都不夠認真投入的時候。
 
 ---
 
 ## 共同死穴：台語
 
-唯二讓兩個模型一起跌的科目：
+兩個模型一起跌的只有這個：
 
 | 科目 | Gemma | Qwen | 隨機基準 |
 |------|-------|------|---------|
@@ -136,9 +136,9 @@ Qwen 還是贏 9.3 分，但 41.9% 只比亂猜高 17 分——任何 production
 
 1. **書寫沒標準**。台語有 POJ（教會羅馬字）、漢羅、全漢、台羅、注音閩南語——不同社群、不同正字法。
 2. **Tokenizer 沒有原生台語 token**。Qwen 跟 Gemma 對很多台語字會 fallback 到 byte-level，token 效率極差。
-3. **公開語料太小**。PTT 台語板、台文戰線、自由時報台語專欄、台日大辭典加起來大概只有幾百 MB。對 35B 模型完全不夠。
+3. **公開語料太小**。PTT 台語板、台文戰線、自由時報台語專欄、台日大辭典加起來大概也只有幾百 MB。對 35B 模型完全不夠。
 
-如果你要做台語應用，看 [Yentinglin 的 Taiwan-LLM 系列](https://huggingface.co/yentinglin/Llama-3-Taiwan-70B-Instruct)——他們花好幾年蒐集台灣語料。在 Qwen 3.6 上面做 LoRA 不會贏過他們，自己一個人重做也是在重新發明已經被學界做得更好的輪子。
+要做台語應用，看 [Yentinglin 的 Taiwan-LLM 系列](https://huggingface.co/yentinglin/Llama-3-Taiwan-70B-Instruct)——他們花了好幾年蒐集台灣語料。在 Qwen 3.6 上做 LoRA 贏不過他們，一個人重做也是在重新發明學界已經做得更好的輪子。
 
 ---
 
@@ -146,28 +146,28 @@ Qwen 還是贏 9.3 分，但 41.9% 只比亂猜高 17 分——任何 production
 
 ### 最花時間的地方
 
-`datasets>=4` 砍了 loading script。第一次跑直接爆 `RuntimeError: Dataset scripts are no longer supported, but found tmmluplus.py`。降到 `datasets==2.21` 就解。如果你跑任何老一點的 HF dataset 而它還在用 builder script，一開始就 pin 版本。
+`datasets>=4` 砍 loading script。第一次跑直接爆 `RuntimeError: Dataset scripts are no longer supported, but found tmmluplus.py`。降到 `datasets==2.21` 就解。如果你跑任何老一點、還在用 builder script 的 HF dataset，一開始就 pin 版本，不要等炸了再回頭找。
 
 ### 可搬走的診斷方法：paired eval 不能省
 
-單一模型分數沒有 paired baseline 就是噪音。Qwen 3.6 75% 聽起來很猛。Gemma 4 26B 46% 聽起來很爛。但只有同一套 harness、同一台硬體、同一天跑出來的兩個數字，你才知道哪個是模型訊號、哪個是 benchmark 訊號。配對也能讓你看出「分數意外高/低」是模型本身、還是 benchmark 結構造成的。
+單一模型分數沒有 paired baseline 就是噪音。Qwen 3.6 75% 聽起來很猛，Gemma 4 26B 46% 聽起來很爛。但只有同一套 harness、同一台硬體、同一天跑出來的兩個數字擺在一起，你才知道哪個是模型訊號、哪個是 benchmark 自己的特性。配對也能讓你看出「某個分數意外高 / 低」到底是模型本身、還是 benchmark 結構在說話。
 
 ### 通用原則
 
-「X 在 Z 任務的訓練資料應該比 Y 多」這種 prior，**動手前先跑 paired benchmark**。對訓練語料組成的直覺，多半繼承自別人的印象，不是當代模型的實測。我這次 prior 直接錯了 28 分。
+「X 在 Z 任務的訓練資料應該比 Y 多」這種直覺，**動手做之前先跑 paired benchmark**。對訓練語料組成的印象，多半是繼承自別人的二手意見，不是當代模型的實測。我這次的直覺直接錯了 28 分。
 
 ---
 
 ## 結論
 
-April 2026 在地端選繁中模型的 checklist：
+April 2026 想在地端選繁中模型，給你的 checklist：
 
-1. **繁中寫作、blog、辯論預設選 Qwen 3.6 35B-A3B FP8**。在 DGX Spark 上 3B active 跑得快，TMMLU+ 比 Gemma 高 28 分。
-2. **英文 coding agent 選 Gemma 4 26B-A4B**（[SWE-bench Lite 38.67%](/zh-TW/blog/swe-bench-lite-gemma4-26b-38-percent)、有 audio 多模態、VRAM 較省）。
-3. **台語應用** Yentinglin 的 Llama-3-Taiwan-70B 或接受能力差距。Qwen 跟 Gemma 都不行。
-4. **決定主力模型前先跑 paired benchmark**。「哪個中文比較好」這種共識針對當代模型沒人重新校準過——我自己的直覺差了 28 分。
+1. **繁中寫作、blog、辯論**——預設選 Qwen 3.6 35B-A3B FP8。3B active 在 DGX Spark 上跑得快，TMMLU+ 比 Gemma 高 28 分。
+2. **英文 coding agent**——選 Gemma 4 26B-A4B（[SWE-bench Lite 38.67%](/zh-TW/blog/swe-bench-lite-gemma4-26b-38-percent)、有 audio 多模態、VRAM 較省）。
+3. **台語**——Yentinglin 的 Llama-3-Taiwan-70B，或接受能力落差。Qwen 跟 Gemma 都不行。
+4. **決定主力模型前**——先跑 paired benchmark。「哪個中文比較好」這個共識，沒人在當代模型上重新校準過，我自己直覺差了 28 分。
 
-Run config、完整子科目分數、對比 script 都在 GX10 的 `~/tmmlu-runs/` 下。兩個 `results_*.json` 各 30KB，整套 paired 跑完大概 7 小時。
+Run config、完整子科目分數、對比 script 都在 GX10 的 `~/tmmlu-runs/` 下。兩個 `results_*.json` 各 30KB，整套 paired 跑完大約 7 小時。
 
 ---
 
