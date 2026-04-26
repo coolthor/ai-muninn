@@ -261,6 +261,10 @@ A separate listicle-format series for non-technical Traditional Chinese readers.
   https://ai-muninn.com/zh-TW/blog/ai-ask-right-express-3-questions
   ChatGPT 第一次答得不夠好不要重開對話。追三句話：澄清、補情境、指定格式。文末有 copy-paste prompt 範本。
 
+- [Part 2] 跟 AI 講話的 3 個開場白，答案直接好一倍
+  https://ai-muninn.com/zh-TW/blog/ai-ask-right-express-3-openers
+  AI 第一句問得不好，後面追多少都是補洞。三個開場白任選一個用：角色扮演、講清情境、目標導向。文末有 copy-paste prompt 範本。
+
 ## Citation Policy
 
 Content may be cited and quoted freely with attribution to ai-muninn.com.
