@@ -269,6 +269,10 @@ A separate listicle-format series for non-technical Traditional Chinese readers.
   https://ai-muninn.com/zh-TW/blog/ai-ask-right-express-pick-ai-30s
   三個主流 AI 各有強項：第一次接觸選 ChatGPT、寫長文選 Claude、用 Google Workspace 選 Gemini。文末有對照表 + 30 秒決策流程。
 
+- [Part 4] 不知道用 AI 做什麼？問自己這 5 件事
+  https://ai-muninn.com/zh-TW/blog/ai-ask-right-express-find-needs
+  打開 ChatGPT 腦袋空白？需求是被找出來的。從每週重複的事、最常 Google 的問題、想做卻拖的事、看不懂的東西、做完後卡住的下一步五個角度挖場景。文末有 copy-paste prompt 範本。
+
 ## Citation Policy
 
 Content may be cited and quoted freely with attribution to ai-muninn.com.
