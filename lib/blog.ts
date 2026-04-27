@@ -124,6 +124,40 @@ export function getPostsByTag(locale = 'en', tagSlug: string): BlogPost[] {
   )
 }
 
+export interface SeriesInfo {
+  name: string
+  slug: string
+  count: number
+}
+
+/** Returns all unique series with counts, sorted by count descending */
+export function getAllSeries(locale = 'en'): SeriesInfo[] {
+  const posts = getAllPosts(locale)
+  const seriesMap = new Map<string, { name: string; count: number }>()
+
+  for (const post of posts) {
+    if (!post.series) continue
+    const slug = post.series.toLowerCase().replace(/\s+/g, '-')
+    const entry = seriesMap.get(slug)
+    if (entry) {
+      entry.count += 1
+    } else {
+      seriesMap.set(slug, { name: post.series, count: 1 })
+    }
+  }
+
+  return Array.from(seriesMap.entries())
+    .map(([slug, { name, count }]) => ({ name, slug, count }))
+    .sort((a, b) => b.count - a.count)
+}
+
+/** Returns posts in a series, sorted by part ascending */
+export function getPostsBySeries(locale = 'en', seriesSlug: string): BlogPost[] {
+  return getAllPosts(locale)
+    .filter(post => post.series && post.series.toLowerCase().replace(/\s+/g, '-') === seriesSlug)
+    .sort((a, b) => (a.part ?? 0) - (b.part ?? 0))
+}
+
 /** Returns true if a translation exists for the given slug + locale */
 export function hasTranslation(slug: string, locale: string): boolean {
   const dir = blogDir(locale)

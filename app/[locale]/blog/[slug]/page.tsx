@@ -201,7 +201,13 @@ export default async function BlogPost({
       <header className="mb-8 pb-6 border-b" style={{ borderColor: 'var(--border)' }}>
         {post.series && (
           <p className="text-xs mb-2" style={{ color: 'var(--text-dim)' }}>
-            {post.series} · part {post.part}
+            <Link
+              href={`/${l}/blog/series/${encodeURIComponent(post.series.toLowerCase().replace(/\s+/g, '-'))}`}
+              className="hover:underline hover:text-[var(--cyan)] transition-colors"
+            >
+              {post.series}
+            </Link>
+            {post.part != null && <> · part {post.part}</>}
           </p>
         )}
         <h1 className="text-xl font-semibold leading-snug mb-3" style={{ color: 'var(--cyan)' }}>

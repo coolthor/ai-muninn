@@ -173,21 +173,37 @@ export default function BlogIndexView({
       ) : (
         /* Series view */
         <div className="space-y-10">
-          {groups.map(group => (
-            <div key={group.name}>
-              <p className="text-xs mb-3 flex items-center gap-2" style={{ color: 'var(--text-dim)' }}>
-                <span style={{ color: 'var(--cyan)' }}>▸</span>
-                <span style={{ color: 'var(--text-muted)' }}>{group.name}</span>
-                <span>({group.posts.length})</span>
-              </p>
-              <ul className="space-y-px">
-                {tableHeader}
-                {group.posts.map(post => (
-                  <PostRow key={post.slug} post={post} locale={locale} showPart showDescription />
-                ))}
-              </ul>
-            </div>
-          ))}
+          {groups.map(group => {
+            const seriesSlug = group.name.toLowerCase().replace(/\s+/g, '-')
+            return (
+              <div key={group.name}>
+                <p className="text-xs mb-3 flex items-center gap-2" style={{ color: 'var(--text-dim)' }}>
+                  <span style={{ color: 'var(--cyan)' }}>▸</span>
+                  <Link
+                    href={`/${locale}/blog/series/${encodeURIComponent(seriesSlug)}`}
+                    className="hover:underline hover:text-[var(--cyan)] transition-colors"
+                    style={{ color: 'var(--text-muted)' }}
+                  >
+                    {group.name}
+                  </Link>
+                  <span>({group.posts.length})</span>
+                  <Link
+                    href={`/${locale}/blog/series/${encodeURIComponent(seriesSlug)}`}
+                    className="ml-1 hover:text-[var(--cyan)] transition-colors"
+                    style={{ color: 'var(--text-dim)' }}
+                  >
+                    [{isZh ? '看系列' : 'view all'} →]
+                  </Link>
+                </p>
+                <ul className="space-y-px">
+                  {tableHeader}
+                  {group.posts.map(post => (
+                    <PostRow key={post.slug} post={post} locale={locale} showPart showDescription />
+                  ))}
+                </ul>
+              </div>
+            )
+          })}
 
           {standalone.length > 0 && (
             <div>
