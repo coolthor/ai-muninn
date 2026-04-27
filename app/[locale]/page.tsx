@@ -32,7 +32,7 @@ export async function generateMetadata({
   }
 }
 
-const CONCEPT_SERIES = new Set(['AI 怎麼問', 'Ask AI Right', 'LLM 101'])
+const CONCEPT_SERIES = new Set(['AI 怎麼問', 'Ask AI Right', 'Ask AI Right Express', 'LLM 101'])
 
 function splitByCategory(posts: BlogPost[]): { concepts: BlogPost[]; fieldNotes: BlogPost[] } {
   const concepts: BlogPost[] = []
