@@ -24,7 +24,13 @@ export interface BlogPost {
   part?: number
   readingTime: number
   faq?: FaqItem[]
+  draft?: boolean
 }
+
+// Drafts are hidden in production builds, visible in dev (`next dev`).
+// Override: SHOW_DRAFTS=1 to include drafts even in production.
+const HIDE_DRAFTS =
+  process.env.NODE_ENV === 'production' && process.env.SHOW_DRAFTS !== '1'
 
 export interface BlogPostWithContent extends BlogPost {
   content: string
@@ -45,6 +51,7 @@ function parseFile(filePath: string, slug: string): BlogPost {
     part: data.part,
     readingTime: Math.ceil(wordCount / 200),
     faq: data.faq,
+    draft: data.draft === true,
   }
 }
 
@@ -56,6 +63,7 @@ export function getAllPosts(locale = 'en'): BlogPost[] {
     .readdirSync(dir)
     .filter(f => f.endsWith('.mdx') || f.endsWith('.md'))
     .map(filename => parseFile(path.join(dir, filename), filename.replace(/\.(mdx|md)$/, '')))
+    .filter(post => !HIDE_DRAFTS || !post.draft)
     .sort((a, b) => (a.date > b.date ? -1 : 1))
 }
 
@@ -70,6 +78,8 @@ export function getPost(slug: string, locale = 'en'): BlogPostWithContent | null
   const { data, content } = matter(raw)
   const wordCount = content.split(/\s+/).length
 
+  if (HIDE_DRAFTS && data.draft === true) return null
+
   return {
     slug,
     title: data.title ?? slug,
@@ -81,17 +91,14 @@ export function getPost(slug: string, locale = 'en'): BlogPostWithContent | null
     part: data.part,
     readingTime: Math.ceil(wordCount / 200),
     faq: data.faq,
+    draft: data.draft === true,
     content,
   }
 }
 
 export function getAllSlugs(locale = 'en'): string[] {
-  const dir = blogDir(locale)
-  if (!fs.existsSync(dir)) return []
-  return fs
-    .readdirSync(dir)
-    .filter(f => f.endsWith('.mdx') || f.endsWith('.md'))
-    .map(f => f.replace(/\.(mdx|md)$/, ''))
+  // Reuses getAllPosts so draft-filter logic stays in one place.
+  return getAllPosts(locale).map(p => p.slug)
 }
 
 export interface TagInfo {
