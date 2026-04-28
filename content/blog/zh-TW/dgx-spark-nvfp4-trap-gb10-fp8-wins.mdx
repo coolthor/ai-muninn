@@ -136,14 +136,14 @@ python3 -c "import torch; print(torch.cuda.get_device_capability())"
 
 ## 結論
 
-DGX Spark（GB10/SM121）用戶的行動清單：
+DGX Spark（GB10/SM121）拿到後就這樣設：
 
-1. **用 FP8，不要用 NVFP4。** FP8 快 32%，因為 SM121 有原生硬體支援。NVFP4 沒有。
-2. **升級到 driver 580.142。** FP8 白撿 4%，加上記憶體回報和 ISA fallback 修正。
-3. **用 vLLM，不要用 SGLang** — SM121 上的 NVFP4 模型，SGLang 直接 crash。FP8 走 vLLM 是測試過、穩定的路徑。
-4. **不要嘗試 patch 繞過去。** 把 SM121 加進 vLLM 的 `FP4_ARCHS` 會直接吐出垃圾。SGLang 的原生 NVFP4 路徑會 crash。卡在硬體，繞不過。
+1. **用 FP8，不要用 NVFP4。** FP8 快 32%，因為 SM121 有原生硬體支援，NVFP4 沒有。
+2. **升級到 driver 580.142。** FP8 白撿 4%，順便修了記憶體回報跟 ISA fallback 兩個小雷。
+3. **用 vLLM，不要用 SGLang。** SM121 上 NVFP4 模型 SGLang 直接 crash；FP8 走 vLLM 跑得穩。
+4. **不要自己 patch 繞過去。** 把 SM121 加進 vLLM 的 `FP4_ARCHS` 會吐垃圾，SGLang 原生 NVFP4 會 crash。卡在硬體，繞不過。
 
-**什麼時候值得重新檢查：** vLLM 或 SGLang 宣布 SM121 原生 FP4 kernel，或 CUTLASS 4.x 出 SM121 FP4 支援（用 bit-manipulation 繞過缺失指令）。在那之前，FP8 53.8 tok/s 就是天花板。
+**什麼時候要回頭重看：** vLLM 或 SGLang 出 SM121 原生 FP4 kernel，或 CUTLASS 4.x 加上 SM121 FP4 支援（用 bit-manipulation 補上缺的指令）。在那之前，FP8 53.8 tok/s 就是天花板。
 
 ---
 
