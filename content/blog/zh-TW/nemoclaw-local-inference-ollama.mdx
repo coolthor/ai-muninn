@@ -12,7 +12,7 @@ faq:
   - q: "NemoClaw 每個 sandbox 的推理設定檔在哪？"
     a: "在 ~/.nemoclaw/sandboxes/<sandbox-name>/config.yaml。這個路徑在 NemoClaw v0.1.0 的文件裡沒有記載，也沒有 'nemoclaw config show' 指令。需要在 onboard 後直接 list 目錄才能找到。"
   - q: "在 NemoClaw 裡用 uncensored 模型安全嗎？"
-    a: "安全，因為 NemoClaw 的安全機制在兩個獨立的層運作。OpenShell 在工具執行層執行政策——檔案系統存取、工具 allowlist——跟用哪個模型無關。Uncensored 模型拿掉了內容拒絕（模型說什麼），但 OpenShell 仍然限制 agent 的行為（agent 做什麼）。這兩件事是正交的。"
+    a: "安全，因為 NemoClaw 的安全機制在兩個獨立的層運作。OpenShell 在工具執行層執行政策——檔案系統存取、工具 allowlist——跟用哪個模型無關。Uncensored 模型拿掉了內容拒絕（模型說什麼），但 OpenShell 仍然限制 agent 的行為（agent 做什麼）。這兩件事不衝突，也不互相影響。"
   - q: "NemoClaw 的本地推理後端用 Ollama 跟 vLLM 有什麼差別？"
     a: "Ollama 設定簡單、支援多模型同時在記憶體、換模型快。vLLM 的 TTFT 更低（約 0.12s vs 約 0.4s）、structured output 和 tool call 處理更穩、thinking mode 支援更好（透過 --reasoning-parser）。個人使用跑單一模型的話兩個都行；要 production 行為選 vLLM。"
 ---
@@ -31,7 +31,7 @@ NemoClaw 的推理後端是 OpenAI-compatible，可以在每個 sandbox 的 `~/.
 
 這篇文章講的是怎麼把 NemoClaw（NVIDIA 的 AI agent 框架）從雲端模式切換成本地模式。原本它預設用 NVIDIA 自家的雲端 API，免費試用 30 天。過期之後呢？與其付費，不如指向桌上那台已經有 128GB 記憶體的 DGX Spark。
 
-改三個設定值，agent 就從雲端搬回本地了。而且安全機制（OpenShell 沙箱）跟用哪個模型無關——不管你跑雲端還是本地、用哪個模型，圍欄照樣在。
+改三個設定值，agent 就從雲端搬回本地了。而且安全機制（OpenShell 沙箱）跟用哪個模型無關——不管你跑雲端還是本地、用哪個模型，Sandbox 限制照樣在。
 
 ---
 
@@ -43,7 +43,7 @@ NemoClaw 的推理後端是 OpenAI-compatible，可以在每個 sandbox 的 `~/.
 
 **隱私。** 每個傳給 Nemotron 雲端的 prompt 都會離開機器。對一個有 filesystem 存取和記憶功能的個人 agent 來說，這個暴露面不小。
 
-**模型選擇。** 預設的 `nvidia/nemotron-3-super-120b-a12b` 能力很強，但有自己的立場——針對「幫助性」和內容安全做過調整，在某些使用場景會擋路。本地模型拿掉了這層限制。這帶出一個值得直接說清楚的問題。
+**模型選擇。** 預設的 `nvidia/nemotron-3-super-120b-a12b` 能力很強，但行為有自己的偏向——針對「幫助性」和內容安全做過調整，在某些使用場景會擋路。本地模型拿掉了這層限制。這裡有個問題要先說清楚。
 
 ## Uncensored 模型的問題
 
@@ -53,11 +53,11 @@ NemoClaw 的推理後端是 OpenAI-compatible，可以在每個 sandbox 的 `~/.
 
 OpenShell。這就是 NemoClaw 常被忽略的架構重點。
 
-OpenShell 在**工具執行層**執行政策，不是在**語言模型層**。當 agent 決定呼叫工具——讀檔案、執行指令、發網路請求——OpenShell 在執行前攔截這個呼叫，對照政策設定。此時模型的內容偏好無關緊要。Sandbox 允許存取 `/sandbox` 和 `/tmp`，允許 allowlist 裡的工具。其他的在 gateway 層就被擋掉，工具根本不會跑到。
+OpenShell 在**工具執行層**執行政策，不是在**語言模型層**。當 agent 決定呼叫工具——讀檔案、執行指令、發網路請求——OpenShell 在執行前攔截，比對政策。此時模型的內容偏好無關緊要。Sandbox 允許存取 `/sandbox` 和 `/tmp`，允許 allowlist 裡的工具。其他的在 gateway 層就被擋掉，工具根本不會跑到。
 
 雲端推理加了第二層（模型自己的內容拒絕）。本地 uncensored 推理拿掉了這層。但 OpenShell 那層——真正控制 agent 能對 filesystem 和網路做什麼的那層——不管換什麼模型都在。
 
-也就是說：uncensored 模型 + OpenShell sandbox 是一個一致的組合。模型可以不受內容限制地推理和回應；agent 的行為仍然被 sandbox 政策約束。這兩件事是正交的。
+也就是說：uncensored 模型 + OpenShell sandbox 兩個搭起來是合理的。模型可以不受內容限制地推理跟回應；agent 的行為照樣被 sandbox 政策框住。這兩件事不衝突，也不互相影響。
 
 ## 找 Config
 
@@ -137,7 +137,7 @@ nemoclaw connect my-assistant
 
 第一次回應的延遲會比 Nemotron 雲端高——Ollama 如果模型還沒在記憶體裡，需要先載入。之後的回應都從記憶體跑。
 
-一個值得注意的行為差異：Qwen3.5-35B-A3B 是 thinking model。Ollama 預設開啟 thinking，也就是說 agent 在回應前會先生成推理 token。對使用者來說看起來是一段長時間沉默再突然輸出。如果互動延遲無法接受，Ollama 支援透過 system prompt 或 `think: false` 參數關閉 thinking——但 NemoClaw 沒有直接暴露這個參數。vLLM 路徑在這裡處理得比較乾淨。
+一個值得注意的行為差異：Qwen3.5-35B-A3B 是 thinking model。Ollama 預設開啟 thinking，也就是說 agent 在回應前會先生成推理 token。使用者會看到一段長時間沉默再突然冒出輸出。如果互動延遲不能接受，Ollama 支援透過 system prompt 或 `think: false` 參數關掉 thinking——但 NemoClaw 沒有直接暴露這個參數。vLLM 路徑在這裡處理得比較乾淨。
 
 ## vLLM 的替代路徑
 
@@ -154,7 +154,7 @@ Model name `qwen3.5-35b` 是啟動 container 時設的 `--served-model-name`。v
 
 vLLM 對 thinking mode 的處理也更乾淨——container 啟動時帶的 `--reasoning-parser qwen3` flag 讓 vLLM 在把回應傳給 client 之前就把推理 token 剝掉。Agent 看到的是乾淨輸出，不帶內部獨白。
 
-取捨是：Ollama 設定快、換模型容易、同時支援多個模型在記憶體裡。vLLM 熱請求 TTFT 更低（約 0.12s vs Ollama 的約 0.4s），structured output 和 tool call 的處理也更穩。
+兩邊各有取捨：Ollama 設定快、換模型容易、同時支援多個模型在記憶體裡。vLLM 熱請求 TTFT 更低（約 0.12s vs Ollama 的約 0.4s），structured output 和 tool call 的處理也更穩。
 
 這個場景——GX10、個人使用、一次跑一個模型——兩個都行。便利性選 Ollama；生產行為選 vLLM。
 
