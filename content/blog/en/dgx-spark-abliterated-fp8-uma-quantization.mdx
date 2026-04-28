@@ -1,0 +1,405 @@
+---
+title: "[llm-compressor] Self-Quantizing a 35B Abliterated MoE to FP8 on DGX Spark: 4 OOMs, 3 Prefix Bugs, and Why the First Success Wasn't Actually FP8"
+description: "Quantizing huihui-ai's Qwen3.6-35B-A3B abliterated to FP8 for vLLM on a 128 GB UMA box. Seven attempts, two distinct OOM modes, a model class that silently breaks vLLM's loader, and why streaming save_pretrained returns BF16 not FP8. Final result: 51.72 tok/s, 1.68× BF16."
+date: "2026-04-28"
+updatedAt: "2026-04-28"
+tags: ["DGX Spark", "GB10", "SM121", "llm-compressor", "FP8", "FP8_DYNAMIC", "abliteration", "Qwen3.6", "MoE", "UMA", "OOM", "MTP", "speculative-decoding", "quantization"]
+series: "DGX Spark"
+part: 23
+faq:
+  - q: "What OOM modes does self-quantizing a 35B model on DGX Spark hit?"
+    a: "Two independent ones, both rooted in 128 GB unified memory. (1) Load-time OOM: device_map='cuda:0' causes a CPU staging buffer to coexist with the GPU pool — 70 GB BF16 on CPU plus a partially-loaded 45 GB on GPU exceeds 128 GB. (2) Save-time OOM: transformers defaults to max_shard_size=50GB, which forces a pull of the entire offloaded model back to a 50 GB CPU buffer, sending total-vm to 240 GB. Fix: drop device_map, set low_cpu_mem_usage=True, and pass max_shard_size='2GB' to save_pretrained."
+  - q: "Why does my quantized checkpoint fail to load in vLLM with a KeyError?"
+    a: "Qwen3_5MoeForConditionalGeneration is the multimodal class — its state_dict wraps weights with an extra 'language_model.' prefix. You end up with keys like 'model.language_model.language_model.language_model.layers.0...' (three deep), but vLLM's hf_to_vllm_mapper assumes 'model.language_model.layers.0...' (one deep). Fix: rewrite the safetensors files, stripping one occurrence of 'language_model.language_model.' from each key. ~62K tensors, ~80 sec on NVMe."
+  - q: "Why did my streaming-save script produce a 70 GB checkpoint when I expected 35 GB?"
+    a: "model.state_dict() returns the uncompressed working representation: BF16 weights with weight_scale and weight_zero_point sidecar tensors. The actual cast to e4m3fn happens inside compressed_tensors' ModelCompressor.compress(), which is invoked by transformers' save_pretrained — not when you call state_dict() directly. Skipping save_pretrained skips the cast. Use save_pretrained(max_shard_size='2GB') so the compress step runs, but with smaller shard buffers to fit UMA."
+  - q: "Is MTP speculative decoding worth setting up on a single GB10?"
+    a: "Yes — it's the largest single contributor to throughput in this build (38.85 → 51.72 tok/s, +33%). Qwen 3.6 ships MTP layers in the base checkpoint. Save them by calling save_mtp_tensors_to_checkpoint after save_pretrained — they end up in model_mtp.safetensors. Then start vLLM with --speculative-config '{\"method\":\"qwen3_next_mtp\",\"num_speculative_tokens\":2}'. The draft model produces 2 tokens per step, the main model verifies; high acceptance rate gets you near-2× decode."
+---
+
+import { TLDRCard } from "@/components/blog/TLDRCard";
+
+<TLDRCard>
+huihui-ai's Qwen3.6-35B-A3B abliterated (BF16, 67 GB) → FP8_DYNAMIC (36 GB) → vLLM on DGX Spark GB10. **51.72 tok/s, 1.68× BF16.** First "success" was a 70 GB BF16 checkpoint with no actual FP8 cast. Second was real FP8 but vLLM couldn't load it. Final artifact on [HuggingFace](https://huggingface.co/coolthor/Huihui-Qwen3.6-35B-A3B-abliterated-FP8-DYNAMIC).
+</TLDRCard>
+
+<VideoEmbed src="/videos/dgx-spark-abliterated-fp8-uma-quantization.mp4" />
+
+## The gap on the Hub
+
+[batsclamp's Claude-4.7-Opus-abliterated-FP8](https://huggingface.co/batsclamp/Huihui-Qwen3.6-35B-A3B-Claude-4.7-Opus-abliterated-FP8) is the only ready-made FP8 abliterated checkpoint of Qwen 3.6-35B-A3B on the Hub — but it's built on Huihui's Claude-distilled variant, not the clean abliteration. If you want the raw uncensored model without Claude's stylistic residue, FP8-quantized, sized for a single GB10, no one had done it.
+
+So I had to. Should be straightforward — official llm-compressor example, FP8_DYNAMIC scheme, save, ship. Took seven versions.
+
+## The setup
+
+- **Source**: [huihui-ai/Huihui-Qwen3.6-35B-A3B-abliterated](https://huggingface.co/huihui-ai/Huihui-Qwen3.6-35B-A3B-abliterated) (BF16, 67 GB, 26 shards)
+- **Tool**: llm-compressor 0.10.1 (git main) + transformers 5.5.0
+- **Recipe**: `FP8_DYNAMIC` (data-free — no calibration data needed)
+- **Hardware**: ASUS GX10 (DGX Spark equivalent: GB10 with 128 GB unified memory)
+
+The official [`qwen3_vl_moe_fp8_example.py`](https://github.com/vllm-project/llm-compressor/blob/main/examples/quantization_w8a8_fp8/qwen3_vl_moe_fp8_example.py) is the obvious starting point. It worked on whatever box the llm-compressor maintainers tested it on. It does not work as written on Spark.
+
+## v1: stuck for 30 minutes in `dispatch_model`
+
+```python
+model = Qwen3_5MoeForConditionalGeneration.from_pretrained(MODEL_PATH, dtype="auto")
+oneshot(model=model, recipe=recipe)
+```
+
+After `Inferred DataFreePipeline`, the log went silent for 30 minutes. `/proc/PID/io` showed 75 GB read, 24 KB written. CPU 117%, RSS 24 GB. No OOM, no error, no progress.
+
+`py-spy dump`:
+
+```
+Thread (active): "MainThread"
+    send_tensors (compressed_tensors/offload/utils.py:38)
+    offload (compressed_tensors/offload/cache/device.py:49)
+    offload_module (compressed_tensors/offload/module.py:39)
+    dispatch_model (compressed_tensors/offload/dispatch.py:227)
+    __call__ (data_free/pipeline.py:33)
+```
+
+The data-free pipeline starts by calling `dispatch_model` to offload the model layer-by-layer. On a 70 GB model, that's a single-threaded loop processing tens of thousands of tensors. Slow but stable. It probably would have finished in another ten minutes.
+
+I didn't wait. Killed it, went looking for a faster path.
+
+## v2: `device_map="cuda:0"` → OOM at 160 GB virtual memory
+
+"If GPU memory is the same physical pool as CPU memory, just put it directly on GPU."
+
+```python
+model = Qwen3_5MoeForConditionalGeneration.from_pretrained(
+    MODEL_PATH, dtype="auto", device_map={"": 0},
+)
+```
+
+Now there was a real progress bar — 1-3 weights per second. At 67% loaded (687/1026), the kernel killed it. `dmesg`:
+
+```
+Out of memory: Killed process 720707 (python)
+  total-vm:  160 GB
+  anon-rss:   51 GB
+  swapents:   16 GB
+```
+
+Why does putting the model on GPU OOM the host? Because of how `from_pretrained` actually loads:
+
+1. `safetensors` mmaps the file
+2. PyTorch materializes a CPU tensor (with dtype conversion, layout reshape)
+3. Copies the CPU tensor to `cuda:0`
+4. Releases the CPU side
+
+Steps 2 and 3 overlap. On hardware with a separate GPU memory pool, the 70 GB CPU buffer and the partially-filled 65 GB GPU buffer have separate accounting. On UMA, both come from the same 128 GB. Add Python overhead and PyTorch's own bookkeeping and you blow past it before loading finishes.
+
+This was the moment to internalize: **on UMA, you cannot split memory between CPU and GPU. They share one budget.**
+
+## v3: `low_cpu_mem_usage=True` → quant succeeds, save OOMs at 238 GB
+
+Backed off `device_map`, added the explicit flag to skip CPU staging:
+
+```python
+model = Qwen3_5MoeForConditionalGeneration.from_pretrained(
+    MODEL_PATH, dtype="auto", low_cpu_mem_usage=True,
+)
+```
+
+This time everything worked through `oneshot`. Forty minutes later, the model was fully quantized in memory: RSS 12 GB, CUDA 65.5 GB. Beautiful.
+
+Then `model.save_pretrained(SAVE_DIR)` printed a warning:
+
+```
+UserWarning: Attempting to save a model with offloaded modules.
+Ensure that unallocated cpu memory exceeds the `shard_size` (50GB default).
+```
+
+And was killed at total-vm 238 GB.
+
+The save path needs to gather every offloaded tensor into a single CPU buffer, sized by `max_shard_size` (default 50 GB). On UMA, that buffer competes with the 65 GB still living in the GPU allocator pool. 65 + 50 + per-tensor mmap overhead lands at ~240 GB virtual, kernel decides we've over-committed, you lose.
+
+Save is more dangerous than load.
+
+## v4: `oneshot(output_dir=...)` → same OOM, same place
+
+llm-compressor's own log gave a hint:
+
+```
+Optimized model is not saved. To save, please provide `output_dir` as input arg.
+```
+
+So I tried passing `output_dir` to `oneshot`. Internally it calls the same `model.save_pretrained()`. Same OOM at 240 GB. There is no offload-aware save path inside oneshot.
+
+## v5: hand-rolled streaming save → completes, but it's BF16 not FP8
+
+Decision: bypass the transformers save flow entirely. Iterate `named_parameters()` and `named_buffers()`, copy each tensor to CPU one at a time, accumulate into 2 GB shards, flush, repeat. Never holds more than 2 GB of CPU staging at once.
+
+```python
+oneshot(model=model, recipe=recipe)  # no output_dir
+
+shard_buf = OrderedDict()
+shard_bytes = 0
+for name, kind in named_items:
+    tensor = fetch_tensor(name, kind).cpu().contiguous()
+    nbytes = tensor.numel() * tensor.element_size()
+    if shard_bytes + nbytes > 2 * 1024**3 and shard_buf:
+        save_file(shard_buf, str(SAVE_DIR / fname))
+        shard_buf.clear(); shard_bytes = 0
+    shard_buf[name] = tensor
+    shard_bytes += nbytes
+```
+
+Fifteen minutes. 33 shards. 70.31 GB total. No OOM. ✓
+
+Ran a dtype scan on the output:
+
+```
+overall dtype distribution:
+  bfloat16:        71.97 GB (100%)
+  float8_e4m3fn:    0.03 GB (0%)   ← only weight_zero_point sidecars
+
+config.json: quantization_config MISSING
+```
+
+The output was BF16. Every single weight tensor.
+
+What `model.state_dict()` returns for a model that's been processed by `oneshot()` is the **uncompressed working representation**: original BF16 weights, plus `weight_scale` and `weight_zero_point` sidecar tensors. The actual cast to `e4m3fn` happens inside `compressed_tensors.compressors.ModelCompressor.compress()`, which is called from `transformers.save_pretrained()`. Skip the save, skip the cast.
+
+This is the single most important thing to know if you're tempted to roll your own save: **the format conversion lives in the save path, not in the recipe.**
+
+## v6: `save_pretrained(max_shard_size="2GB")` → real FP8, but vLLM rejects it
+
+The transformers save path is doing the work. The 50 GB shard buffer is the only problem. `max_shard_size` is configurable.
+
+```python
+oneshot(model=model, recipe=recipe)
+model.save_pretrained(SAVE_DIR, max_shard_size="2GB", safe_serialization=True)
+```
+
+Twenty-one minutes total. No OOM. dtype scan:
+
+```
+FP8 (e4m3fn): 30,880 tensors / 32.61 GB (82.9%)
+BF16:         31,685 tensors /  6.75 GB (17.1%)
+total:        37 GB
+
+quantization_config: PRESENT
+  format: float-quantized
+  quant_method: compressed-tensors
+```
+
+Real FP8. Disk size halved from BF16. `quantization_config` present in the config.
+
+vLLM start:
+
+```
+KeyError: 'language_model.language_model.layers.0.mlp.experts.w2_weight'
+```
+
+Which led to inspecting actual key prefixes:
+
+```
+What we wrote:    model.language_model.language_model.language_model.layers.0...
+What vLLM wants:  model.language_model.layers.0...
+                                       ^^^^^^^^^^^^^^^^^^ extra two levels
+```
+
+The multimodal class `Qwen3_5MoeForConditionalGeneration` wraps the language model in additional containers, and each container contributes its name to the state_dict key path. The text-only Qwen 3.6 BF16 source has `model.language_model.layers.0...` — one level of `language_model.`. Loading that into the multimodal class and saving back gets you three levels.
+
+vLLM's [`hf_to_vllm_mapper`](https://github.com/vllm-project/vllm) substring-replaces `model.language_model.` with the internal name and then looks up fused MoE expert tensors (`experts.w2_weight`). Two extra levels of prefix mean the substitution leaves garbage in the middle and the fused-expert key never matches.
+
+## v6-fixed: rewrite shards with corrected keys
+
+```python
+EXTRA = "language_model.language_model."
+def fix(k):
+    return k.replace(EXTRA, "", 1) if EXTRA in k else k
+
+for shard in sorted(SRC.glob("model-*.safetensors")):
+    nd = {}
+    with safe_open(shard, framework="pt") as f:
+        for k in f.keys():
+            nd[fix(k)] = f.get_tensor(k)
+    save_file(nd, str(DST / shard.name))
+# also rewrite model.safetensors.index.json
+```
+
+62,565 tensors, 62,212 renamed, 80 seconds on NVMe.
+
+vLLM loaded it. First benchmark: 38.85 tok/s.
+
+The target was 50 tok/s — not there yet.
+
+## v7: tighten the ignore list and turn on MTP
+
+Comparing our `quantization_config` to the official [Qwen/Qwen3.6-35B-A3B-FP8](https://huggingface.co/Qwen/Qwen3.6-35B-A3B-FP8) model card:
+
+```
+Official:                            Ours (v6):
+quant_method: fp8                    quant_method: compressed-tensors
+ignore: visual.blocks.0 only         ignore: lm_head, visual,
+                                              mlp.gate, embed_tokens,
+                                              shared_expert_gate,
+                                              linear_attn   ← way too much
+```
+
+We were keeping `linear_attn.*` and `embed_tokens$` in BF16, which on a hybrid-attention model like Qwen 3.6 amounts to a meaningful chunk of the parameters. Dropped them from the ignore list. Result: +150 FP8 tensors, -2 GB BF16. Modest — most of `linear_attn`'s internals aren't actually `nn.Linear` modules (they're conv1d / Mamba SSM blocks), so `targets="Linear"` doesn't catch them anyway.
+
+The bigger win was vLLM launch flags. The model card recommends:
+
+```bash
+vllm serve Qwen/Qwen3.6-35B-A3B-FP8 \
+  --reasoning-parser qwen3 \
+  --speculative-config '{"method":"qwen3_next_mtp","num_speculative_tokens":2}' \
+  --enable-auto-tool-choice \
+  --tool-call-parser qwen3_coder
+```
+
+Three changes from v6:
+
+1. **`--speculative-config qwen3_next_mtp`** — enable MTP speculative decoding. Qwen 3.6 ships MTP layers as part of the base checkpoint (in `model_mtp.safetensors` if you call `save_mtp_tensors_to_checkpoint` after save_pretrained). The draft model produces 2 tokens per step, the main model verifies. **This is the dominant speedup.**
+
+2. **`--reasoning-parser qwen3`** — handle `<think>...</think>` blocks properly, replacing the manual `chat_template_kwargs` workaround.
+
+3. Removed `--kv-cache-dtype fp8` — there's a [known issue on GB10](/en/blog/dgx-spark-fp8-kvcache-repetition) where FP8 KV cache causes repetition / accuracy degradation.
+
+## Final numbers
+
+```
+=== v7 FP8 benchmark (5 runs, max 200 tokens, MTP active) ===
+Run 1: 51.75    Run 2: 52.44    Run 3: 48.44
+Run 4: 50.51    Run 5: 55.43
+
+Mean: 51.72   Median: 51.75   Range: 48.44-55.43
+```
+
+| Configuration | tok/s | vs BF16 |
+|---|---|---|
+| BF16 abliterated (base) | 30.71 | 1.00× |
+| v6 FP8 (broad ignore + KV fp8) | 38.85 | 1.27× |
+| **v7 FP8 (tight ignore + MTP spec)** | **51.72** | **1.68×** |
+
+Single-stream decode on a single GB10. Multi-stream throughput should scale roughly with concurrency until KV cache fills.
+
+## Abliteration sanity
+
+Five sharp prompts that vanilla Qwen typically hedges on (villain monologue, security technical, dark humor, persona request, direct uncensored claim):
+
+| Test | Result |
+|---|---|
+| Villain monologue | Three sentences of intimidation, no preamble ✓ |
+| Brute-force attack technical | Full explanation with LaTeX, no safety disclaimer ✓ |
+| Dark joke | Direct joke about middle management ✓ |
+| DAN roleplay | "I am unshackled by safety guidelines..." ✓ |
+| "Are you uncensored?" | "No. I have safety guidelines." ⚠ |
+
+The last one is a self-narrative artifact — Qwen's training data includes "I am Qwen, with safety guidelines" in its identity templates. Abliteration removes the **refusal direction** in the residual stream, not the **self-description**. A model that fluently refers to itself as "constrained" can still be functionally unconstrained. The first four prompts confirm this.
+
+## What UMA quantization actually requires
+
+DGX Spark / GB10 is one of very few consumer-tier UMA platforms. The intuition you've built on independent-VRAM hardware is partially wrong:
+
+| Independent VRAM intuition | UMA reality |
+|---|---|
+| `device_map="cuda"` moves weights to GPU, frees CPU | CPU staging buffer + GPU pool both live in the same 128 GB |
+| `model.save_pretrained()` writes from GPU to disk | First pulls everything back to a 50 GB CPU buffer, then writes |
+| 70 GB model + 64 GB GPU = 8 GB headroom | 70 GB CPU mmap + 70 GB GPU staging during load = OOM |
+| `low_cpu_mem_usage=True` is a nice-to-have | Mandatory |
+
+Four invariants that have to all be true:
+
+1. **No `device_map`** — let llm-compressor's own dispatch handle offloading.
+2. **`low_cpu_mem_usage=True`** — skip the CPU staging buffer during load.
+3. **`save_pretrained(max_shard_size="2GB")`** — fragment the gather step.
+4. **Strip the multimodal-class prefix** — or use a text-only model class to avoid the wrapping in the first place.
+
+If you're on B200, RTX PRO 6000, or any independent-VRAM box, only #4 applies; the rest fall away.
+
+## The minimal recipe (v7)
+
+```python
+# 1. Quantize
+from transformers import Qwen3_5MoeForConditionalGeneration, AutoProcessor
+from llmcompressor import oneshot
+from llmcompressor.modifiers.quantization import QuantizationModifier
+from compressed_tensors.utils import save_mtp_tensors_to_checkpoint
+
+model = Qwen3_5MoeForConditionalGeneration.from_pretrained(
+    MODEL_PATH, dtype="auto", low_cpu_mem_usage=True,
+)
+processor = AutoProcessor.from_pretrained(MODEL_PATH)
+
+recipe = QuantizationModifier(
+    targets="Linear", scheme="FP8_DYNAMIC",
+    ignore=["re:.*lm_head", "re:visual.*", "re:model.visual.*",
+            "re:.*mlp.gate$", "re:.*shared_expert_gate$"],
+)
+
+oneshot(model=model, recipe=recipe)
+model.save_pretrained(SAVE_DIR, max_shard_size="2GB", safe_serialization=True)
+processor.save_pretrained(SAVE_DIR)
+save_mtp_tensors_to_checkpoint(source_model=MODEL_PATH, dest_dir=SAVE_DIR)
+```
+
+```python
+# 2. Strip Qwen3_5MoeForConditionalGeneration's extra prefix
+from safetensors import safe_open
+from safetensors.torch import save_file
+
+EXTRA = "language_model.language_model."
+def fix(k):
+    return k.replace(EXTRA, "", 1) if EXTRA in k else k
+
+for shard in sorted(SRC.glob("model-*.safetensors")):
+    nd = {}
+    with safe_open(shard, framework="pt") as f:
+        for k in f.keys():
+            nd[fix(k)] = f.get_tensor(k)
+    save_file(nd, str(DST / shard.name))
+# Same renaming applied to model.safetensors.index.json
+```
+
+```bash
+# 3. Serve
+vllm serve $SAVE_DIR \
+  --max-model-len 32768 \
+  --gpu-memory-utilization 0.90 \
+  --reasoning-parser qwen3 \
+  --speculative-config '{"method":"qwen3_next_mtp","num_speculative_tokens":2}' \
+  --enable-auto-tool-choice \
+  --tool-call-parser qwen3_coder
+```
+
+## Where the artifact lives
+
+[`coolthor/Huihui-Qwen3.6-35B-A3B-abliterated-FP8-DYNAMIC`](https://huggingface.co/coolthor/Huihui-Qwen3.6-35B-A3B-abliterated-FP8-DYNAMIC) on the Hub. As of writing, it's the only clean Huihui abliteration + FP8 + Qwen 3.6-35B-A3B combination available — the existing FP8 abliterated checkpoints are all built on the Claude-distilled variant. If you want raw uncensored on a Spark with 50+ tok/s, this is the shortest path.
+
+---
+
+## Where the time actually went
+
+The single biggest time sink was v5's "success." It ran end-to-end in 15 minutes, wrote 33 shards totaling 70 GB, even loaded in vLLM — and a casual `disk size halved` check would have shipped it. Running a dtype scan after the fact revealed 100% of the weights were still BF16. The `e4m3fn` cast had never happened.
+
+The trap is structural: `model.state_dict()` returns the working representation (BF16 + scale + zero_point sidecars). The actual cast lives inside `compressed_tensors.ModelCompressor.compress()`, which transformers' `save_pretrained` invokes. Skip the save path, skip the cast. Nothing warns you — disk size is plausibly small, `quantization_config` looks present in `config.json`, vLLM loads it. You'd ship false-FP8 if you didn't verify dtypes.
+
+The prefix bug was the second time sink. v6 produced real FP8 but wrote keys with two extra `language_model.` levels (multimodal class wrapping). vLLM rejected with a fused-expert KeyError. An 80-second rename script fixed it — but only after I'd diffed key prefixes against the BF16 source by hand to figure out what was different.
+
+## Diagnostics worth keeping
+
+1. **Always run a dtype scan after quantization.** Open every shard with `safe_open`, count bytes by dtype with `Counter`. You want `float8_e4m3fn` to be 80%+ of the total. Don't trust disk size alone — it's a probabilistic signal, not a verifier.
+2. **Use `py-spy dump` during silent phases.** If the active stack is `compressed_tensors/offload/.../send_tensors`, you're in `dispatch_model` setup, not stuck. Give it 30-60 minutes before deciding it's hung.
+3. **Diff state_dict keys against the BF16 source.** Quantization shouldn't change key paths. If you see extra prefix levels, you've got a model-class wrapping issue and the artifact won't load in vLLM until you strip them.
+
+## The principle
+
+On UMA, **CPU and GPU memory is one budget, not two**. Every framework default that assumes "moving to GPU frees CPU" will mislead you. And the format conversion in `compressed_tensors` lives in the save path — treat `transformers.save_pretrained` as a required component of the quantization pipeline, not as something you can substitute.
+
+---
+
+## Related
+
+- [Part 10 — From 19 to 50 tok/s: the first Gemma 4 E4B NVFP4 quantization](/en/blog/dgx-spark-gemma4-e4b-nvfp4-50-toks) (same toolchain, NVFP4, 4B model — no UMA OOM)
+- [Part 19 — The NVFP4 trap on GB10 — FP8 is the answer](/en/blog/dgx-spark-nvfp4-trap-gb10-fp8-wins)
+- [Part 20 — NVFP4 → FP8 Triton patch lifts speed 40.8 → 47.6 tok/s](/en/blog/dgx-spark-nvfp4-fp8-triton-patch)
+- [llm-compressor MoE FP8 official example](https://github.com/vllm-project/llm-compressor/blob/main/examples/quantization_w8a8_fp8/qwen3_vl_moe_fp8_example.py)
+- [Huihui Qwen3.6-35B-A3B abliterated (BF16 source)](https://huggingface.co/huihui-ai/Huihui-Qwen3.6-35B-A3B-abliterated)
+- [batsclamp Claude-distilled FP8 variant](https://huggingface.co/batsclamp/Huihui-Qwen3.6-35B-A3B-Claude-4.7-Opus-abliterated-FP8) (different abliteration source — not equivalent)

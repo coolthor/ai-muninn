@@ -1,0 +1,192 @@
+---
+title: "[SWE-bench] Where Qwen 3.6 35B Loses on SWE-bench Lite: Anatomy of 155 Unresolved Tasks"
+description: "Qwen 3.6 35B-A3B FP8 hits 48.33% (145/300) on SWE-bench Lite with the same scaffold that gets Gemma 4 26B to 38.67%. The 9.66-point gap deserves an explanation. This is a deep dive on Qwen 3.6's 155 failures: 76% are wrong-logic patches, 14% are incomplete fixes, 10% never submit. The categorization is asymmetric — Gemma 4's failures haven't been classified the same way yet — so the cross-model comparison is part hypothesis, part data."
+date: "2026-04-28"
+updatedAt: "2026-04-28"
+tags: ["SWE-bench", "Qwen 3.6", "Gemma 4", "failure analysis", "open-source models", "scaffold", "DGX Spark", "wrong_logic"]
+series: "DGX Spark"
+part: 24
+faq:
+  - q: "What's the dominant failure mode for Qwen 3.6 35B on SWE-bench Lite?"
+    a: "wrong_logic at 76% (118 of 155 unresolved instances). The model finds the right file, produces a syntactically valid patch, but gets a logical detail wrong: scope errors, reversed conditions, missing branches, subtly incorrect regex flags. These are by far the most addressable failures — they're already past the hardest steps (find file, write code) and only need feedback to converge."
+  - q: "Same scaffold, why does Qwen 3.6 35B beat Gemma 4 26B by 9.66 points?"
+    a: "Scaffold is identical (backticks + edit-tool v2 + budget prompt), so the gap reflects model differences — but Qwen and Gemma differ in total parameter count (35B vs 26B), architecture (hybrid linear attention + MoE vs pure MoE), and training data. It's not a single-variable comparison. The more answerable question is 'which failure categories absorb the 29-instance difference,' which requires running the same classifier on Gemma 4's 184 unresolved trajectories. Not done yet."
+  - q: "How much can a retry loop recover from these wrong_logic failures?"
+    a: "Tentatively, some of them. On 10 wrong_logic cases with three prompt variants in our follow-up Part 19 work, post-hoc union recovers 2 of 10. N is too small to estimate a rate; the data point is that the model can articulate why its patch failed but often can't write the fix. Format adherence may degrade before reasoning does — that's the running hypothesis."
+  - q: "Was the Qwen 3.6 classifier biased?"
+    a: "Yes, and it's worth naming. Qwen 3.6 self-classified its own trajectories. A model labeling its own failures has every incentive to draw a sympathetic line — calling something 'incomplete_patch' instead of 'wrong_logic' is a softer admission. Cross-validation with a different classifier (Claude or GPT) would tighten the numbers. We didn't do that here. The 76% figure should be read as 'in the right neighborhood' rather than precise."
+---
+
+import { TLDRCard } from "@/components/blog/TLDRCard";
+
+<TLDRCard>
+Qwen 3.6 35B-A3B FP8 on SWE-bench Lite: **145/300 = 48.33% resolved**. Of the 155 unresolved, **76% (118) are wrong_logic** — model found the right file, wrote a valid patch, the logic was wrong. 14% are partial patches, 10% never submitted. Same scaffold gives Gemma 4 26B 38.67%; the 9.66-point gap is a hypothesis about failure-distribution differences, not a measured one — Gemma 4's failures haven't been classified the same way.
+</TLDRCard>
+
+<VideoEmbed src="/videos/swe-bench-qwen36-failure-modes.mp4" />
+
+## The 9.66-point gap
+
+[Part 18](/en/blog/swe-bench-scaffold-transfers-three-models) ran the same scaffold across three open models on SWE-bench Lite:
+
+| Model | Total | Active per token | Resolved | Same scaffold |
+|---|---|---|---|---|
+| Gemma 4 E4B | 8B | ~1B | 50/300 (16.67%) | ✓ |
+| Gemma 4 26B-A4B | 26B | 4B | 116/300 (38.67%) | ✓ |
+| **Qwen 3.6 35B-A3B** | **35B** | **3B** | **145/300 (48.33%)** | ✓ |
+
+29 instances of difference between Qwen and Gemma 4 26B isn't a single-variable comparison. They differ in total parameter count (35B vs 26B), architecture (Qwen 3.6 uses hybrid linear attention + MoE; Gemma 4 26B is pure MoE), and training data. Activation-parameter count alone doesn't predict capability.
+
+The more useful question is "**which failure categories absorb the 29-instance difference**" — and that requires looking at failure structure, not just resolved counts.
+
+## Categorizing 155 failures
+
+I fed each unresolved trajectory back to Qwen 3.6 with a classification prompt. The output was a JSON with three categories:
+
+| Category | Definition | Count | % |
+|---|---|---|---|
+| **wrong_logic** | Right file, valid patch, wrong logic | **118** | **76.1%** |
+| `incomplete_patch` | Partial fix — handles one branch, misses the other | 21 | 13.5% |
+| `no_submission` | Hit step limit without submitting a patch | 16 | 10.3% |
+
+```
+wrong_logic       ████████████████████████████████ 76%
+incomplete_patch  ██████ 14%
+no_submission     █████ 10%
+```
+
+What's notable about this distribution is the **absence of a fourth category**: "couldn't find the right file." Every unresolved instance got past file location. The scaffold's budget prompt ("Steps 1-10: explore → 10-35: edit ONE file") closed off the failure mode where the model gets lost in the codebase, edits the wrong file, runs out of steps. That category was a major source of failures before the scaffold existed; now it's gone.
+
+## What wrong_logic looks like in practice
+
+Three samples drawn from the 118:
+
+**`astropy__astropy-14365`** — flag set, logic not updated:
+
+> "Patch adds `re.IGNORECASE` to regex but does not handle case-insensitive command parsing correctly in logic."
+
+The model recognized that case-insensitivity was wanted, set the flag, didn't update the comparison code that consumes the regex output. Setting the flag without changing the logic is exactly as broken as not setting the flag at all.
+
+**`django__django-11019`** — undefined variable:
+
+> "Patch checks if element is in list_1 but list_1 is not defined in scope, causing NameError."
+
+A linter would catch this. mini-swe-agent doesn't run a linter between submission and verification.
+
+**`django__django-11283`** — reversed condition:
+
+> "The patch logic is incorrect; it excludes permissions with the target content type instead of excluding those that already exist with the target content type."
+
+The diff reads coherently. The condition is logically inverted. You'd only catch this by running the test.
+
+The pattern across all 118: the model has a high-level grasp of the problem, writes patches that look plausible, gets a structural detail wrong. Many of these would survive code review by someone reading the diff without running it.
+
+## incomplete_patch (14%) — stops before it should
+
+**`astropy__astropy-7746`**:
+
+> "Patch handles empty arrays in one branch but misses the other branch where ra_dec_order and sky conditions differ."
+
+The model fixes the obvious case and stops. The symmetric case (different conditions, same bug) gets ignored.
+
+**`django__django-11422`**:
+
+> "Patch adds watch_file for manage.py but misses watching other entry points like __main__.py or wsgi.py."
+
+Single-target fix where the issue is multi-target.
+
+The pattern: the model finds **a** correct fix and treats the task as done. The "find all instances" generalization step doesn't happen.
+
+## no_submission (10%) — runs out of room
+
+```
+Hit 97-step limit without generating any patch.
+Hit 92-step limit without generating any patch.
+Hit 86-step limit without generating any patch.
+```
+
+Step limit is 100. These instances are heavily concentrated in django (large codebase) and sympy (deep symbolic logic). The model spends its budget exploring and never converges to a fix.
+
+## Distribution across repos
+
+The 155 failures span 11 repositories. Two dominate:
+
+| Repo | Failures | % of failures |
+|---|---|---|
+| django | 49 | 31.6% |
+| sympy | 45 | 29.0% |
+| matplotlib | 15 | 9.7% |
+| pytest-dev | 12 | 7.7% |
+| scikit-learn | 9 | 5.8% |
+| sphinx-doc | 9 | 5.8% |
+| other (5 repos) | 16 | 10.3% |
+
+This roughly tracks SWE-bench Lite's overall distribution — django and sympy are the two biggest sources of instances in the benchmark. So the failures aren't disproportionately concentrated in any repo; the model is failing at roughly the rate the benchmark composition predicts.
+
+## What about Gemma 4 26B's failures?
+
+Here's where the story has a hole. We have **Qwen 3.6's 155 categorized**. We have **Gemma 4 26B's 184 unresolved trajectories sitting on disk**, untouched. They haven't been run through the same classifier.
+
+So the cross-model comparison can only be a hypothesis at this point. Three structural guesses about how the categories shift (architectural / training-data differences, not active-param size):
+
+| Category | Qwen 3.6 | Gemma 4 26B (predicted) | Reasoning |
+|---|---|---|---|
+| `no_submission` | 10% | **higher** | Smaller total parameter pool — less capacity for codebase exploration; runs out of steps more often on big repos |
+| `incomplete_patch` | 14% | **higher** | Narrower exploration coverage → misses symmetric cases |
+| `wrong_logic` | 76% | **lower** | Because more failures bail before reaching the patch-writing step |
+
+If this is right, Qwen 3.6's 9.66-point lead over Gemma 4 26B isn't because Qwen writes better-quality patches at the same point in the pipeline. It's because Qwen reaches the **patch-writing step at all** more often.
+
+This is testable. We'd run the same classifier on Gemma 4's 184 trajectories and compare distributions. We haven't. It's the obvious follow-up.
+
+## What this means for retry-loop work
+
+[Part 19](/en/blog/dgx-spark-harness-third-pillar) (still in draft) tested whether feeding test failures back to the model can recover wrong_logic instances. Three prompt variants on 10 cases, post-hoc union recovers 2 of 10. N is small. The signal is real but unmeasured.
+
+Reading these two pieces together:
+
+- **This piece**: 48.33% is the static-scaffold ceiling for Qwen 3.6. 76% of the gap from 100% is wrong_logic — patches that look like they should work and don't.
+- **Part 19**: Feed those wrong_logic cases the failing test output. The model can articulate why its patch failed but often can't write the fix. Format adherence may degrade before reasoning does.
+
+The retry loop isn't free — it doubles or triples context per instance. But on the right slice (wrong_logic), it has a real chance of moving the needle.
+
+## Methodology caveats
+
+Three reasons to read these numbers as approximate:
+
+1. **Self-classification bias.** Qwen 3.6 labeled its own failures. A model has every reason to soften its own failure descriptions — calling a patch "incomplete" is a more sympathetic frame than "wrong logic." Cross-validation with a strong external classifier (Claude, GPT) would change the proportions, possibly meaningfully.
+
+2. **No inter-rater agreement.** Single-pass labeling. We didn't sample-and-relabel to estimate consistency.
+
+3. **The categories themselves are a forced choice.** Some patches are wrong_logic *and* incomplete_patch — handling branch A correctly but inverting branch B's condition. The classifier picks one. The 76/14/10 split is a projection, not a partition.
+
+If you want the real distribution to within a few points, you'd need an independent strong-model classifier and at least two passes for inter-rater agreement. We didn't do that. The numbers are directionally honest, not precisely calibrated.
+
+## Where the time actually went
+
+Self-classification was the easy choice and it cost something. Asking Qwen 3.6 to label its own failures is fast and free, but a model has every incentive to soften its own diagnoses — calling something `incomplete_patch` is a more sympathetic frame than `wrong_logic`. Without cross-validating against an external classifier (Claude, GPT), the 76% number could be off by ±5-10 points. I didn't run the cross-check.
+
+The second non-obvious cost was confirming the scaffold actually closed the "wrong file" failure mode. The 76% wrong_logic claim is meaningful only if the denominator is "instances that reached the patch-writing stage." If 30% of unresolved were stuck at file location, the headline number would change shape. Spot-checking trajectories to confirm the scaffold-budget combination was doing its job took longer than the classification pass itself.
+
+## Patterns worth keeping
+
+1. **Look at failure structure, not just resolved rate.** Two models at 38% can have completely different failure profiles — one mostly wrong_logic (close to success, recoverable), one mostly no_submission (structurally stuck). Binary pass/fail hides this.
+2. **High wrong_logic ratio is a signal that retry/feedback loops are worth investing in.** These are failures one diff away from success. A test-output-back-to-model loop has a real chance. Low wrong_logic ratio means the bottleneck is somewhere earlier.
+3. **Asymmetric data deserves explicit hypothesis framing.** We have Qwen's classifications, not Gemma's. Anything we say about cross-model comparison is a hypothesis until we run the same classifier on Gemma's 184 unresolved trajectories. Calling a hypothesis a finding is how bad numbers spread.
+
+## The principle
+
+Resolved rate is a floating-point summary; failure-mode distribution is the engineering signal. If you only see 38.67% vs 48.33%, you don't know what to optimize next. If you see "76% of failures are wrong_logic," you know where to invest. If you see "50% are no_submission," you've got a step-budget problem to solve before anything else.
+
+A 35B open-source model running locally hits 48.33% on the same scaffold a Claude-3.5-Sonnet system uses. **The scaffold is the floor; the model is the ceiling.** A correctly-engineered scaffold with the right model is a much better return than a bigger model on a worse scaffold.
+
+---
+
+## Related
+
+- [Part 17 — Gemma 4 26B hits 38.67% on SWE-bench Lite](/en/blog/swe-bench-lite-gemma4-26b-38-percent)
+- [Part 18 — Same scaffold, three models, 16% → 38% → 48%](/en/blog/swe-bench-scaffold-transfers-three-models)
+- [Part 16 — Local-model SWE-bench scaffold engineering](/en/blog/dgx-spark-gemma4-swe-bench-scaffold-engineering)
+- [SWE-bench paper (arXiv 2310.06770)](https://arxiv.org/abs/2310.06770) — Princeton's benchmark design and evaluation methodology
+- [mini-swe-agent (GitHub)](https://github.com/SWE-agent/mini-SWE-agent) — the scaffold base we built on
+- [SWE-bench Lite leaderboard](https://www.swebench.com/lite.html)

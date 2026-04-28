@@ -1,0 +1,219 @@
+---
+title: "[SWE-bench] 解剖 Qwen 3.6 35B 的 155 個失敗:48.33% 之上的天花板長什麼樣"
+description: "Qwen 3.6 35B-A3B 在 SWE-bench Lite 拿 48.33%(145/300),貼近 SWE-agent + Claude 3.7 Sonnet。但剩下的 155 題告訴你模型還差什麼:76% 是「找對檔案、改錯邏輯」。Gemma 4 26B 同一套腳手架拿 38.67% — 9.66% 落差大概率來自不同失敗類型的比例不同。"
+date: "2026-04-27"
+updatedAt: "2026-04-27"
+tags: ["SWE-bench", "Qwen 3.6", "Gemma 4", "failure analysis", "open-source models", "scaffold", "DGX Spark", "wrong_logic"]
+series: "DGX Spark"
+part: 24
+faq:
+  - q: "Qwen 3.6 35B 在 SWE-bench Lite 失敗的主要原因是什麼?"
+    a: "76% 是 `wrong_logic` — 模型找到正確的檔案、寫出能跑的補丁,但邏輯細節錯(漏分支、scope 寫錯、條件反向)。14% 是 `incomplete_patch`(只修一半),10% 是 `no_submission`(撞步數上限沒交)。沒有「找錯檔案」這類失敗 — 腳手架的預算提示已經把這層擋掉了。"
+  - q: "Qwen 3.6 跟 Gemma 4 26B 用同一套腳手架,為什麼 Qwen 高 9.66%?"
+    a: "腳手架完全一樣(反引號協議 + edit-tool v2 + 預算提示),所以落差來自模型本身 — 但 Qwen 跟 Gemma 在總參數量(35B vs 26B)、架構(混合線性注意力 + MoE 對純 MoE)、訓練資料都不同,不是單一變數。比較精準的問法是「29 題落差去了哪些失敗類別」,這要對 Gemma 4 的 184 題未解跑同一個分類器才能回答 — 還沒做。"
+  - q: "76% `wrong_logic` 代表什麼?是好事還是壞事?"
+    a: "好事多一點。`wrong_logic` 表示模型找到對的檔案、能交出補丁 — 已經比「找錯檔案」或「寫不出補丁」進步一大段。這也是為什麼 Part 19 試重試流程:把測試錯誤訊息丟回去讓模型修,理論上能撈回一部分 `wrong_logic`。"
+  - q: "Gemma 4 26B 的失敗模式是不是也 76% `wrong_logic`?"
+    a: "還沒跑。我們只有 116/300 解掉的數字,剩 184 題的軌跡沒套用同樣的分類器。結構性的猜測是 Gemma 4 的失敗會更偏向 `no_submission` + `incomplete_patch`(總參數量小,大型 codebase 探索較吃力),但這只是假設。"
+---
+
+import { TLDRCard } from "@/components/blog/TLDRCard";
+
+<TLDRCard>
+Qwen 3.6 35B-A3B FP8 在 SWE-bench Lite 解掉 145/300 = **48.33%**。剩下 155 題裡 **118 題(76%)是 `wrong_logic`** — 找對檔案、寫出補丁、邏輯錯。同一套腳手架下 Gemma 4 26B 是 38.67%,差 9.66 個百分點。**29 題落差去了哪裡?三條失敗類型的不同比例,是這篇的假設。**
+</TLDRCard>
+
+<VideoEmbed src="/videos/swe-bench-qwen36-failure-modes.mp4" />
+
+## 白話版:AI 怎麼修 GitHub 上的 bug,失敗的時候是怎麼錯
+
+SWE-bench Lite 是一份 300 題的考卷,題目來自開源專案(django、sympy、matplotlib 這類)真實發生過的 bug。AI 拿到 bug 描述加上整個原始碼,要找出該改的檔案、寫出正確的補丁,跑測試通過才算解掉。
+
+我們在 DGX Spark 上跑 Qwen 3.6 35B(中國 Qwen 的開源 AI)解了 **145 題,48.33%**。對照組:Claude 3.7 Sonnet 配某些工具是 48%、Gemma 4 26B(Google 模型)用同一套腳手架是 38.67%。也就是 35B 的開源模型在地端電腦上,打到了商用頂級系統的水準。
+
+剩下沒解的 155 題不是隨機分布。**76% 都長得很像** — AI 找到對的檔案、寫出能套用的補丁,但邏輯細節錯(條件反向、變數沒定義、漏處理另一個分支)。剩下 14% 是只修了一半,10% 是花光步數還寫不出補丁。
+
+這篇拆這 155 個失敗的樣態,並丟出一個假設:Qwen 3.6 比 Gemma 4 26B 多解 29 題,落差大概率不是「Qwen 寫的補丁比較對」,而是「Qwen 比 Gemma 更多題能走到『寫補丁』那一步」。下面是細節。
+
+---
+
+## 9.66% 落差怎麼來的:看失敗的結構,不只看通過率
+
+[Part 18](/zh-TW/blog/swe-bench-scaffold-transfers-three-models) 給了三個模型在 SWE-bench Lite 的成績:
+
+| 模型 | 總參數 | 啟動參數 | 解掉 | 同一套腳手架 |
+|---|---|---|---|---|
+| Gemma 4 E4B | 8B | ~1B | 50/300 = 16.67% | ✓ |
+| Gemma 4 26B-A4B | 26B | 4B | 116/300 = 38.67% | ✓ |
+| **Qwen 3.6 35B-A3B** | **35B** | **3B** | **145/300 = 48.33%** | ✓ |
+
+29 題的落差不是單一因素造成。Qwen 跟 Gemma 在總參數量(35B 對 26B)、架構(Qwen 3.6 是混合線性注意力加 MoE,Gemma 4 26B 是純 MoE)、訓練資料都不同 — 不能只看啟動參數量就推論能力。
+
+要回答「為什麼差 29 題」,單看通過率看不出來,得進到失敗的**結構**。
+
+---
+
+## Qwen 3.6 的 155 題未解,分成三類
+
+把 155 個未解的軌跡丟回 Qwen 3.6 自己當分類器(這個方法本身有偏差,後面會講),分成三類:
+
+| 類別 | 條件 | 數量 | 佔比 |
+|------|------|------|------|
+| **`wrong_logic`** | 改對檔案、補丁能 apply、邏輯細節錯 | **118** | **76.1%** |
+| `incomplete_patch` | 改一半 — 處理了分支 A 但漏掉分支 B | 21 | 13.5% |
+| `no_submission` | 撞步數上限,沒交補丁 | 16 | 10.3% |
+
+```
+wrong_logic       ████████████████████████████████ 76%
+incomplete_patch  ██████ 14%
+no_submission     █████ 10%
+```
+
+**沒有「找錯檔案」這一類失敗** — 腳手架的預算提示(「Steps 1-10 understand → 10-35 edit ONE file」)已經把這層擋掉,模型 100% 都找到對的檔案。
+
+---
+
+## 三個類別、三個失敗範例
+
+### `wrong_logic`(76%)— 看起來對,跑起來錯
+
+從 118 個抽三個典型:
+
+**1. `astropy__astropy-14365` — 正則 flag 加了沒接到邏輯**
+> Patch adds `re.IGNORECASE` to regex but does not handle case-insensitive command parsing correctly in logic.
+
+模型加了 `re.IGNORECASE`,但實際比對邏輯沒跟著改成不分大小寫 — flag 設了等於沒設。
+
+**2. `django__django-11019` — 變數沒定義**
+> Patch checks if element is in `list_1` but `list_1` is not defined in scope, causing `NameError`.
+
+直接寫了個未定義的變數,lint 抓得到,但 mini-swe-agent 沒跑 lint。
+
+**3. `django__django-11283` — 條件反向**
+> The patch logic is incorrect; it excludes permissions with the target content type instead of excluding those that already exist with the target content type.
+
+文字看起來合理,但條件邏輯整個反了。光看 diff 看不出來,要跑測試才炸。
+
+**規律**:模型理解了問題大方向,寫得出**形狀對**的補丁,但細節錯。
+
+### `incomplete_patch`(14%)— 改了一半就停
+
+**4. `astropy__astropy-7746`**
+> Patch handles empty arrays in one branch but misses the other branch where `ra_dec_order` and `sky` conditions differ.
+
+只 cover 一個 case,對稱的另一個漏掉。
+
+**5. `django__django-11422`**
+> Patch adds `watch_file` for `manage.py` but misses watching other entry points like `__main__.py` or `wsgi.py`.
+
+修了主要入口,沒看到還有其他 entry point。
+
+**規律**:模型在「最明顯的修法」就停手,沒延伸到類似情況。
+
+### `no_submission`(10%)— 跑光步數
+
+**6-8. `django__django-11797`、`django__django-13265`、`django__django-15738`**
+> Hit 97-step limit without generating any patch.
+> Hit 92-step limit without generating any patch.
+> Hit 86-step limit without generating any patch.
+
+這三題步數上限 100,模型探索完還寫不出補丁。
+
+**規律**:困難或大型 codebase(django 是大宗)讓模型在探索階段就燒光預算。
+
+---
+
+## 失敗 repo 分布
+
+155 個失敗來自 11 個 repo：
+
+| Repo | 失敗數 | 佔總失敗 |
+|------|------|------|
+| django | 49 | 31.6% |
+| sympy | 45 | 29.0% |
+| matplotlib | 15 | 9.7% |
+| pytest-dev | 12 | 7.7% |
+| scikit-learn | 9 | 5.8% |
+| sphinx-doc | 9 | 5.8% |
+| pydata | 4 | 2.6% |
+| pylint-dev | 4 | 2.6% |
+| astropy | 3 | 1.9% |
+| pallets | 3 | 1.9% |
+| mwaskom | 2 | 1.3% |
+
+django + sympy 佔 60.6%,這跟 SWE-bench Lite 整體題目分布一致 — 不代表 Qwen 3.6 在這兩個 repo 特別弱。
+
+---
+
+## 對 Gemma 4 26B 的 9.66% 落差假設
+
+Gemma 4 26B 同一套腳手架拿 38.67%,比 Qwen 3.6 少 29 題。**但 Gemma 4 那 184 題未解我們沒跑同樣的分類**(這是 follow-up)。
+
+直覺假設(**未驗證**,結構性猜測,跟啟動參數無關):
+
+| 類別 | Qwen 3.6 比例 | Gemma 4 預期方向 | 為什麼 |
+|------|---------|------------|------|
+| `no_submission` | 10% | **應更高** | 總參數量較小,大型 codebase 探索較吃力,更容易燒光步數 |
+| `incomplete_patch` | 14% | **應更高** | 探索覆蓋面較窄,容易漏對稱 case |
+| `wrong_logic` | 76% | **應較低** | 因為更多題沒走到 `wrong_logic` 這階段就先掛 |
+
+意思是:**「Qwen 比較會寫補丁」這個直覺可能是錯的**,更可能是 **「Qwen 比 Gemma 多更多題能走到『寫補丁』這個階段」**。
+
+要回答 29 題落差「去了哪些類別」,需要對 Gemma 4 的 184 軌跡跑同一個分類器。
+
+---
+
+## 76% `wrong_logic` 的另一面:重試流程有沒有用
+
+[Part 19](/zh-TW/blog/dgx-spark-harness-third-pillar)(還在 draft)測試一個假設:**既然 76% 是 `wrong_logic`,把測試錯誤訊息丟回去讓模型再改一輪,理論上能撈一部分回來**。
+
+實驗結果:3 版提示 + 10 題,最後聯集救回 2/10。樣本太小,但訊號出現了。
+
+把這篇跟 Part 19 連起來看:
+- **這篇**:48.33% 是腳手架單獨能達到的天花板,76% 失敗在「邏輯細節錯」
+- **Part 19**:把這 76% 餵回去重試 — 是腳手架之上的動態層
+
+---
+
+## 方法論注意事項
+
+1. **Qwen 3.6 自己當分類器** — 同一個模型對自己的軌跡分類,偏好會傾向「合理化自己」的描述。一個補丁是 `wrong_logic` 還是 `incomplete_patch`,邊界並不總是清楚。
+2. **沒做交叉驗證** — 沒換另一個分類器(GPT-5、Claude)重跑來估計一致度。
+3. **155 unique instances** — 不是每個未解都有跑進分類器。有些軌跡資料缺失或不完整。
+
+要更嚴謹的話應該:
+- 用獨立的強模型(Claude / GPT-5)重跑一次分類
+- 對 Gemma 4 26B 的 184 題未解跑同一個分類器
+- 計算 Qwen 對 Gemma 在每個類別的差異
+
+---
+
+## 最花時間的地方
+
+**讓 Qwen 3.6 自己當分類器是省事的做法,但偏差也是預料中的**。同一個模型分類自己的軌跡,把邊界 case 標成 `incomplete_patch` 比 `wrong_logic` 是更給自己面子的講法。沒做交叉驗證(換 Claude 或 GPT 再跑一次)就出數字,76% 這個值 ±5-10% 都合理。
+
+第二費神:確認腳手架真的擋掉了「找錯檔案」那類失敗。每個未解都進到「寫補丁」階段,76% 才有意義 — 不然「`wrong_logic` 76%」會變成「找對檔案的那部分裡 76%」,分母不對。一開始就要看軌跡確認檔案定位沒問題。
+
+## 可搬走的診斷方法
+
+1. **看失敗的結構,不要只看通過率**。同 38.67% 不代表能力相同 — 可能一個是 76% `wrong_logic` + 10% `no_submission`,另一個是 50% `no_submission` + 20% `wrong_logic`。後者天花板低很多。只看通過/失敗的二元結果看不出這個。
+2. **`wrong_logic` 比例高 ≈ 接近成功的失敗**,重試流程是有機會撈的群組(Part 19 那條線就是在驗證這個假設)。比例低反而代表更基本的問題還沒解。
+3. **沒對齊的跨模型比較要明標假設**。我們有 Qwen 的分類沒 Gemma 的,寫文章時就要寫成「假設」而不是「結論」。否則就是用沒跑的數據講故事。
+
+## 通用原則
+
+通過率是浮動指標,失敗模式的分布才是工程訊號。只看 38.67% 對 48.33%,你不知道下一步該優化什麼。看到 76% 是 `wrong_logic`,就知道重試流程是合理投資;看到 50% 是 `no_submission`,就知道要先解步數預算問題。
+
+開源 35B 在 GB10 上跑出 48.33%,**腳手架設下的地板 > 模型大小**。一個對的腳手架,比換更大的模型划算很多。
+
+---
+
+## 相關閱讀
+
+- [Part 17:Gemma 4 26B 在 SWE-bench Lite 拿 38.67%](/zh-TW/blog/swe-bench-lite-gemma4-26b-38-percent)
+- [Part 18:同一套腳手架、三個模型 — 16% → 38% → 48%](/zh-TW/blog/swe-bench-scaffold-transfers-three-models)
+- [Part 19:Harness 第三根支柱(draft)](#) — Qwen 3.6 對這 76% `wrong_logic` 跑重試流程
+- [Part 16:本地小模型 SWE-bench 腳手架工程](/zh-TW/blog/dgx-spark-gemma4-swe-bench-scaffold-engineering)
+- [SWE-bench 原始論文(arXiv 2310.06770)](https://arxiv.org/abs/2310.06770) — Princeton 的 benchmark 設計與評分原理
+- [mini-swe-agent (GitHub)](https://github.com/SWE-agent/mini-SWE-agent) — 我們用的腳手架基底
+- [SWE-bench Lite 排行榜](https://www.swebench.com/lite.html)

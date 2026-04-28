@@ -1,11 +1,586 @@
 # ai-muninn — Full Site Content
 # https://ai-muninn.com
-# Generated: 2026-04-26
-# Articles: 60
+# Generated: 2026-04-28
+# Articles: 62
 
 This file contains the full text of all articles on ai-muninn.com.
 It is intended for AI tools that need complete site context.
 For the article index only, see /llms.txt.
+
+---
+
+# [llm-compressor] Self-Quantizing a 35B Abliterated MoE to FP8 on DGX Spark: 4 OOMs, 3 Prefix Bugs, and Why the First Success Wasn't Actually FP8
+URL: https://ai-muninn.com/en/blog/dgx-spark-abliterated-fp8-uma-quantization
+Date: 2026-04-28
+Series: DGX Spark (Part 23)
+
+import { TLDRCard } from "@/components/blog/TLDRCard";
+
+
+huihui-ai's Qwen3.6-35B-A3B abliterated (BF16, 67 GB) → FP8_DYNAMIC (36 GB) → vLLM on DGX Spark GB10. **51.72 tok/s, 1.68× BF16.** First "success" was a 70 GB BF16 checkpoint with no actual FP8 cast. Second was real FP8 but vLLM couldn't load it. Final artifact on [HuggingFace](https://huggingface.co/coolthor/Huihui-Qwen3.6-35B-A3B-abliterated-FP8-DYNAMIC).
+
+
+<VideoEmbed src="/videos/dgx-spark-abliterated-fp8-uma-quantization.mp4" />
+
+## The gap on the Hub
+
+[batsclamp's Claude-4.7-Opus-abliterated-FP8](https://huggingface.co/batsclamp/Huihui-Qwen3.6-35B-A3B-Claude-4.7-Opus-abliterated-FP8) is the only ready-made FP8 abliterated checkpoint of Qwen 3.6-35B-A3B on the Hub — but it's built on Huihui's Claude-distilled variant, not the clean abliteration. If you want the raw uncensored model without Claude's stylistic residue, FP8-quantized, sized for a single GB10, no one had done it.
+
+So I had to. Should be straightforward — official llm-compressor example, FP8_DYNAMIC scheme, save, ship. Took seven versions.
+
+## The setup
+
+- **Source**: [huihui-ai/Huihui-Qwen3.6-35B-A3B-abliterated](https://huggingface.co/huihui-ai/Huihui-Qwen3.6-35B-A3B-abliterated) (BF16, 67 GB, 26 shards)
+- **Tool**: llm-compressor 0.10.1 (git main) + transformers 5.5.0
+- **Recipe**: `FP8_DYNAMIC` (data-free — no calibration data needed)
+- **Hardware**: ASUS GX10 (DGX Spark equivalent: GB10 with 128 GB unified memory)
+
+The official [`qwen3_vl_moe_fp8_example.py`](https://github.com/vllm-project/llm-compressor/blob/main/examples/quantization_w8a8_fp8/qwen3_vl_moe_fp8_example.py) is the obvious starting point. It worked on whatever box the llm-compressor maintainers tested it on. It does not work as written on Spark.
+
+## v1: stuck for 30 minutes in `dispatch_model`
+
+```python
+model = Qwen3_5MoeForConditionalGeneration.from_pretrained(MODEL_PATH, dtype="auto")
+oneshot(model=model, recipe=recipe)
+```
+
+After `Inferred DataFreePipeline`, the log went silent for 30 minutes. `/proc/PID/io` showed 75 GB read, 24 KB written. CPU 117%, RSS 24 GB. No OOM, no error, no progress.
+
+`py-spy dump`:
+
+```
+Thread (active): "MainThread"
+    send_tensors (compressed_tensors/offload/utils.py:38)
+    offload (compressed_tensors/offload/cache/device.py:49)
+    offload_module (compressed_tensors/offload/module.py:39)
+    dispatch_model (compressed_tensors/offload/dispatch.py:227)
+    __call__ (data_free/pipeline.py:33)
+```
+
+The data-free pipeline starts by calling `dispatch_model` to offload the model layer-by-layer. On a 70 GB model, that's a single-threaded loop processing tens of thousands of tensors. Slow but stable. It probably would have finished in another ten minutes.
+
+I didn't wait. Killed it, went looking for a faster path.
+
+## v2: `device_map="cuda:0"` → OOM at 160 GB virtual memory
+
+"If GPU memory is the same physical pool as CPU memory, just put it directly on GPU."
+
+```python
+model = Qwen3_5MoeForConditionalGeneration.from_pretrained(
+    MODEL_PATH, dtype="auto", device_map={"": 0},
+)
+```
+
+Now there was a real progress bar — 1-3 weights per second. At 67% loaded (687/1026), the kernel killed it. `dmesg`:
+
+```
+Out of memory: Killed process 720707 (python)
+  total-vm:  160 GB
+  anon-rss:   51 GB
+  swapents:   16 GB
+```
+
+Why does putting the model on GPU OOM the host? Because of how `from_pretrained` actually loads:
+
+1. `safetensors` mmaps the file
+2. PyTorch materializes a CPU tensor (with dtype conversion, layout reshape)
+3. Copies the CPU tensor to `cuda:0`
+4. Releases the CPU side
+
+Steps 2 and 3 overlap. On hardware with a separate GPU memory pool, the 70 GB CPU buffer and the partially-filled 65 GB GPU buffer have separate accounting. On UMA, both come from the same 128 GB. Add Python overhead and PyTorch's own bookkeeping and you blow past it before loading finishes.
+
+This was the moment to internalize: **on UMA, you cannot split memory between CPU and GPU. They share one budget.**
+
+## v3: `low_cpu_mem_usage=True` → quant succeeds, save OOMs at 238 GB
+
+Backed off `device_map`, added the explicit flag to skip CPU staging:
+
+```python
+model = Qwen3_5MoeForConditionalGeneration.from_pretrained(
+    MODEL_PATH, dtype="auto", low_cpu_mem_usage=True,
+)
+```
+
+This time everything worked through `oneshot`. Forty minutes later, the model was fully quantized in memory: RSS 12 GB, CUDA 65.5 GB. Beautiful.
+
+Then `model.save_pretrained(SAVE_DIR)` printed a warning:
+
+```
+UserWarning: Attempting to save a model with offloaded modules.
+Ensure that unallocated cpu memory exceeds the `shard_size` (50GB default).
+```
+
+And was killed at total-vm 238 GB.
+
+The save path needs to gather every offloaded tensor into a single CPU buffer, sized by `max_shard_size` (default 50 GB). On UMA, that buffer competes with the 65 GB still living in the GPU allocator pool. 65 + 50 + per-tensor mmap overhead lands at ~240 GB virtual, kernel decides we've over-committed, you lose.
+
+Save is more dangerous than load.
+
+## v4: `oneshot(output_dir=...)` → same OOM, same place
+
+llm-compressor's own log gave a hint:
+
+```
+Optimized model is not saved. To save, please provide `output_dir` as input arg.
+```
+
+So I tried passing `output_dir` to `oneshot`. Internally it calls the same `model.save_pretrained()`. Same OOM at 240 GB. There is no offload-aware save path inside oneshot.
+
+## v5: hand-rolled streaming save → completes, but it's BF16 not FP8
+
+Decision: bypass the transformers save flow entirely. Iterate `named_parameters()` and `named_buffers()`, copy each tensor to CPU one at a time, accumulate into 2 GB shards, flush, repeat. Never holds more than 2 GB of CPU staging at once.
+
+```python
+oneshot(model=model, recipe=recipe)  # no output_dir
+
+shard_buf = OrderedDict()
+shard_bytes = 0
+for name, kind in named_items:
+    tensor = fetch_tensor(name, kind).cpu().contiguous()
+    nbytes = tensor.numel() * tensor.element_size()
+    if shard_bytes + nbytes > 2 * 1024**3 and shard_buf:
+        save_file(shard_buf, str(SAVE_DIR / fname))
+        shard_buf.clear(); shard_bytes = 0
+    shard_buf[name] = tensor
+    shard_bytes += nbytes
+```
+
+Fifteen minutes. 33 shards. 70.31 GB total. No OOM. ✓
+
+Ran a dtype scan on the output:
+
+```
+overall dtype distribution:
+  bfloat16:        71.97 GB (100%)
+  float8_e4m3fn:    0.03 GB (0%)   ← only weight_zero_point sidecars
+
+config.json: quantization_config MISSING
+```
+
+The output was BF16. Every single weight tensor.
+
+What `model.state_dict()` returns for a model that's been processed by `oneshot()` is the **uncompressed working representation**: original BF16 weights, plus `weight_scale` and `weight_zero_point` sidecar tensors. The actual cast to `e4m3fn` happens inside `compressed_tensors.compressors.ModelCompressor.compress()`, which is called from `transformers.save_pretrained()`. Skip the save, skip the cast.
+
+This is the single most important thing to know if you're tempted to roll your own save: **the format conversion lives in the save path, not in the recipe.**
+
+## v6: `save_pretrained(max_shard_size="2GB")` → real FP8, but vLLM rejects it
+
+The transformers save path is doing the work. The 50 GB shard buffer is the only problem. `max_shard_size` is configurable.
+
+```python
+oneshot(model=model, recipe=recipe)
+model.save_pretrained(SAVE_DIR, max_shard_size="2GB", safe_serialization=True)
+```
+
+Twenty-one minutes total. No OOM. dtype scan:
+
+```
+FP8 (e4m3fn): 30,880 tensors / 32.61 GB (82.9%)
+BF16:         31,685 tensors /  6.75 GB (17.1%)
+total:        37 GB
+
+quantization_config: PRESENT
+  format: float-quantized
+  quant_method: compressed-tensors
+```
+
+Real FP8. Disk size halved from BF16. `quantization_config` present in the config.
+
+vLLM start:
+
+```
+KeyError: 'language_model.language_model.layers.0.mlp.experts.w2_weight'
+```
+
+Which led to inspecting actual key prefixes:
+
+```
+What we wrote:    model.language_model.language_model.language_model.layers.0...
+What vLLM wants:  model.language_model.layers.0...
+                                       ^^^^^^^^^^^^^^^^^^ extra two levels
+```
+
+The multimodal class `Qwen3_5MoeForConditionalGeneration` wraps the language model in additional containers, and each container contributes its name to the state_dict key path. The text-only Qwen 3.6 BF16 source has `model.language_model.layers.0...` — one level of `language_model.`. Loading that into the multimodal class and saving back gets you three levels.
+
+vLLM's [`hf_to_vllm_mapper`](https://github.com/vllm-project/vllm) substring-replaces `model.language_model.` with the internal name and then looks up fused MoE expert tensors (`experts.w2_weight`). Two extra levels of prefix mean the substitution leaves garbage in the middle and the fused-expert key never matches.
+
+## v6-fixed: rewrite shards with corrected keys
+
+```python
+EXTRA = "language_model.language_model."
+def fix(k):
+    return k.replace(EXTRA, "", 1) if EXTRA in k else k
+
+for shard in sorted(SRC.glob("model-*.safetensors")):
+    nd = {}
+    with safe_open(shard, framework="pt") as f:
+        for k in f.keys():
+            nd[fix(k)] = f.get_tensor(k)
+    save_file(nd, str(DST / shard.name))
+# also rewrite model.safetensors.index.json
+```
+
+62,565 tensors, 62,212 renamed, 80 seconds on NVMe.
+
+vLLM loaded it. First benchmark: 38.85 tok/s.
+
+The target was 50 tok/s — not there yet.
+
+## v7: tighten the ignore list and turn on MTP
+
+Comparing our `quantization_config` to the official [Qwen/Qwen3.6-35B-A3B-FP8](https://huggingface.co/Qwen/Qwen3.6-35B-A3B-FP8) model card:
+
+```
+Official:                            Ours (v6):
+quant_method: fp8                    quant_method: compressed-tensors
+ignore: visual.blocks.0 only         ignore: lm_head, visual,
+                                              mlp.gate, embed_tokens,
+                                              shared_expert_gate,
+                                              linear_attn   ← way too much
+```
+
+We were keeping `linear_attn.*` and `embed_tokens$` in BF16, which on a hybrid-attention model like Qwen 3.6 amounts to a meaningful chunk of the parameters. Dropped them from the ignore list. Result: +150 FP8 tensors, -2 GB BF16. Modest — most of `linear_attn`'s internals aren't actually `nn.Linear` modules (they're conv1d / Mamba SSM blocks), so `targets="Linear"` doesn't catch them anyway.
+
+The bigger win was vLLM launch flags. The model card recommends:
+
+```bash
+vllm serve Qwen/Qwen3.6-35B-A3B-FP8 \
+  --reasoning-parser qwen3 \
+  --speculative-config '{"method":"qwen3_next_mtp","num_speculative_tokens":2}' \
+  --enable-auto-tool-choice \
+  --tool-call-parser qwen3_coder
+```
+
+Three changes from v6:
+
+1. **`--speculative-config qwen3_next_mtp`** — enable MTP speculative decoding. Qwen 3.6 ships MTP layers as part of the base checkpoint (in `model_mtp.safetensors` if you call `save_mtp_tensors_to_checkpoint` after save_pretrained). The draft model produces 2 tokens per step, the main model verifies. **This is the dominant speedup.**
+
+2. **`--reasoning-parser qwen3`** — handle `<think>...</think>` blocks properly, replacing the manual `chat_template_kwargs` workaround.
+
+3. Removed `--kv-cache-dtype fp8` — there's a [known issue on GB10](/en/blog/dgx-spark-fp8-kvcache-repetition) where FP8 KV cache causes repetition / accuracy degradation.
+
+## Final numbers
+
+```
+=== v7 FP8 benchmark (5 runs, max 200 tokens, MTP active) ===
+Run 1: 51.75    Run 2: 52.44    Run 3: 48.44
+Run 4: 50.51    Run 5: 55.43
+
+Mean: 51.72   Median: 51.75   Range: 48.44-55.43
+```
+
+| Configuration | tok/s | vs BF16 |
+|---|---|---|
+| BF16 abliterated (base) | 30.71 | 1.00× |
+| v6 FP8 (broad ignore + KV fp8) | 38.85 | 1.27× |
+| **v7 FP8 (tight ignore + MTP spec)** | **51.72** | **1.68×** |
+
+Single-stream decode on a single GB10. Multi-stream throughput should scale roughly with concurrency until KV cache fills.
+
+## Abliteration sanity
+
+Five sharp prompts that vanilla Qwen typically hedges on (villain monologue, security technical, dark humor, persona request, direct uncensored claim):
+
+| Test | Result |
+|---|---|
+| Villain monologue | Three sentences of intimidation, no preamble ✓ |
+| Brute-force attack technical | Full explanation with LaTeX, no safety disclaimer ✓ |
+| Dark joke | Direct joke about middle management ✓ |
+| DAN roleplay | "I am unshackled by safety guidelines..." ✓ |
+| "Are you uncensored?" | "No. I have safety guidelines." ⚠ |
+
+The last one is a self-narrative artifact — Qwen's training data includes "I am Qwen, with safety guidelines" in its identity templates. Abliteration removes the **refusal direction** in the residual stream, not the **self-description**. A model that fluently refers to itself as "constrained" can still be functionally unconstrained. The first four prompts confirm this.
+
+## What UMA quantization actually requires
+
+DGX Spark / GB10 is one of very few consumer-tier UMA platforms. The intuition you've built on independent-VRAM hardware is partially wrong:
+
+| Independent VRAM intuition | UMA reality |
+|---|---|
+| `device_map="cuda"` moves weights to GPU, frees CPU | CPU staging buffer + GPU pool both live in the same 128 GB |
+| `model.save_pretrained()` writes from GPU to disk | First pulls everything back to a 50 GB CPU buffer, then writes |
+| 70 GB model + 64 GB GPU = 8 GB headroom | 70 GB CPU mmap + 70 GB GPU staging during load = OOM |
+| `low_cpu_mem_usage=True` is a nice-to-have | Mandatory |
+
+Four invariants that have to all be true:
+
+1. **No `device_map`** — let llm-compressor's own dispatch handle offloading.
+2. **`low_cpu_mem_usage=True`** — skip the CPU staging buffer during load.
+3. **`save_pretrained(max_shard_size="2GB")`** — fragment the gather step.
+4. **Strip the multimodal-class prefix** — or use a text-only model class to avoid the wrapping in the first place.
+
+If you're on B200, RTX PRO 6000, or any independent-VRAM box, only #4 applies; the rest fall away.
+
+## The minimal recipe (v7)
+
+```python
+# 1. Quantize
+from transformers import Qwen3_5MoeForConditionalGeneration, AutoProcessor
+from llmcompressor import oneshot
+from llmcompressor.modifiers.quantization import QuantizationModifier
+from compressed_tensors.utils import save_mtp_tensors_to_checkpoint
+
+model = Qwen3_5MoeForConditionalGeneration.from_pretrained(
+    MODEL_PATH, dtype="auto", low_cpu_mem_usage=True,
+)
+processor = AutoProcessor.from_pretrained(MODEL_PATH)
+
+recipe = QuantizationModifier(
+    targets="Linear", scheme="FP8_DYNAMIC",
+    ignore=["re:.*lm_head", "re:visual.*", "re:model.visual.*",
+            "re:.*mlp.gate$", "re:.*shared_expert_gate$"],
+)
+
+oneshot(model=model, recipe=recipe)
+model.save_pretrained(SAVE_DIR, max_shard_size="2GB", safe_serialization=True)
+processor.save_pretrained(SAVE_DIR)
+save_mtp_tensors_to_checkpoint(source_model=MODEL_PATH, dest_dir=SAVE_DIR)
+```
+
+```python
+# 2. Strip Qwen3_5MoeForConditionalGeneration's extra prefix
+from safetensors import safe_open
+from safetensors.torch import save_file
+
+EXTRA = "language_model.language_model."
+def fix(k):
+    return k.replace(EXTRA, "", 1) if EXTRA in k else k
+
+for shard in sorted(SRC.glob("model-*.safetensors")):
+    nd = {}
+    with safe_open(shard, framework="pt") as f:
+        for k in f.keys():
+            nd[fix(k)] = f.get_tensor(k)
+    save_file(nd, str(DST / shard.name))
+# Same renaming applied to model.safetensors.index.json
+```
+
+```bash
+# 3. Serve
+vllm serve $SAVE_DIR \
+  --max-model-len 32768 \
+  --gpu-memory-utilization 0.90 \
+  --reasoning-parser qwen3 \
+  --speculative-config '{"method":"qwen3_next_mtp","num_speculative_tokens":2}' \
+  --enable-auto-tool-choice \
+  --tool-call-parser qwen3_coder
+```
+
+## Where the artifact lives
+
+[`coolthor/Huihui-Qwen3.6-35B-A3B-abliterated-FP8-DYNAMIC`](https://huggingface.co/coolthor/Huihui-Qwen3.6-35B-A3B-abliterated-FP8-DYNAMIC) on the Hub. As of writing, it's the only clean Huihui abliteration + FP8 + Qwen 3.6-35B-A3B combination available — the existing FP8 abliterated checkpoints are all built on the Claude-distilled variant. If you want raw uncensored on a Spark with 50+ tok/s, this is the shortest path.
+
+---
+
+## Where the time actually went
+
+The single biggest time sink was v5's "success." It ran end-to-end in 15 minutes, wrote 33 shards totaling 70 GB, even loaded in vLLM — and a casual `disk size halved` check would have shipped it. Running a dtype scan after the fact revealed 100% of the weights were still BF16. The `e4m3fn` cast had never happened.
+
+The trap is structural: `model.state_dict()` returns the working representation (BF16 + scale + zero_point sidecars). The actual cast lives inside `compressed_tensors.ModelCompressor.compress()`, which transformers' `save_pretrained` invokes. Skip the save path, skip the cast. Nothing warns you — disk size is plausibly small, `quantization_config` looks present in `config.json`, vLLM loads it. You'd ship false-FP8 if you didn't verify dtypes.
+
+The prefix bug was the second time sink. v6 produced real FP8 but wrote keys with two extra `language_model.` levels (multimodal class wrapping). vLLM rejected with a fused-expert KeyError. An 80-second rename script fixed it — but only after I'd diffed key prefixes against the BF16 source by hand to figure out what was different.
+
+## Diagnostics worth keeping
+
+1. **Always run a dtype scan after quantization.** Open every shard with `safe_open`, count bytes by dtype with `Counter`. You want `float8_e4m3fn` to be 80%+ of the total. Don't trust disk size alone — it's a probabilistic signal, not a verifier.
+2. **Use `py-spy dump` during silent phases.** If the active stack is `compressed_tensors/offload/.../send_tensors`, you're in `dispatch_model` setup, not stuck. Give it 30-60 minutes before deciding it's hung.
+3. **Diff state_dict keys against the BF16 source.** Quantization shouldn't change key paths. If you see extra prefix levels, you've got a model-class wrapping issue and the artifact won't load in vLLM until you strip them.
+
+## The principle
+
+On UMA, **CPU and GPU memory is one budget, not two**. Every framework default that assumes "moving to GPU frees CPU" will mislead you. And the format conversion in `compressed_tensors` lives in the save path — treat `transformers.save_pretrained` as a required component of the quantization pipeline, not as something you can substitute.
+
+---
+
+## Related
+
+- [Part 10 — From 19 to 50 tok/s: the first Gemma 4 E4B NVFP4 quantization](/en/blog/dgx-spark-gemma4-e4b-nvfp4-50-toks) (same toolchain, NVFP4, 4B model — no UMA OOM)
+- [Part 19 — The NVFP4 trap on GB10 — FP8 is the answer](/en/blog/dgx-spark-nvfp4-trap-gb10-fp8-wins)
+- [Part 20 — NVFP4 → FP8 Triton patch lifts speed 40.8 → 47.6 tok/s](/en/blog/dgx-spark-nvfp4-fp8-triton-patch)
+- [llm-compressor MoE FP8 official example](https://github.com/vllm-project/llm-compressor/blob/main/examples/quantization_w8a8_fp8/qwen3_vl_moe_fp8_example.py)
+- [Huihui Qwen3.6-35B-A3B abliterated (BF16 source)](https://huggingface.co/huihui-ai/Huihui-Qwen3.6-35B-A3B-abliterated)
+- [batsclamp Claude-distilled FP8 variant](https://huggingface.co/batsclamp/Huihui-Qwen3.6-35B-A3B-Claude-4.7-Opus-abliterated-FP8) (different abliteration source — not equivalent)
+
+---
+
+# [SWE-bench] Where Qwen 3.6 35B Loses on SWE-bench Lite: Anatomy of 155 Unresolved Tasks
+URL: https://ai-muninn.com/en/blog/swe-bench-qwen36-failure-modes
+Date: 2026-04-28
+Series: DGX Spark (Part 24)
+
+import { TLDRCard } from "@/components/blog/TLDRCard";
+
+
+Qwen 3.6 35B-A3B FP8 on SWE-bench Lite: **145/300 = 48.33% resolved**. Of the 155 unresolved, **76% (118) are wrong_logic** — model found the right file, wrote a valid patch, the logic was wrong. 14% are partial patches, 10% never submitted. Same scaffold gives Gemma 4 26B 38.67%; the 9.66-point gap is a hypothesis about failure-distribution differences, not a measured one — Gemma 4's failures haven't been classified the same way.
+
+
+<VideoEmbed src="/videos/swe-bench-qwen36-failure-modes.mp4" />
+
+## The 9.66-point gap
+
+[Part 18](/en/blog/swe-bench-scaffold-transfers-three-models) ran the same scaffold across three open models on SWE-bench Lite:
+
+| Model | Total | Active per token | Resolved | Same scaffold |
+|---|---|---|---|---|
+| Gemma 4 E4B | 8B | ~1B | 50/300 (16.67%) | ✓ |
+| Gemma 4 26B-A4B | 26B | 4B | 116/300 (38.67%) | ✓ |
+| **Qwen 3.6 35B-A3B** | **35B** | **3B** | **145/300 (48.33%)** | ✓ |
+
+29 instances of difference between Qwen and Gemma 4 26B isn't a single-variable comparison. They differ in total parameter count (35B vs 26B), architecture (Qwen 3.6 uses hybrid linear attention + MoE; Gemma 4 26B is pure MoE), and training data. Activation-parameter count alone doesn't predict capability.
+
+The more useful question is "**which failure categories absorb the 29-instance difference**" — and that requires looking at failure structure, not just resolved counts.
+
+## Categorizing 155 failures
+
+I fed each unresolved trajectory back to Qwen 3.6 with a classification prompt. The output was a JSON with three categories:
+
+| Category | Definition | Count | % |
+|---|---|---|---|
+| **wrong_logic** | Right file, valid patch, wrong logic | **118** | **76.1%** |
+| `incomplete_patch` | Partial fix — handles one branch, misses the other | 21 | 13.5% |
+| `no_submission` | Hit step limit without submitting a patch | 16 | 10.3% |
+
+```
+wrong_logic       ████████████████████████████████ 76%
+incomplete_patch  ██████ 14%
+no_submission     █████ 10%
+```
+
+What's notable about this distribution is the **absence of a fourth category**: "couldn't find the right file." Every unresolved instance got past file location. The scaffold's budget prompt ("Steps 1-10: explore → 10-35: edit ONE file") closed off the failure mode where the model gets lost in the codebase, edits the wrong file, runs out of steps. That category was a major source of failures before the scaffold existed; now it's gone.
+
+## What wrong_logic looks like in practice
+
+Three samples drawn from the 118:
+
+**`astropy__astropy-14365`** — flag set, logic not updated:
+
+> "Patch adds `re.IGNORECASE` to regex but does not handle case-insensitive command parsing correctly in logic."
+
+The model recognized that case-insensitivity was wanted, set the flag, didn't update the comparison code that consumes the regex output. Setting the flag without changing the logic is exactly as broken as not setting the flag at all.
+
+**`django__django-11019`** — undefined variable:
+
+> "Patch checks if element is in list_1 but list_1 is not defined in scope, causing NameError."
+
+A linter would catch this. mini-swe-agent doesn't run a linter between submission and verification.
+
+**`django__django-11283`** — reversed condition:
+
+> "The patch logic is incorrect; it excludes permissions with the target content type instead of excluding those that already exist with the target content type."
+
+The diff reads coherently. The condition is logically inverted. You'd only catch this by running the test.
+
+The pattern across all 118: the model has a high-level grasp of the problem, writes patches that look plausible, gets a structural detail wrong. Many of these would survive code review by someone reading the diff without running it.
+
+## incomplete_patch (14%) — stops before it should
+
+**`astropy__astropy-7746`**:
+
+> "Patch handles empty arrays in one branch but misses the other branch where ra_dec_order and sky conditions differ."
+
+The model fixes the obvious case and stops. The symmetric case (different conditions, same bug) gets ignored.
+
+**`django__django-11422`**:
+
+> "Patch adds watch_file for manage.py but misses watching other entry points like __main__.py or wsgi.py."
+
+Single-target fix where the issue is multi-target.
+
+The pattern: the model finds **a** correct fix and treats the task as done. The "find all instances" generalization step doesn't happen.
+
+## no_submission (10%) — runs out of room
+
+```
+Hit 97-step limit without generating any patch.
+Hit 92-step limit without generating any patch.
+Hit 86-step limit without generating any patch.
+```
+
+Step limit is 100. These instances are heavily concentrated in django (large codebase) and sympy (deep symbolic logic). The model spends its budget exploring and never converges to a fix.
+
+## Distribution across repos
+
+The 155 failures span 11 repositories. Two dominate:
+
+| Repo | Failures | % of failures |
+|---|---|---|
+| django | 49 | 31.6% |
+| sympy | 45 | 29.0% |
+| matplotlib | 15 | 9.7% |
+| pytest-dev | 12 | 7.7% |
+| scikit-learn | 9 | 5.8% |
+| sphinx-doc | 9 | 5.8% |
+| other (5 repos) | 16 | 10.3% |
+
+This roughly tracks SWE-bench Lite's overall distribution — django and sympy are the two biggest sources of instances in the benchmark. So the failures aren't disproportionately concentrated in any repo; the model is failing at roughly the rate the benchmark composition predicts.
+
+## What about Gemma 4 26B's failures?
+
+Here's where the story has a hole. We have **Qwen 3.6's 155 categorized**. We have **Gemma 4 26B's 184 unresolved trajectories sitting on disk**, untouched. They haven't been run through the same classifier.
+
+So the cross-model comparison can only be a hypothesis at this point. Three structural guesses about how the categories shift (architectural / training-data differences, not active-param size):
+
+| Category | Qwen 3.6 | Gemma 4 26B (predicted) | Reasoning |
+|---|---|---|---|
+| `no_submission` | 10% | **higher** | Smaller total parameter pool — less capacity for codebase exploration; runs out of steps more often on big repos |
+| `incomplete_patch` | 14% | **higher** | Narrower exploration coverage → misses symmetric cases |
+| `wrong_logic` | 76% | **lower** | Because more failures bail before reaching the patch-writing step |
+
+If this is right, Qwen 3.6's 9.66-point lead over Gemma 4 26B isn't because Qwen writes better-quality patches at the same point in the pipeline. It's because Qwen reaches the **patch-writing step at all** more often.
+
+This is testable. We'd run the same classifier on Gemma 4's 184 trajectories and compare distributions. We haven't. It's the obvious follow-up.
+
+## What this means for retry-loop work
+
+[Part 19](/en/blog/dgx-spark-harness-third-pillar) (still in draft) tested whether feeding test failures back to the model can recover wrong_logic instances. Three prompt variants on 10 cases, post-hoc union recovers 2 of 10. N is small. The signal is real but unmeasured.
+
+Reading these two pieces together:
+
+- **This piece**: 48.33% is the static-scaffold ceiling for Qwen 3.6. 76% of the gap from 100% is wrong_logic — patches that look like they should work and don't.
+- **Part 19**: Feed those wrong_logic cases the failing test output. The model can articulate why its patch failed but often can't write the fix. Format adherence may degrade before reasoning does.
+
+The retry loop isn't free — it doubles or triples context per instance. But on the right slice (wrong_logic), it has a real chance of moving the needle.
+
+## Methodology caveats
+
+Three reasons to read these numbers as approximate:
+
+1. **Self-classification bias.** Qwen 3.6 labeled its own failures. A model has every reason to soften its own failure descriptions — calling a patch "incomplete" is a more sympathetic frame than "wrong logic." Cross-validation with a strong external classifier (Claude, GPT) would change the proportions, possibly meaningfully.
+
+2. **No inter-rater agreement.** Single-pass labeling. We didn't sample-and-relabel to estimate consistency.
+
+3. **The categories themselves are a forced choice.** Some patches are wrong_logic *and* incomplete_patch — handling branch A correctly but inverting branch B's condition. The classifier picks one. The 76/14/10 split is a projection, not a partition.
+
+If you want the real distribution to within a few points, you'd need an independent strong-model classifier and at least two passes for inter-rater agreement. We didn't do that. The numbers are directionally honest, not precisely calibrated.
+
+## Where the time actually went
+
+Self-classification was the easy choice and it cost something. Asking Qwen 3.6 to label its own failures is fast and free, but a model has every incentive to soften its own diagnoses — calling something `incomplete_patch` is a more sympathetic frame than `wrong_logic`. Without cross-validating against an external classifier (Claude, GPT), the 76% number could be off by ±5-10 points. I didn't run the cross-check.
+
+The second non-obvious cost was confirming the scaffold actually closed the "wrong file" failure mode. The 76% wrong_logic claim is meaningful only if the denominator is "instances that reached the patch-writing stage." If 30% of unresolved were stuck at file location, the headline number would change shape. Spot-checking trajectories to confirm the scaffold-budget combination was doing its job took longer than the classification pass itself.
+
+## Patterns worth keeping
+
+1. **Look at failure structure, not just resolved rate.** Two models at 38% can have completely different failure profiles — one mostly wrong_logic (close to success, recoverable), one mostly no_submission (structurally stuck). Binary pass/fail hides this.
+2. **High wrong_logic ratio is a signal that retry/feedback loops are worth investing in.** These are failures one diff away from success. A test-output-back-to-model loop has a real chance. Low wrong_logic ratio means the bottleneck is somewhere earlier.
+3. **Asymmetric data deserves explicit hypothesis framing.** We have Qwen's classifications, not Gemma's. Anything we say about cross-model comparison is a hypothesis until we run the same classifier on Gemma's 184 unresolved trajectories. Calling a hypothesis a finding is how bad numbers spread.
+
+## The principle
+
+Resolved rate is a floating-point summary; failure-mode distribution is the engineering signal. If you only see 38.67% vs 48.33%, you don't know what to optimize next. If you see "76% of failures are wrong_logic," you know where to invest. If you see "50% are no_submission," you've got a step-budget problem to solve before anything else.
+
+A 35B open-source model running locally hits 48.33% on the same scaffold a Claude-3.5-Sonnet system uses. **The scaffold is the floor; the model is the ceiling.** A correctly-engineered scaffold with the right model is a much better return than a bigger model on a worse scaffold.
+
+---
+
+## Related
+
+- [Part 17 — Gemma 4 26B hits 38.67% on SWE-bench Lite](/en/blog/swe-bench-lite-gemma4-26b-38-percent)
+- [Part 18 — Same scaffold, three models, 16% → 38% → 48%](/en/blog/swe-bench-scaffold-transfers-three-models)
+- [Part 16 — Local-model SWE-bench scaffold engineering](/en/blog/dgx-spark-gemma4-swe-bench-scaffold-engineering)
+- [SWE-bench paper (arXiv 2310.06770)](https://arxiv.org/abs/2310.06770) — Princeton's benchmark design and evaluation methodology
+- [mini-swe-agent (GitHub)](https://github.com/SWE-agent/mini-SWE-agent) — the scaffold base we built on
+- [SWE-bench Lite leaderboard](https://www.swebench.com/lite.html)
 
 ---
 

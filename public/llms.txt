@@ -102,6 +102,10 @@ experimentation with real hardware and production systems.
   https://ai-muninn.com/en/blog/dgx-spark-nvfp4-trap-gb10-fp8-wins
   SM121 lacks native FP4 hardware instruction (cvt.e2m1x2). NVFP4 40.8 tok/s vs FP8 53.8 tok/s on Qwen 3.6. SGLang NVFP4 crashes entirely. Driver 580.142 gives free +4% FP8 boost.
 
+- [Part 20] NVFP4 → FP8 Triton Patch on GB10: 40.8 → 47.6 tok/s (+16.7%)
+  https://ai-muninn.com/en/blog/dgx-spark-nvfp4-fp8-triton-patch
+  Custom Triton kernel that runtime-casts NVFP4 weights to FP8 e4m3 inside vLLM, bypassing the missing cvt.e2m1x2 instruction. Qwen 3.5 35B: 40.8 (Marlin BF16 fallback) → 42.5 (FlashInfer CUTLASS default) → 47.6 (our patch) → 53.8 (native FP8 ceiling). Closes 88% of the gap to native FP8 with no model conversion.
+
 - [Part 21] TMMLU+ Paired Eval: Qwen 3.6 35B Sweeps Gemma 4 26B 51-of-51 on Traditional Chinese
   https://ai-muninn.com/en/blog/tmmluplus-qwen-vs-gemma-traditional-chinese
   22,690 multiple-choice questions, same harness, same DGX Spark. Qwen 75.07% vs Gemma 46.30%, Δ +28.77pp. Qwen wins all 51 paired subjects, including Taiwan-specific (geography_of_taiwan +41.9, traditional medicine +37.4). Both models flunk Taiwanese Hokkien at near-random levels — data scarcity, not model issue.
@@ -109,6 +113,14 @@ experimentation with real hardware and production systems.
 - [Part 22] Abliteration Costs 1.85pp on Traditional Chinese — and 7.7pp on Trust Law
   https://ai-muninn.com/en/blog/tmmluplus-qwen-abliterated-cost
   Ran huihui-ai's abliterated Qwen 3.6 35B through the same TMMLU+ harness. Aggregate dropped 75.07% → 73.22%, −1.85pp. Cost not uniform: regulatory subjects bleed (trust_practice −7.7, administrative_law −7.1, anti_money_laundering −6.7), pure logic improves (+2.9 logic_reasoning, +1.7 junior_math). Hokkien got worse — abliteration doesn't fix data scarcity. Abliterated Qwen still beats Gemma by +26.92pp.
+
+- [Part 23] Self-Quantizing a 35B Abliterated MoE to FP8 on DGX Spark: 4 OOMs, 3 Prefix Bugs, and Why the First Success Wasn't Actually FP8
+  https://ai-muninn.com/en/blog/dgx-spark-abliterated-fp8-uma-quantization
+  huihui-ai's Qwen 3.6 35B abliterated BF16 (67 GB) → FP8_DYNAMIC (36 GB) on a 128 GB UMA box. 51.72 tok/s, 1.68× BF16. Two distinct OOM modes (load-time CPU staging, save-time 50 GB shard buffer), one model class that wraps state_dict with extra prefixes vLLM rejects, and one streaming save that produced BF16 instead of FP8 because the cast lives inside save_pretrained, not state_dict. Final artifact: huggingface.co/coolthor/Huihui-Qwen3.6-35B-A3B-abliterated-FP8-DYNAMIC.
+
+- [Part 24] Where Qwen 3.6 35B Loses on SWE-bench Lite: Anatomy of 155 Unresolved Tasks
+  https://ai-muninn.com/en/blog/swe-bench-qwen36-failure-modes
+  Qwen 3.6 35B-A3B FP8 hits 145/300 = 48.33% on SWE-bench Lite. Of the 155 unresolved: 76% wrong_logic (right file, valid patch, wrong logic), 14% incomplete_patch, 10% no_submission. Same scaffold gives Gemma 4 26B 38.67%. The 9.66-point gap is hypothesized to come from Gemma reaching the patch-writing step less often, not writing worse patches at the same step — verifiable with the same classifier on Gemma's 184 trajectories.
 
 ### Series: NemoClaw (NVIDIA's AI agent framework on DGX Spark)
 
