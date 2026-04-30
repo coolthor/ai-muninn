@@ -1,11 +1,272 @@
 # ai-muninn — Full Site Content
 # https://ai-muninn.com
-# Generated: 2026-04-28
-# Articles: 62
+# Generated: 2026-04-30
+# Articles: 63
 
 This file contains the full text of all articles on ai-muninn.com.
 It is intended for AI tools that need complete site context.
 For the article index only, see /llms.txt.
+
+---
+
+# Vercel Hobby hit 1M/1M Edge Requests. The bug was a Cache-Control header.
+URL: https://ai-muninn.com/en/blog/vercel-edge-requests-must-revalidate-trap
+Date: 2026-04-30
+
+ai-muninn.com hit **1,002,906 / 1,000,000** Vercel Hobby Edge Requests this month. Cause: Next.js + Vercel default to `Cache-Control: public, max-age=0, must-revalidate` on `/public/*`. Even cache HITs trigger conditional GETs that count as edge requests. Fix: 3 lines in `next.config.ts` adding `immutable` for slug-stable paths. Real lesson: I dismissed three Vercel notifications because my notification inbox had 60 unread items. The cache header was a footgun — the inbox was the actual bug.
+
+
+<VideoEmbed src="/videos/vercel-edge-requests-must-revalidate-trap.mp4" />
+
+## Plain version: cache HIT ≠ free
+
+You think browser cache means no server hit? Half right.
+
+If the response carries `cache-control: public, max-age=0, must-revalidate`, the browser sends a conditional GET on every page load asking "is my version still current?" Even when the server replies "yes, unchanged" (HTTP 304, no body), **that round trip still counts as one request**.
+
+Vercel Hobby gives you 1 million requests — but on a **rolling 30-day window**, not a calendar month. One blog page = 1 HTML + 1 OG image + 1 cover video + N inline images. A reader reloading = all of them again. With ~30 articles, the math is nasty.
+
+---
+
+## The wall: April 27 noon
+
+I opened the Vercel dashboard to push a new post.
+
+![Vercel Usage panel: Edge Requests 1M/1M exceeded, all other resources healthy](/images/vercel-cache-trap/dashboard-exceeded.png)
+
+`Exceeded free resources ⚠️`
+
+**1,002,906 / 1,000,000 Edge Requests.** Fluid CPU 2h44m / 4h, ISR Reads 292K / 1M, Function Invocations 240K / 1M — everything else green. **The problem is isolated to one line.**
+
+But sitting with it for a minute: this number means people are reading. ai-muninn is a small bilingual blog about local LLMs and AI infra — pegging Vercel's free quota is technically a footgun, but socially it's good news. So the question split: *did 1M humans actually visit, or is my config inflating things 10×?*
+
+Both turned out to be true.
+
+---
+
+## Part 1: Three dead ends
+
+### "Traffic spike?"
+
+GA4 28-day sessions: 1,733. Down slightly from last month. Not it.
+
+### "Bots?"
+
+I tried to pull Vercel runtime logs to inspect User-Agents. Hobby plan retains runtime logs for **1 hour, capped at 4,000 rows** ([docs](https://vercel.com/docs/logs/runtime)). Dashboard showed ~200 entries covering a single minute. The spike was days old. Dead end.
+
+### "Image bloat?"
+
+I hadn't pushed any larger media. And edge requests count **request count, not bandwidth** — image size doesn't matter for this metric.
+
+Three dead ends, 30 minutes.
+
+---
+
+## Part 2: The cause — `must-revalidate` × cache HIT
+
+Last resort: `curl -I` an OG image:
+
+```http
+$ curl -I https://ai-muninn.com/og/some-post.png
+
+cache-control: public, max-age=0, must-revalidate
+x-vercel-cache: HIT
+```
+
+Two lines that shouldn't coexist. Took three seconds to register.
+
+`x-vercel-cache: HIT` = Vercel CDN had it cached, didn't hit origin. ✓
+
+`max-age=0, must-revalidate` = the browser **must revalidate every load**, treating its own cache as stale on arrival. Even if the server returns 304 Not Modified without body, **the round trip still costs one edge request**.
+
+Vercel meters by **request count**, not bandwidth, not cache miss. CDN HIT, 304 response, user sees cached image — **that conditional GET still bills you**.
+
+### The math
+
+Per blog page = 1 HTML + 1 OG image + 1 cover video + N inline images. A reader visiting 5 posts = at least 25 edge requests, **even with browser cache** — because `max-age=0` forces revalidation on every load.
+
+ai-muninn's 27 articles × variable inline images + sitewide OG/favicon/cover video → 50K-100K daily requests is plausible.
+
+### Why this default exists
+
+[Next.js default for `/public/*`](https://nextjs.org/docs/app/api-reference/file-conventions/public-folder) is `Cache-Control: public, max-age=0`. **Vercel's edge layer** adds `must-revalidate` so deploys reach users immediately ([Vercel Cache-Control docs](https://vercel.com/docs/edge-network/caching)).
+
+Sensible for build artifacts you might re-upload with the same name. Wrong for blog static media where filenames are slug-stable and never re-used.
+
+---
+
+## Part 3: 30-day timeline — one chart says it all
+
+![Vercel Edge Requests 30-day chart: spikes Apr 9-22 totaling 1M, dramatic cliff after Apr 27 fix deploy](/images/vercel-cache-trap/edge-requests-30days.png)
+
+Cleaner than any text:
+
+| Range | Requests | Note |
+|-------|----------|------|
+| Apr 1–6 | < 10K/day | Quiet start |
+| **Apr 9** | **~110K** | Peak day |
+| Apr 9–10 | ~200K total | 20% of monthly quota in 2 days |
+| Apr 13–15 | ~200K total | Another wave |
+| Apr 21–22 | ~135K total | Final wave |
+| **Apr 27** | **fix deployed** | ↓ |
+| Apr 28–30 | 5–15K/day | **~90% daily cut** |
+
+The Apr 9 / 13-15 / 21-22 spikes weren't random. Probably some combination of social shares (Threads, Reddit), AI crawlers (the `llms.txt` was deployed in early April), and bot traffic. Hobby's 1-hour log retention couldn't tell me which. **Free tier is fine for learning, not for incident debug.**
+
+---
+
+## Part 4: The fix — 3 lines
+
+`next.config.ts`:
+
+```ts
+import type { NextConfig } from 'next'
+
+const IMMUTABLE_CACHE = 'public, max-age=31536000, immutable'
+
+const nextConfig: NextConfig = {
+  async headers() {
+    return [
+      { source: '/videos/:path*', headers: [{ key: 'Cache-Control', value: IMMUTABLE_CACHE }] },
+      { source: '/og/:path*',     headers: [{ key: 'Cache-Control', value: IMMUTABLE_CACHE }] },
+      { source: '/images/:path*', headers: [{ key: 'Cache-Control', value: IMMUTABLE_CACHE }] },
+    ]
+  },
+}
+```
+
+Verify:
+
+```http
+$ curl -I https://ai-muninn.com/og/some-post.png
+
+cache-control: public, max-age=31536000, immutable
+x-vercel-cache: HIT
+```
+
+`immutable` ([RFC 8246](https://www.rfc-editor.org/rfc/rfc8246.html)) tells browsers not to revalidate during the freshness lifetime — a year. Force-reload still triggers revalidation (user override is preserved by spec), but normal navigation skips the conditional GET entirely. Edge request bill drops to near-zero for these paths.
+
+---
+
+## Part 5: Footgun — `immutable` is genuinely immutable
+
+If you ever upload a new file under the same path, users will see the cached old version until the year-long TTL expires or they hard-refresh. To bust:
+
+- Use slug-tied filenames you'll never reuse (my OG: `<slug>.png`)
+- Or append `?v=N` to the asset URL when content changes
+- In a pinch, remove the source rule, deploy, wait for cache eviction, re-add
+
+For a blog where every asset is uniquely named per post, this trade is fine. For a marketing site that swaps `hero.jpg` weekly, **don't go immutable** — use `max-age=86400` (one day) instead.
+
+---
+
+## Part 6: 30-day rolling — calendar resets won't save you
+
+Fix deployed. Quota didn't recover.
+
+> **"But tomorrow is May 1, won't the quota reset?"**
+>
+> No. I assumed the same — then [Vercel community confirmed it's a rolling 30-day window, not calendar month](https://community.vercel.com/t/edge-function-limits-and-reset-period-on-the-hobby-plan/4504).
+
+Today (Apr 30) I'm at 1M. The Apr 9 spike (~110K) doesn't roll out of the window until **May 9**. The Apr 22 spike rolls out around **May 22**. Until then, ai-muninn runs throttled — some requests blocked, some features limited.
+
+### Vercel's alerts work — I just don't read my inbox
+
+This was the most embarrassing finding. After upgrading to Pro and finally opening Vercel's notification inbox, I saw:
+
+- **Apr 21**: 75% usage email. ✓ Sent on time. **9 days before the wall hit.**
+- **April 30 (today)**: 100% usage email.
+- **Inbox total: 60 unread** — including multiple deploy failures from mid-April that I'd also missed.
+
+The 75% notification arrived with 9 days of buffer. If I'd read it that day, I'd have caught the Apr 21-22 spike before it pushed me over. **The alert system worked. I treated the inbox as `/dev/null`.**
+
+Real fix isn't building a webhook — Vercel already sends one. It's routing alerts to where I actually look: Telegram, Slack, anywhere that breaks through the wall of unread.
+
+---
+
+## Part 7: What this article itself might break
+
+A few things to flag honestly before publication:
+
+**1. Streisand effect.** Publishing an article about Edge Request quotas could attract enough attention to blow the quota again. If you're reading this, your page view contributed 1 OG + 1 video + ~5-8 inline images to my next 30 days.
+
+**2. The "300K monthly" projection might be wrong.** I'm extrapolating from 3 days of post-fix data (Apr 28-30, ~10K/day). May could spike again from this very article.
+
+**3. `immutable` will burn someone.** Readers copy-pasting these 3 lines will eventually re-upload an asset under the same name and wonder why Twitter shows the old version. Read Part 5 carefully.
+
+**4. The spike attribution is speculation.** I called Apr 9-22 "social shares + bot crawlers" but Hobby's 1-hour log couldn't confirm. Could be ChatGPT/Perplexity crawlers (they discovered the `llms.txt` early April). Could be a single Reddit thread I never saw. I genuinely don't know.
+
+**5. Don't blame Vercel's defaults.** `must-revalidate` is the right default for 99% of cases — anyone who re-uploads `/public/*` build artifacts needs it. Blog scenarios with slug-stable media are an edge case that needs a custom rule.
+
+---
+
+## Part 8: I changed my mind mid-draft — upgraded
+
+This section was rewritten three times during writing. The narrative arc:
+
+### Draft 1: "Don't upgrade Pro"
+
+I wrote up to Part 7 planning to conclude: "Daily 10K post-fix, monthly ~300K, well within Hobby. $20/mo is overkill. Just add a webhook for alerts."
+
+Clean, frugal, matches the "3 lines saved you" hook.
+
+### Fact-check overturned it
+
+I ran [Codex + Gemini fact-check via PAL clink](/en/blog/claude-code-debate-system) (h/t [/debate skill](/en/blog/claude-code-debate-system)). Two hard findings:
+
+1. **"Hobby has no alerts" was wrong.** Hobby has 75%/100% email + dashboard notifications. They're fine — *I* was the broken link (see Part 6).
+2. **"Pro doesn't include full logs" was overstated.** I'd written that Pro is only 1d / 100k rows, with 30-day retention requiring the more expensive Observability Plus add-on.
+
+The second one rewrote my upgrade math.
+
+### After upgrading, another flip
+
+I clicked Upgrade. The Welcome screen said:
+
+> **Observability Plus: Enabled by default.** Query access, alerts, and 30-day data retention.
+
+I'd assumed Observability Plus was a separate paid add-on. **The reality is more nuanced**: per [Vercel's April 2 2026 changelog](https://vercel.com/changelog/no-base-fee-for-observability-plus), the OP base fee was removed. Pro includes 1M Observability Plus events/month, then $1.20/1M overage. For ai-muninn's scale, 1M events is unreachable — it's effectively free to enable.
+
+To be precise: official docs still describe OP as a Pro-tier feature you enable, not a "core Pro feature." So the accurate framing isn't "Pro bundles OP" but rather **"Pro's included usage covers 1M OP events, which means OP is effectively no-cost to enable for blog-scale projects."**
+
+So Pro actually delivers what I wanted: **30-day log retention (via OP, included usage), custom alert thresholds, spend management, 10× quota buffer, immediate unblock.** All for $20/mo.
+
+### Three rewrites in one article
+
+| Step | What I thought | Reality |
+|------|----------------|---------|
+| Draft 1 | "Vercel has no alerts" | Hobby has 75/100% email |
+| After fact-check | "Pro doesn't include 30-day logs" | Pro includes 1M OP events; enabling OP gives 30-day retention |
+| After upgrading | "Vercel's alerts came too late" | **Alerts came on time. I never read the inbox.** |
+
+If I'd skipped fact-check, skipped actually clicking Upgrade, and skipped opening my inbox, I'd have shipped an article that's wrong on all three. The most useful thing I learned writing this isn't about cache headers. It's that **the systems I criticize are usually fine — my workflow around them is the bug.**
+
+---
+
+## What's next: May 30 follow-up
+
+Three observations to settle by end of May:
+
+1. **Did the fix work?** Projected: daily 5-15K → monthly 200-400K
+2. **Was Pro worth it?** $20/mo × 1 month, then decide whether to keep
+3. **Did this article re-trigger the spike?** Streisand check (Part 7)
+
+If May 30 data looks closer to 1M than 300K, I had the wrong root cause and will publish a follow-up admitting it. If the projection holds, those 3 lines + $20 might be the highest-ROI commit pair in ai-muninn history.
+
+The most uncomfortable lesson stays the same regardless: **The cache header was the visible bug. The unread inbox was the real one.**
+
+---
+
+## References
+
+- [Vercel Hobby plan limits](https://vercel.com/docs/plans/hobby)
+- [Vercel Pro plan + Observability Plus](https://vercel.com/docs/plans/pro-plan)
+- [Vercel Cache-Control headers](https://vercel.com/docs/edge-network/caching)
+- [Vercel Runtime Logs retention](https://vercel.com/docs/logs/runtime)
+- [Next.js public folder](https://nextjs.org/docs/app/api-reference/file-conventions/public-folder)
+- [Vercel community: Edge Request reset period](https://community.vercel.com/t/edge-function-limits-and-reset-period-on-the-hobby-plan/4504)
+- [RFC 8246: HTTP Immutable Responses](https://www.rfc-editor.org/rfc/rfc8246.html)
+- [MDN: Cache-Control directives](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Cache-Control)
 
 ---
 

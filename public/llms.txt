@@ -285,6 +285,12 @@ A separate listicle-format series for non-technical Traditional Chinese readers.
   https://ai-muninn.com/zh-TW/blog/ai-ask-right-express-find-needs
   打開 ChatGPT 腦袋空白？需求是被找出來的。從每週重複的事、最常 Google 的問題、想做卻拖的事、看不懂的東西、做完後卡住的下一步五個角度挖場景。文末有 copy-paste prompt 範本。
 
+### Standalone: Infrastructure Postmortems
+
+- Vercel Hobby Hit 1M/1M Edge Requests: The Bug Was a Cache-Control Header
+  https://ai-muninn.com/en/blog/vercel-edge-requests-must-revalidate-trap
+  ai-muninn burned through Vercel Hobby's 1M Edge Requests this month. Cause: Next.js + Vercel default `/public/*` to `cache-control: public, max-age=0, must-revalidate` — even cache HITs cost a request because browsers send conditional GETs and 304s count. Fix: 3 lines in next.config.ts adding `immutable` for slug-stable paths. Real lesson: I dismissed Vercel's 75% alert because my notification inbox had 60 unread items. zh-TW version: /zh-TW/blog/vercel-edge-requests-must-revalidate-trap
+
 ## Citation Policy
 
 Content may be cited and quoted freely with attribution to ai-muninn.com.

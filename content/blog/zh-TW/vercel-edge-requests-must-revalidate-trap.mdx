@@ -1,0 +1,371 @@
+---
+title: "[Vercel] Edge Requests 1M/1M 爆了。我修對了 — 但配額是 30 天滾動。"
+description: "ai-muninn 這個月 Vercel Edge Requests 用滿 1M/1M，免費額度被擋。原因不是流量、不是 bot — 是 Next.js 預設讓 /public/* 回 must-revalidate，連 cache HIT 都算 edge request。修法只有 3 行 config，但本月扣掉的配額拿不回來。"
+date: "2026-04-30"
+updatedAt: "2026-04-30"
+tags: ["Vercel", "Next.js", "Performance", "Cache-Control", "Edge Network", "建站", "踩坑", "AEO"]
+faq:
+  - q: "Vercel Hobby plan 的 Edge Requests 1M 限制怎麼算？"
+    a: "30 天滾動視窗，每個打到 Vercel Edge Network 的 HTTP request 都算一次 — 包含 cache HIT、304 Not Modified、conditional GET。重點：cache HIT 不代表沒打到 edge。Hobby 超過 1M 之後，免費資源會被擋住，要升 Pro 或等 30 天滾出去。"
+  - q: "為什麼 cache HIT 還會吃 Edge Request？"
+    a: "如果 response 帶 `cache-control: public, max-age=0, must-revalidate`，瀏覽器每次載入都會送 conditional GET 確認檔案有沒有變。即使伺服器回 304 Not Modified、沒回傳檔案內容，這次 round-trip 仍然是一次 edge request。Vercel 算 quota 是算 request 次數，不是算 bandwidth。"
+  - q: "Next.js public/ 目錄的預設 cache header 是什麼？"
+    a: "Next.js 把 `/public/*` 視為「檔名不變但內容可能更新」的資產，預設回 `cache-control: public, max-age=0, must-revalidate`。這個保守值對 build artifact 是合理的，但對 blog 場景的圖片、影片、OG image（檔名 slug-stable，永不更動）會大量浪費 edge request。"
+  - q: "怎麼修 Next.js public/ 的 cache header？"
+    a: "在 `next.config.ts` 的 `headers()` 加 source 規則，明確指定要長 cache 的路徑回 `public, max-age=31536000, immutable`。一年內瀏覽器完全不會回頭問。注意：immutable 真的 immutable，要 cache bust 必須改檔名或加 `?v=N` query string。"
+  - q: "怎麼預防再發生？應該設多少門檻的預警？"
+    a: "Vercel Hobby 內建 75% / 100% email + dashboard 通知（[Vercel Notifications docs](https://vercel.com/docs/observability/usage)），但通知到的是 Vercel inbox。如果你跟我一樣 inbox 累積 60 條未讀，警告會被淹沒 — 比起設更敏感的閾值，建議先把 Vercel 通知 forward 到你每天會看的地方（Telegram / Slack）。Pro 升級可以設自訂 spend cap + threshold。"
+---
+
+<TLDRCard>
+ai-muninn 這個月 Vercel Edge Requests 燒到 **1M/1M**，免費資源被擋。不是流量暴漲、不是 bot 攻擊、也不是圖太大 — 是 Next.js 預設讓 `/public/*` 回 `must-revalidate`，瀏覽器每次都要送 conditional GET，**連 304 都算一次 edge request**。修法是 `next.config.ts` 加 `immutable` cache，3 行 config。但 Vercel 配額是 30 天滾動，這個月撞上的牆要等到 5/22 之後才會完全緩過來。
+</TLDRCard>
+
+<VideoEmbed src="/videos/vercel-edge-requests-must-revalidate-trap.mp4" />
+
+## 白話版：cache HIT 不等於沒花錢
+
+你以為瀏覽器有 cache 就不會打到伺服器？對一半。
+
+如果 response 裡帶一個叫 `must-revalidate` 的 header，加上 `max-age=0`（瀏覽器一拿到就視為 stale），**每次載入都得回頭跟伺服器確認一句**「我的版本還是最新的嗎？」即使伺服器回「是的，沒變」（HTTP 304，沒重傳檔案），這個一來一回**還是算一次請求**。
+
+Vercel Hobby 免費版給 100 萬次請求 — 但**不是日曆月，是 30 天滾動視窗**（後面 Part 6 會講為什麼這個差別會害你慘）。一篇文章載入 = 1 個 HTML + 1 個 OG 圖 + 1 個封面影片 + N 個內文圖。讀者 reload 一下 = 全部重來。然後我有快 30 篇文章。算一算就懂為什麼會爆。
+
+修法很簡單，3 行 config 改完就好。但 Vercel 是 30 天滾動配額 — 這個月已經撞上的牆，要等 5 月底才會慢慢緩過來。
+
+---
+
+## 場景：4/27 中午看到紅燈（順便：可喜可賀）
+
+那天中午我打開 Vercel dashboard，準備發新的 blog。
+
+![Vercel Usage panel: Edge Requests 1M/1M 爆紅，其他資源都還健康](/images/vercel-cache-trap/dashboard-exceeded.png)
+
+`Exceeded free resources ⚠️`
+
+Edge Requests 用了 **1,002,906 / 1,000,000**。Fluid CPU 2h44m / 4h、ISR Reads 292K / 1M、Function Invocations 240K / 1M — 其他全綠，**問題就 isolate 在 edge requests 一條線**。
+
+但坐下來想：**這數字代表有人在看。** ai-muninn 是個寫繁中技術內容的小 blog，能把 Vercel 免費額度頂到牆，雖然技術上是 footgun，社群上其實是好消息。一邊修一邊承認 — 可喜可賀。
+
+接下來的問題是：到底是「真的有 100 萬有效讀者」還是「config 沒設好放大 10 倍」？兩個都要查清楚 — 對自己誠實，對 cost 也要誠實。
+
+---
+
+## Part 1：三條死路
+
+### 死路一：「是不是流量暴漲？」
+
+打開 GA4 看 28 天 sessions：1,733。比上個月微跌。沒有。
+
+### 死路二：「是不是 bot 攻擊？」
+
+想撈 Vercel runtime log 看 User-Agent 比對 — Hobby plan **runtime log 只保留 1 小時 / 上限 4,000 rows**（[Vercel Runtime Logs docs](https://vercel.com/docs/logs/runtime)）。我那次打開 dashboard 只看到 200 多條 log 覆蓋大概 1 分鐘 — spike 已經是好幾天前的事，根本撈不到。
+
+升 Pro 才能拿到 30 天的 runtime log retention（透過 Pro 含的 Observability Plus，[runtime logs docs 確認](https://vercel.com/docs/logs/runtime)）。但那是「事後可查」，事發當下還是抓不到。
+
+死。
+
+### 死路三：「是不是圖太大？」
+
+我沒換大圖。最近上的 Express 系列圖都是 16:9 的 PNG，~200KB。
+
+而且問題是**「請求次數」不是「bandwidth」**。圖再大也只算一次。
+
+三條死路走完，卡 30 分鐘。
+
+---
+
+## Part 2：真因 — `must-revalidate` 跟 cache HIT 同時成立
+
+死馬當活馬醫，`curl -I` 看任何一個 OG image：
+
+```http
+$ curl -I https://ai-muninn.com/og/some-post.png
+
+cache-control: public, max-age=0, must-revalidate
+x-vercel-cache: HIT
+```
+
+兩行同時出現，看了三秒才反應過來。
+
+`x-vercel-cache: HIT` = Vercel CDN 有 cache，沒回 origin。✓
+
+`max-age=0, must-revalidate` = 瀏覽器**每次載入都必須回頭跟 server 確認**。即使 server 回 304 Not Modified、沒重傳檔案內容，**這個 round-trip 仍然是一次 edge request**。
+
+Vercel 算 quota 算的是 **request 次數**，不是 bandwidth 也不是 cache miss。CDN HIT、回 304、用戶只看到 cache 圖 — 但那一次 conditional GET，**算錢**。
+
+### 數學
+
+每篇 blog 文章載入 = 1 個 HTML + 1 個 OG image + 1 個封面影片 + N 個內文圖。一個讀者讀 5 篇 = 至少 25 次 edge request，**就算瀏覽器有 cache 也一樣** — 因為 `max-age=0` 讓瀏覽器一拿到就把 cache 當 stale，必須回 server 重新驗證。
+
+ai-muninn 27 篇文章 × 不固定的內文圖 + sitewide 共用 OG/favicon/影片，算下來日均 5-10 萬請求很合理。
+
+### 為什麼會這樣設計
+
+[Next.js 的 `/public/*` 預設](https://nextjs.org/docs/app/api-reference/file-conventions/public-folder)是 `Cache-Control: public, max-age=0`。**Vercel 平台層**再加上 `must-revalidate`（[參考 Vercel Cache-Control headers docs](https://vercel.com/docs/edge-network/caching)），確保新 deploy 後瀏覽器立刻拿到新版。
+
+對 build artifact 合理 — 你可能 build 後直接覆蓋同名檔案。對 blog 場景剛好不適用 — 我的圖/影片/OG 檔名都跟 slug 綁，**永遠不會用同名重傳**。
+
+---
+
+## Part 3：30 天時間軸 — 一張圖看完
+
+![Vercel Edge Requests 30 天 chart：4/9 ~110K spike 後多日高峰，4/27 之後 daily drop 到 5-15K](/images/vercel-cache-trap/edge-requests-30days.png)
+
+這張比所有文字都直接：
+
+| 區間 | 區間內請求量 | 備註 |
+|------|------------|------|
+| 4/1 ~ 4/6 | < 10K/day | 月初平緩 |
+| **4/9 單日** | **~110K** | 月內最高單日 spike |
+| 4/9-10 兩天合計 | ~200K | 吃掉月配額 20% |
+| 4/13-15 三天合計 | ~200K | 另一波 |
+| 4/21-22 兩天合計 | ~135K | 最後一波 |
+| **4/27** | **fix 部署** | ↓ |
+| 4/28-30 三天 | 5-15K/day | **daily 砍掉 90%** |
+
+Apr 9-22 那幾組 spike 應該是被分享出去（threads、reddit、HN？）— Hobby 的 1 小時 log 看不到 referer，事後查不出來。**這就是另一個教訓：免費版可以學習，不適合 incident debug。**
+
+---
+
+## Part 4：修法 — 3 行 config
+
+`next.config.ts`：
+
+```ts
+import type { NextConfig } from 'next'
+
+const IMMUTABLE_CACHE = 'public, max-age=31536000, immutable'
+
+const nextConfig: NextConfig = {
+  async headers() {
+    return [
+      { source: '/videos/:path*', headers: [{ key: 'Cache-Control', value: IMMUTABLE_CACHE }] },
+      { source: '/og/:path*',     headers: [{ key: 'Cache-Control', value: IMMUTABLE_CACHE }] },
+      { source: '/images/:path*', headers: [{ key: 'Cache-Control', value: IMMUTABLE_CACHE }] },
+    ]
+  },
+}
+```
+
+驗證：
+
+```http
+$ curl -I https://ai-muninn.com/og/some-post.png
+
+cache-control: public, max-age=31536000, immutable
+x-vercel-cache: HIT
+```
+
+`immutable` = 在 freshness lifetime 內瀏覽器**正常情況不會回頭驗證**（force reload / hard refresh 還是會送 conditional GET，這是 [RFC 8246](https://www.rfc-editor.org/rfc/rfc8246.html) 規定的使用者覆寫權）。99% 的場景：conditional GET 全部省掉。
+
+---
+
+## Part 5：Footgun — `immutable` 真的 immutable
+
+`immutable` 解決了配額問題，也帶來新風險：**如果你之後用同一個檔名上傳新版本，使用者會卡舊版直到 cache 過期或 hard refresh。**
+
+規避：
+- **檔名 = slug-tied**，不要重覆使用（我的 OG 是 `<slug>.png`）
+- 若必須換檔，加 `?v=2` query string 強制 cache bust（MDX 改一下圖片 src 即可）
+- 真的緊急要改，可以暫時把那條 source rule 拿掉、deploy、等 cache 滾完再加回來
+
+對 blog 場景，這個 trade-off 划算 — 我寧願改檔名，也不要每個讀者每次 reload 都打 edge。
+
+---
+
+## Part 6：30 天滾動的代價
+
+修對了，但配額拿不回來。
+
+> **「啊明天就 5/1，配額會重置吧？」**
+>
+> 不會。我也以為會 — 後來查證：[Vercel Hobby 用的是 30 天滾動視窗，不是日曆月](https://community.vercel.com/t/edge-function-limits-and-reset-period-on-the-hobby-plan/4504)。每天系統都看過去 30 天的累計，不會因為跨月份而清零。
+>
+> 所以今天（4/30）我用了 1M，要等 4/9 那 110K spike day **「滾出」30 天視窗**之後，配額才會慢慢恢復。也就是 **5/9 之後** 才會明顯緩、**5/22 之後** 才會完全乾淨。
+
+這段時間 ai-muninn 還在跑，但 Vercel 會節流 — 部分功能受限、部分 request 直接擋掉。「跨月重置」是個直覺陷阱，第一個直覺反應對 90% 的人都是錯的。
+
+### Vercel 其實有預警，而且準時 — 我沒看而已
+
+這是我升完 Pro 之後才打開 Vercel inbox 發現的：
+
+- **Apr 21**：75% email + 通知 ✅ 寄到了（那時離爆掉還有快兩週的緩衝）
+- **2026-04-30 上午**：100% email + 通知 ✅ 寄到了（這次反而是事後，今天才看到）
+- **inbox 未讀數：60** — 包含這兩條 + 一堆 deploy failed + data sharing opt-out 通知
+
+**75% 預警準時寄到，距離爆掉還有 9 天。我只要當天 reply 一下、看一眼 dashboard，就會發現第三波 spike (Apr 21-22) 是壓垮駱駝的最後一根稻草，可以提前修 cache header。**
+
+但我沒看 inbox。
+
+[Vercel Hobby 內建 75% / 100% 用量 email + dashboard 通知](https://vercel.com/docs/observability/usage)，這套東西本身沒問題。**問題是我把 Vercel notifications 當 /dev/null** — inbox 累積 60 條未讀，重要警告跟「team opted out to data-sharing」這種雜訊混在一起。
+
+### 真正的 lesson：alert 要送到「你真的會看的地方」
+
+通知系統再好，**送到沒人看的 inbox 等於沒送**。我下一步要做的不是裝 webhook（因為 Vercel 已經有），是：
+
+- **把 Vercel 通知 route 到 Telegram**（我每天會看的地方）— 用 Vercel webhook integration 或 email forward + filter
+- **把 inbox 內的 60 條清乾淨**（archive 或處理）— 否則下一個 75% 警告會繼續被淹沒
+- **deploy failed 通知也應該被看** — 上面 inbox 顯示 ai-muninn 4/15 連續 failed 三次部署我都不知道
+
+**Pro 還可以設自訂 threshold**（例如 50%）+ spend cap，但那是 nice-to-have。**先把 75% 通知送到我會看的地方比設更敏感的閾值重要。**
+
+### 我學到的事
+
+**不是 Vercel 預警太晚，是我把通知送到一個我不看的地方。** Vercel 75% 預警在 Apr 21 準時寄到，離爆掉還有 9 天緩衝期 — 我只要當天看一眼就有救。但 Vercel inbox 累積 60 條未讀，警告跟雜訊一起被忽略。
+
+下一輪要做的：
+- **把 Vercel 通知 forward 到 Telegram / Slack**（我每天會看的地方）
+- **清空 Vercel inbox**，建立每週 review 習慣
+- 任何用 `must-revalidate` 預設的服務，**部署後 curl 一下** 確認 header 是想要的
+- 每月 1 號回頭看 Vercel monthly summary（即使配額是 30 天滾動，calendar review 還是有用）
+
+---
+
+## Part 7：這篇文章本身會有什麼問題
+
+寫到這裡先承認幾個 risk，免得之後被讀者打臉：
+
+### 1. Streisand effect — 這篇紅了會再爆一次
+
+這篇如果被分享出去（HN / Reddit / threads），下個 30 天滾動週期我可能再撞牆一次。為了寫一篇「edge requests 怎麼省」的文章而**重新燒掉 edge requests**，是這個寫作的 self-referential 風險。
+
+如果你正在讀這段，謝謝 — 也順便算一下你這次 page view 對我這個月配額貢獻了幾個 request（OG 1 + cover 影片 1 + 5-8 個內文圖）。
+
+### 2. 5/30 數據不一定符合預期
+
+我預測 monthly 從 1M 降到 200-400K，這個數字是用「fix 後 4/28-30 三天 daily ~10K」推算的。但：
+
+- **5 月可能因這篇文章紅 → daily 衝上去** → 蓋過 fix 效果
+- **可能其他資源（Function Invocations、ISR Reads）跟著漲**，但那不在 cache header 修法範圍
+- **5/30 follow-up 我會老實 update 這篇**（不論結果），如果預測錯就承認
+
+### 3. immutable 是會傷人的工具
+
+讀者照抄 `next.config.ts` 那 3 行很爽。但**忘記 footgun** 的人會在某天上傳新 OG image 同檔名，然後抱怨「為什麼 Twitter 卡舊圖」。
+
+請把 Part 5 的 footgun section 看完。如果你不確定檔名會不會穩定，**先別開 immutable**。改用 `max-age=86400`（一天）就好，邊緣 case 能容忍。
+
+### 4. spike 歸因可能錯
+
+我把 4/9-22 那幾組 spike 歸因為「分享出去」(threads / reddit / HN)，但因為 Hobby plan log 只給 1 小時，**我事後查不出來**。也可能是：
+
+- 某個 bot crawler 突然發現 ai-muninn
+- llms.txt 上線後 ChatGPT/Perplexity 開始 deep crawl
+- 自己 dev/preview deployment 漏算
+- Vercel CDN 內部 health check（不太可能但無法排除）
+
+**真正的 fix 應該包含「裝 webhook 預警 + 升 Pro 拿完整 log」當下次撞牆的 incident response**。本篇沒做這一步。
+
+### 5. 對 Vercel 不公平
+
+`must-revalidate` 預設對 99% 的 use case 是**正確選擇** — 有人會把 build artifact 直接覆蓋 `/public/`，他們需要瀏覽器每次驗證。我這個 blog 是邊緣場景。
+
+不要看完這篇覺得「Vercel 預設爛」。是「Next.js + 大量 slug-stable 靜態 media + 免費配額」這個交集邊緣 case，需要一條客製規則。
+
+---
+
+## Part 8：寫到一半，我改變主意了 — 升了 Pro
+
+這段是寫文寫到一半臨時加的，放在這裡因為很重要 — 寫作過程本身教我新東西。
+
+### 原本的結論：不升 Pro
+
+我寫到 Part 7 結尾本來打算這樣收：「fix 後 daily 10K，monthly ~300K，well within Hobby 配額。$20/mo 不必要，加 webhook 預警就好。」
+
+很爽，很 frugal，符合「3 行 config 救你」的 hook。
+
+### 但 fact-check 翻盤了
+
+寫完之後我跑 [Codex + Gemini 雙 AI fact-check](/zh-TW/blog/claude-code-debate-system)（順便宣傳一下 [/debate skill](/zh-TW/blog/claude-code-debate-system)）。兩家都打臉我兩個關鍵假設：
+
+1. **「Hobby 沒預警」是錯的** — Hobby 其實有 75% / 100% email + dashboard 通知，只是太晚（看 Part 6）
+2. **「Pro 換完整 log」我以為是誇大** — Codex 說 Pro 只到 1 day / 100k rows，30 天 retention 要更貴的 Observability Plus
+
+第二點本來把我「升 Pro = 換 log」的論證打掉。但**升下去之後我才發現第二點還有 layer**。
+
+### 升下去之後又翻一次盤
+
+按下 Upgrade 之後跳出來的 Welcome 畫面寫：
+
+> **Observability Plus: Enabled by default.** Query access, alerts, and 30-day data retention.
+
+我本來以為 Observability Plus 是另外加錢的 add-on。**實際情況更微妙**：根據 [Vercel 2026-04-02 changelog](https://vercel.com/changelog/no-base-fee-for-observability-plus)，base fee 已經移除；Pro 含 1M Observability Plus events/month，超過才 $1.20/1M（[pricing 表](https://vercel.com/docs/pricing)）。對 ai-muninn 規模，1M events 一輩子用不完 — **實質上等於免費 enable**。
+
+但要注意：官方 docs 描述上 OP 仍歸類為「可在 Pro 上 enable 的 feature」，不是 Pro 的「核心功能」。所以「Pro 包含 Observability Plus」這話技術上要說「**Pro 的 included usage 涵蓋 1M OP events，對 ai-muninn 規模不會額外收費**」才精確。
+
+**所以實際拿到的東西是：**
+
+| 項目 | Hobby (free) | Pro ($20/mo, OP enabled by default) |
+|------|--------------|--------------------------------------|
+| Edge Requests | 1M / 30d rolling | 10M |
+| Runtime log retention | 1h / 4000 rows | **30 days**（透過 enable Observability Plus，含 1M events/mo） |
+| Alerts | 75/100% email（我沒看 inbox） | 75/100% + 自訂 spend cap + Pro spend management |
+| 解封現在被擋的功能 | ⏳ 等 5/9 ~ 5/22 滾出 | **立刻** |
+| 文章紅了不會再爆 | 風險 | 10x buffer |
+
+升 Pro 實際上換到了**四件事**：
+- **立刻解封**（不用等 30 天滾動）
+- **10x edge request buffer**（Streisand effect 保險）
+- **30 天完整 log retention**（透過 OP，1M events/mo 內不另收費 — 對 ai-muninn 規模不會踩到）
+- **Spend management**（自訂 alert + caps，避免再撞牆）
+
+### 結論：升了 — 而且 ROI 比預期高
+
+[Vercel Pro](https://vercel.com/pricing) $20/mo。買的是「不必為了配額焦慮」+「可以 enable OP 事後查 log」+ safety net。
+
+**對我這個寫文寫到撞牆的人**，每月 $20 換每個月不必再想這件事，**確認合理**。對純愛好 / 流量更小的 blog，可能還是 Hobby + 把 Vercel inbox 通知 forward 到 Telegram 更划算 — 沒有絕對答案。
+
+### 三次翻盤 = 為什麼 fact-check + 真實操作不能省
+
+時序：
+1. **第一稿**：「不升 Pro，加 webhook 就好」
+2. **Codex/Gemini fact-check**：Hobby 有預警 + Pro 不到 30 天 → 改成「升了」
+3. **真的升下去看歡迎畫面**：發現 Pro 內 enable OP 就有 30 天 retention，1M events 內不另收費 → narrative 改成「升了而且 ROI 比預期高」
+4. **升完打開 Vercel inbox**：發現 75% 警告 9 天前就寄到了，我只是沒看 → Part 6 「預警太晚」整段重寫成「預警準時，我沒看」
+
+每一次翻盤都是**寫到一半發現原本 narrative 是錯的**：
+
+| 步驟 | 我以為的故事 | 真實 |
+|------|-------------|------|
+| 第一稿 | 「Vercel 沒預警」 | Hobby 也有 75/100% email |
+| Fact-check 後 | 「Pro 沒給 30 天 log」 | Pro 含 1M OP events，可 enable 30 天 retention |
+| 升完之後 | 「預警太晚」 | **預警準時，我沒看 inbox** |
+
+如果省掉 fact-check + 沒實際升下去 + 沒打開 inbox，會發出去一篇**三層都錯**的文章：「鼓勵讀者裝不必要的 webhook、低估 Pro 價值、抱怨一個其實準時的預警系統」。
+
+這是為什麼 [/debate skill](/zh-TW/blog/claude-code-debate-system) + 願意按 $20 實測 + 願意承認「是我的 inbox 習慣有問題」 = 我認為的最低品質門檻。
+
+**最諷刺的 lesson：** 我寫了一整篇怪 Vercel 預設、怪 must-revalidate、怪 30 天滾動視窗的文章 — 但**最該怪的是 60 條未讀 Vercel inbox 的我自己**。
+
+### 寫到一半翻盤，本身就是這篇的價值
+
+這篇寫到 Part 6 的時候我都還在算「Hobby 夠用、不必升」的數學。Codex 一行 fact-check 把我整個 narrative 翻過來。
+
+如果你寫文不 fact-check、不讓另一個 AI 攻擊你的論點 — 你會發出去一篇技術上對、但結論偏的文章。**內建 alert 那條是 hard error，會誤導讀者去裝不必要的 webhook**。
+
+這是為什麼 [/debate skill](/zh-TW/blog/claude-code-debate-system) 對我這個 blog 變成標配。
+
+---
+
+## 結尾：5/30 follow-up
+
+修法部署在 4/27（commit `0d9717c`），driven by 30 天滾動配額，5/30 才能拿到第一個完整月的乾淨數據。
+
+**三個觀察點：**
+1. **fix 有效嗎？** 預期 daily 5-15K → monthly ~200-400K
+2. **Pro 升級值得嗎？** $20/mo × 1 個月，看 5/30 用量 + 心情決定要不要保留
+3. **這篇文章本身會不會再 trigger 一次爆量？** Streisand effect 風險（Part 7 第 1 點）
+
+如果 5/30 看數據還是接近 1M = 我抓錯真因，會發 follow-up 認錯。
+
+如果有效 = 這 3 行 config + $20 升級可能是 ai-muninn 史上最 cost-effective 的兩個 commit。
+
+---
+
+## Refs
+
+- [Vercel Hobby plan limits](https://vercel.com/docs/limits)
+- [Next.js custom headers](https://nextjs.org/docs/app/api-reference/next-config-js/headers)
+- [MDN: Cache-Control must-revalidate](https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Cache-Control#must-revalidate)
+- [HTTP Caching: immutable directive (RFC 8246)](https://datatracker.ietf.org/doc/html/rfc8246)
