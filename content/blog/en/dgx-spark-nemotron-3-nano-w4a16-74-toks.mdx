@@ -12,7 +12,7 @@ faq:
   - q: "W4A16 or W4A4 on DGX Spark?"
     a: "Depends on workload. W4A16 wins single-stream chat (74.75 vs 58.27 tok/s). W4A4 wins multi-batch serving (786 vs 400 tok/s aggregate at concurrency 16). The activation FP4 quantization in W4A4 has per-step overhead but lets you batch more tokens per HBM read."
   - q: "Did NVFP4 finally beat FP8 on GB10?"
-    a: "Yes. The earlier 47.6 tok/s FP8 ceiling (Triton dequant hack) is now beaten by 57% with pure NVFP4 paths. The original 'NVFP4 is a trap' diagnosis was correct for Qwen 3.6 hybrid models — the BF16 GDN linear_attn projections are the real bottleneck. Switching to a non-hybrid model (Nemotron 3 Nano) fixes it."
+    a: "Yes — but the win is bandwidth, not compute. Cutting weight bytes per param from 1 (FP8) to 0.5 (NVFP4) on a memory-bound box doubles throughput by itself. The actual FP4 tensor core (mma.kind::mxf4nvf4) only fires on W4A4, not on the W4A16 setup that hit 74.75 tok/s — W4A16 dequantizes FP4 weights to BF16 in registers and runs BF16 GEMM. So 'NVFP4 beats FP8' here means NVFP4-as-storage, not 5th-gen Blackwell tensor cores being utilized. The 'NVFP4 is a trap' diagnosis was correct for Qwen 3.6 hybrid models — BF16 GDN linear_attn projections were the real bottleneck."
   - q: "What's in the 4-layer patch stack?"
     a: "1) pip install nvidia-cutlass-dsl-libs-cu13==4.4.2 for CUDA 13 backing libs. 2) Patch cutlass-dsl warp/mma.py admissible_archs and base equality check to allow sm_121a. 3) Patch FlashInfer dense_blockscaled_gemm_sm120.py sm_version check. 4) Set CUTE_DSL_ARCH=sm_121a + VLLM_NVFP4_GEMM_BACKEND=flashinfer-b12x. Cherry-pick vLLM PR #40082 for the b12x dispatcher."
 ---
@@ -178,6 +178,32 @@ def req(out):
 ```
 
 Output quality verified across factual, translation, and code tasks. No `!!!!!` garbage runs, no token degeneration. The model handles `<think>` reasoning blocks correctly even without the dedicated `nano_v3_reasoning_parser` (it just lands in `content` instead of being split into a separate field).
+
+---
+
+## But wait — did 74.75 tok/s actually run NVFP4 compute?
+
+Honest answer: **the weights are NVFP4, the compute is not.** This is worth pulling apart because the framing "NVFP4 finally beat FP8" oversells what's happening.
+
+![NVFP4 W4A16 vs W4A4 decode paths on GB10: shared LPDDR5X memory bus on top, two parallel pipelines below. W4A16 path loads NVFP4 weight, dequantizes to BF16 on-chip, runs BF16 GEMM with the FP4 tensor core idle, and wins single-stream at 74.75 tok/s. W4A4 path loads the same NVFP4 weight, then quantizes activations BF16→FP4 per step, runs the actual FP4×FP4 mma.kind::mxf4nvf4 tensor core MMA, and wins multi-batch at 786 tok/s aggregate.](/images/nvfp4-w4a16-vs-w4a4-paths.png)
+
+The diagram splits the W4A16 path (winner at batch=1) from the W4A4 path (winner at concurrency 16+) and shows where each engages — or doesn't engage — the FP4 tensor core. Three layers matter:
+
+| Layer | W4A16 (74.75 tok/s) | W4A4 (786 tok/s aggregate) |
+|---|---|---|
+| **Weight storage** | NVFP4 packed, 0.5 byte/param | NVFP4 packed, 0.5 byte/param |
+| **Dispatch kernel** | `FlashInferB12xNvFp4LinearKernel` (b12x) | `FlashInferB12xNvFp4LinearKernel` (b12x) |
+| **Activation** | BF16 (no per-step quant) | FP4 (BF16→FP4 quant every decode step) |
+| **Actual GEMM** | BF16 × BF16 after on-chip dequant | **FP4 × FP4 via `mma.kind::mxf4nvf4`** |
+| **FP4 tensor core** | Idle | Active |
+
+So when I say "NVFP4 hit 74.75 tok/s" — what's true is the **weight storage** is NVFP4. The 5th-generation Blackwell `mma.kind::mxf4nvf4` instruction (the actual FP4 hardware MMA) only fires on the W4A4 path. On W4A16, the FP4 weight is dequantized to BF16 in registers before the GEMM, and the multiply itself runs as a BF16 × BF16 operation.
+
+The 57% win over the Triton FP8 hack came from **bandwidth**, not compute. GB10 is bandwidth-bound at single-stream — 273 GB/s LPDDR5X, weights dominate per-token byte budget — so cutting weight bytes per param from 1 (FP8) to 0.5 (FP4) was enough to nearly double throughput on its own. The FP4 tensor core staying idle didn't matter, because at batch=1 the GEMM compute isn't the bottleneck.
+
+W4A4 *does* engage the FP4 tensor core, and at batch=1 it's still slower (58.27 tok/s) — because the per-step BF16→FP4 activation quantization eats more time than the FP4 MMA saves. At concurrency=16, the activation quant cost amortizes across the batch and W4A4's compute advantage finally pays off (786 tok/s aggregate vs W4A16's 400).
+
+Punchline: **NVFP4-as-storage wins both regimes. NVFP4-as-compute (FP4 tensor core) only wins multi-batch.** If you read "NVFP4 hit 74.75 tok/s" and pictured the 5th-gen Blackwell tensor cores cranking — that's not what's happening. The win is bandwidth math, not silicon utilization.
 
 ---
 
