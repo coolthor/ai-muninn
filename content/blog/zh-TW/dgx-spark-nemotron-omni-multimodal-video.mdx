@@ -61,7 +61,7 @@ Model 第一次回答畫面寫得很對 — 年輕男生穿藍衫加紅灰外套
 
 整段沒提 San Diego Zoo、也沒有三隻大象。Model 根本沒在聽 — 從畫面推一段聽起來合理的旁白出來而已。畫面對得太準，害我想了一下才反應過來。
 
-修法藏在 vLLM chat parser 裡，`chat_utils.py:910`：
+問題出在 vLLM chat parser，`chat_utils.py:910` 這段看得最清楚：
 
 ```python
 # Extract audio from video if use_audio_in_video is True
@@ -133,7 +133,7 @@ Model 吐出來的內容（結構我有整理過、原輸出帶時間戳）：
 
 這張圖三個重點直接連到後面三段：
 
-1. **`use_audio_in_video` flag** 真的就是 Parakeet 那條路的開關。flag 放錯位置 → 整條綠色 lane 跳過 → model 從畫面腦補音訊。
+1. **`use_audio_in_video` flag** 真的就是 Parakeet 那條路的開關。flag 放錯位置，Parakeet 那條流程根本不會跑，model 只剩畫面可以猜音訊。
 2. **Mamba SSM layer** 是 backbone 裡的 — 這就是為什麼上 upstream image 起來會撞 `block_size (2128) must be <= max_num_batched_tokens` assertion。Nemotron-H 是 hybrid、不是純 transformer。
 3. **`modelopt_mixed` quantization**（NVFP4 weight / BF16 activation / FP8 KV cache、vision/audio/LLM 各用不同精度）就是被我們 b12x patch 打到的東西。我們 patch 假設只有一種 quant config，這顆 model 三種混搭。
 
@@ -162,7 +162,7 @@ docker run -d --name vllm_upstream --gpus all --network host --ipc=host \
 
 Upstream `vllm/vllm-openai:v0.20.0` 沒我們的 patch，走的是 Omni 出廠原本測過的 kernel selection 路徑。同一台機器、同一顆 model、兩個 image 各做各的事。
 
-這不代表「永遠分開」。意思是：哪個 model 在我們的 patched image 上會壞，就讓那個 model 獨立跑一個 stock-image container。想一個 image 包山包海，通常就是踩這種坑。
+這不表示一定要永遠拆開。哪顆 model 跟 patched image 打架，就另外開一個 upstream container 跑它；想一個 image 通吃全部，通常就是踩這種坑。
 
 ---
 
@@ -200,11 +200,11 @@ Nemotron-3 是 hybrid 架構、有 Mamba/SSM layer。Mamba 的 KV cache block si
 
 這張表藏兩個取捨：
 
-**fps↓ 省 token 但不影響音訊。**Parakeet 跑的是 16 kHz 音訊波形，跟 video frame rate 完全獨立。音訊 path 不管 fps 多少都產生大概每秒 12.5 個 audio token。所以降 fps 砍的是視覺 token 數跟視覺細節（手勢、投影片切換），音訊轉錄品質不變。長影片真正的勝場其實在這 — fps 降到 0.5、音訊一樣清楚。
+**fps↓ 省 token 但不影響音訊。**Parakeet 跑的是 16 kHz 音訊波形，跟 video frame rate 完全獨立。音訊是另外一條路在跑、跟 fps 沒直接關係，所以 fps 降下來每秒還是大概 12.5 個 audio token。降 fps 砍的是視覺 token 數跟視覺細節（手勢、投影片切換），音訊轉錄品質不變。長影片要拉長就靠這個 — fps 降到 0.5、音訊一樣清楚。
 
 **num_frames↑ + max-model-len↑ 吃統一記憶體。**GB10 的 128 GB 是 weight 跟 KV cache 共用。`max-model-len` 翻倍，KV cache budget 也翻倍。98k context 的時候，光一支影片 request 就吃掉桌機一半以上的 RAM。
 
-超過 10 分鐘我會 ffmpeg 切段、每段獨立跑、再丟一顆小型純文字 LLM 把 chunk 心得串起來。Single-pass 看完長影片不是這台 9 萬桌機的勝場。
+超過 10 分鐘我會先 ffmpeg 切段、各段分開跑、再用一顆小型純文字 LLM 把 chunk 心得串起來。這台 9 萬桌機不適合單次吃完整段長影片。
 
 ---
 
@@ -259,13 +259,13 @@ command: |
 
 **1. 多模態 model 在幻覺，先懷疑某個模態被 silent drop。** 畫面對得很準、音訊卻是「合理但講者根本沒說過」 — 這個訊號就是某個 flag 該開沒開。直接 grep 框架原始碼找那個 flag，確認 gating 是真的有開。
 
-**2. 一個 image 不會適合所有 model。** 針對某個 model 做的 patch 可能打破另一個 model 的 dispatch。客製 image 上某顆 model 跑壞，先 A/B 對照 upstream image，半數情況 upstream 直接就跑得起來。
+**2. 沒有哪個 image 能通吃所有 model。** 針對某個 model 做的 patch 可能打破另一個 model 的 dispatch。某顆 model 在客製 image 上跑壞，先拿 upstream image 做 A/B，很多時候直接就過。
 
 **3. 多模態的 token budget 跟著影片長度走、不是文字長度。** Nemotron-3-Nano-Omni 在 fps=2 是每秒影片 ~300 prompt tokens。前後文字 prompt 占不到主體 — 主體是 frame embedding。
 
 ### 通用原則
 
-這台桌機一支多模態 request、3 分鐘影片就吃 5 萬+ prompt token，是純文字 chat 的 5 倍。KV cache 跟 prefill batch budget 在純文字場景平常根本不用想，到了影片場景立刻變成要實際處理的限制。要在這台機器上跑多租戶 serving，影片 tenant 跟文字 tenant 一定要分開排隊 — 兩個根本不在同一個 throughput 等級。
+這台桌機跑一支 3 分鐘多模態影片，token 量就是純文字 chat 的 5 倍。平常不用管的 KV cache 跟 prefill batch budget，換成影片就真的會卡到。要跑 multi-tenant serving 的話，影片流量跟文字流量最好分開排，兩邊量級差很多。
 
 ---
 
