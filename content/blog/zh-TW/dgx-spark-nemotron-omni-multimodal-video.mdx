@@ -125,6 +125,20 @@ Model 吐出來的內容（結構我有整理過、原輸出帶時間戳）：
 
 ---
 
+## 模型裡面長什麼樣
+
+先把這顆 model 的架構畫出來，後面講 b12x dispatch 不相容、Mamba assertion、音訊 token 數，才會落在脈絡裡：
+
+![Nemotron-3-Nano-Omni 架構：三條輸入（video / audio / text）分別走 CRADIO v4-H、Parakeet、BPE，匯成一條多模態 token stream，過 Nemotron-H hybrid backbone（Mamba SSM 跟 Transformer attention 交替、共用 MoE FFN），最後 lm_head 接 autoregressive text decode。use_audio_in_video flag 決定 audio 那條路要不要跑。](/images/nemotron-omni-architecture.png)
+
+這張圖三個重點直接連到後面三段：
+
+1. **`use_audio_in_video` flag** 真的就是 Parakeet 那條路的開關。flag 放錯位置 → 整條綠色 lane 跳過 → model 從畫面腦補音訊。
+2. **Mamba SSM layer** 是 backbone 裡的 — 這就是為什麼上 upstream image 起來會撞 `block_size (2128) must be <= max_num_batched_tokens` assertion。Nemotron-H 是 hybrid、不是純 transformer。
+3. **`modelopt_mixed` quantization**（NVFP4 weight / BF16 activation / FP8 KV cache、vision/audio/LLM 各用不同精度）就是被我們 b12x patch 打到的東西。我們 patch 假設只有一種 quant config，這顆 model 三種混搭。
+
+---
+
 ## 另一個雷：別用 b12x image
 
 [Part 25](/zh-TW/blog/dgx-spark-nemotron-3-nano-w4a16-74-toks) 我自己 build 了一個 `vllm-node-tf6-b12x` — vLLM 0.20.1 cherry-pick [PR #40082](https://github.com/vllm-project/vllm/pull/40082) 加 4 層 SM121 patch。這個 image 跑文字衝到 74.75 tok/s。第一直覺當然是 Omni 也用同一個 image。

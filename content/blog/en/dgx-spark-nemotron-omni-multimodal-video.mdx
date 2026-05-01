@@ -125,6 +125,20 @@ The 300 prompt-tokens-per-video-second figure is consistent across both clips an
 
 ---
 
+## What's inside the box
+
+Quick architectural sketch of what handled the video, so the rest of this article (b12x dispatch incompatibility, Mamba assertion, audio token math) lands in context:
+
+![Nemotron-3-Nano-Omni architecture: three input lanes (video, audio, text) feed CRADIO v4-H + Parakeet + BPE encoders, merge into an interleaved multimodal token stream, run through a Nemotron-H hybrid backbone alternating Mamba SSM and Transformer attention layers with MoE FFN, output via lm_head to autoregressive text decode. The use_audio_in_video flag gates whether the audio path runs at all.](/images/nemotron-omni-architecture.png)
+
+Three things on this diagram drive the rest of the article:
+
+1. The **`use_audio_in_video` flag** literally gates whether the Parakeet path runs. Wrong flag placement → entire green lane skipped → model hallucinates audio from frames.
+2. **Mamba SSM layers in the backbone** are why the upstream image hits the `block_size (2128) must be <= max_num_batched_tokens` assertion at boot — Nemotron-H is hybrid, not pure transformer.
+3. **`modelopt_mixed` quantization** (NVFP4 weights / BF16 activations / FP8 KV cache, mixed across vision-audio-LLM) is what our b12x patches break. The patches assume one quant config; this model has three.
+
+---
+
 ## The other trap: don't use the b12x image
 
 In [Part 25](/en/blog/dgx-spark-nemotron-3-nano-w4a16-74-toks) I built `vllm-node-tf6-b12x` — vLLM 0.20.1 with [PR #40082](https://github.com/vllm-project/vllm/pull/40082) cherry-picked plus four SM121 patches. That image hit 74.75 tok/s on text. My first instinct was to run Omni on the same image.
