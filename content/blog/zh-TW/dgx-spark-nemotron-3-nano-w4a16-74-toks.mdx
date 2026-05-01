@@ -8,7 +8,7 @@ series: "DGX Spark"
 part: 25
 faq:
   - q: "Nemotron 3 Nano NVFP4 在 DGX Spark 多快？"
-    a: "single-stream 74.75 tok/s。model 是 cybermotaz/nemotron3-nano-nvfp4-w4a16（W4A16），跑在我自己 build 的 vLLM image 上。比 NVIDIA 論壇公開的 67 tok/s 快 11.5%。這個數字已經卡在 GB10 的頻寬天花板區段了（3.5B active 配 273 GB/s LPDDR5X），再去調 kernel 也擠不太出來。"
+    a: "single-stream 74.75 tok/s。model 是 cybermotaz/nemotron3-nano-nvfp4-w4a16（W4A16），跑在我自己 build 的 vLLM image 上。比 NVIDIA 論壇公開的 67 tok/s 快 11.5%。這個數字已經頂到 GB10 的頻寬天花板（3.5B active 配 273 GB/s LPDDR5X），再去調 kernel 也擠不太出來。"
   - q: "DGX Spark 上 W4A16 跟 W4A4 該選哪個？"
     a: "看你要單流還是多人同時打。單人 chat → W4A16（74.75 tok/s vs W4A4 的 58.27）。Server 多人 → W4A4（c=16 aggregate 786 vs W4A16 的 400 tok/s）。W4A4 把 activation 也壓 FP4，concurrency 高的時候 cache 利用率高；但每 step 多一個 activation quant overhead，單流被拖。"
   - q: "NVFP4 終於在 GB10 贏 FP8 了嗎？"
@@ -105,7 +105,7 @@ env:
   VLLM_FLASHINFER_MOE_BACKEND: latency
 ```
 
-四層都到位，vLLM log 才會吐這行：
+四層補完，vLLM log 才會吐這行：
 
 ```
 Using FlashInferB12xNvFp4LinearKernel for NVFP4 GEMM
@@ -195,7 +195,7 @@ def req(out):
 | **實際 GEMM** | on-chip 反量化後 BF16 × BF16 | **FP4 × FP4，走 `mma.kind::mxf4nvf4`** |
 | **FP4 tensor core** | 沒在跑 | 真的在跑 |
 
-所以我說「NVFP4 跑到 74.75 tok/s」 — 真的是 NVFP4 的部分是 **weight 儲存格式**。第 5 代 Blackwell 的 `mma.kind::mxf4nvf4` 指令（FP4 真硬體 MMA）只有 W4A4 那條路會 fire。W4A16 在 register 內就把 FP4 weight 反量化成 BF16，乘法本身是 BF16 × BF16。
+所以我說「NVFP4 跑到 74.75 tok/s」 — 真正吃 NVFP4 的只有 **weight 儲存格式**。第 5 代 Blackwell 的 `mma.kind::mxf4nvf4` 指令（FP4 真硬體 MMA）只有 W4A4 那條路會 fire。W4A16 在 register 內就把 FP4 weight 反量化成 BF16，乘法本身是 BF16 × BF16。
 
 比 Triton FP8 hack 快 57% 的這部分 **是頻寬贏的，不是 compute 贏的**。GB10 在單流就是頻寬綁住 — 273 GB/s LPDDR5X、weight 占每 token bytes 的大部分 — 所以把每個 weight param 從 1 byte（FP8）砍成 0.5 byte（FP4），光這一點就讓 throughput 翻倍。FP4 tensor core 沒跑沒差，因為 batch=1 下 GEMM compute 本來就不是瓶頸。
 
@@ -221,7 +221,7 @@ W4A4 **真的有用** FP4 tensor core，但 batch=1 一樣還是慢（58.27 tok/
 
 我請 Codex 做了一輪深度 review，結論是要再快只剩兩條路：(a) 再 cherry-pick [vLLM PR #35947](https://github.com/vllm-project/vllm/pull/35947)（E2M1 軟體 fallback，throughput 提升不確定），或 (b) 找 Nemotron-H 專屬的 EAGLE3 head（公開資源目前沒有）。兩條都不是 2 小時搞得定的。
 
-「MTP 是下一個 speedup」變成「MTP 是下一個 6 個月研究案」。
+「MTP 是下一個加速點」變成「MTP 是下一個 6 個月研究案」。
 
 ---
 
