@@ -201,7 +201,7 @@ def req(out):
 
 W4A4 **真的有用** FP4 tensor core，但 batch=1 一樣還是慢（58.27 tok/s）— 因為每 step 都要把 BF16 activation 重新量化成 FP4，這個開銷比 FP4 MMA 省下來的時間還多。到了 concurrency=16，activation 量化的成本被 batch 攤掉，W4A4 的 compute 優勢才終於划算（786 tok/s aggregate vs W4A16 的 400）。
 
-結論：**NVFP4 當 storage 兩條路都贏。NVFP4 當 compute（FP4 tensor core）只有多並發才贏。** 如果你看到「NVFP4 跑到 74.75 tok/s」就以為第 5 代 Blackwell tensor core 在火力全開 — 沒有，那是頻寬數學贏的，不是矽贏的。
+結論：**NVFP4 當 storage 兩條路都贏。NVFP4 當 compute（FP4 tensor core）只有多並發才贏。** 如果你看到「NVFP4 跑到 74.75 tok/s」就以為第 5 代 Blackwell tensor core 在火力全開 — 沒有，那是頻寬數學贏的，不是 tensor core 真的在跑。
 
 ---
 
