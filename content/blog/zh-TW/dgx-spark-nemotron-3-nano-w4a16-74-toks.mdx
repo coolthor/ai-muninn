@@ -1,0 +1,240 @@
+---
+title: "[vLLM] DGX Spark 跑 Nemotron 3 Nano NVFP4：74.75 tok/s，比公開值快 11.5%"
+description: "十天前我說 NVFP4 在 DGX Spark 上是個坑、FP8 比較快。今天同一台機器跑 Nemotron 3 Nano W4A16 飆到 74.75 tok/s，連我自己之前的 FP8 hack 紀錄一起踩過去。這篇講 4 層 patch、quant variant 怎麼選、跟記憶體頻寬天花板的算法。"
+date: "2026-05-01"
+updatedAt: "2026-05-01"
+tags: ["Nemotron 3", "NVFP4", "vLLM", "DGX Spark", "GB10", "SM121", "MoE", "W4A16", "b12x", "benchmark"]
+series: "DGX Spark"
+part: 25
+faq:
+  - q: "Nemotron 3 Nano NVFP4 在 DGX Spark 多快？"
+    a: "single-stream 74.75 tok/s。model 是 cybermotaz/nemotron3-nano-nvfp4-w4a16（W4A16），跑在我們客製化的 vLLM image 上。比公開 NVIDIA 論壇 67 tok/s 快 11.5%。這個數字已經卡在 GB10 的 273 GB/s LPDDR5X 頻寬綁住區段（3.5B active params 規模），再多的 kernel 微調很難再推。"
+  - q: "DGX Spark 上 W4A16 跟 W4A4 該選哪個？"
+    a: "看你要單流還是多並發。單人 chat → W4A16（74.75 tok/s vs W4A4 的 58.27）。Server 多人 → W4A4（c=16 aggregate 786 vs W4A16 的 400 tok/s）。W4A4 把 activation 也壓 FP4，多並發的 cache 利用率高；但每 step 多一個 activation quant overhead，單流被拖。"
+  - q: "NVFP4 終於在 GB10 贏 FP8 了嗎？"
+    a: "贏了。之前 part 20 寫的 47.6 tok/s Triton FP8 hack 被打贏 57%。當初 part 19 說「NVFP4 是個坑」對 Qwen 3.6 hybrid 是對的 — 真正的瓶頸是 BF16 的 GDN linear_attn 投影層。換掉 hybrid model（Nemotron 3 Nano）就解了。"
+  - q: "4 層 patch 是哪 4 層？"
+    a: "1) pip 裝 nvidia-cutlass-dsl-libs-cu13==4.4.2 補 CUDA 13 backing libs。2) 改 cutlass-dsl warp/mma.py 把 sm_121a 加進 admissible_archs 跟 base equality check。3) 改 FlashInfer dense_blockscaled_gemm_sm120.py 的 sm_version 檢查。4) Recipe 設 CUTE_DSL_ARCH=sm_121a + VLLM_NVFP4_GEMM_BACKEND=flashinfer-b12x。再 cherry-pick vLLM PR #40082 拿到 b12x dispatcher。"
+---
+
+import { TLDRCard } from "@/components/blog/TLDRCard";
+
+<TLDRCard>
+Nemotron 3 Nano 30B-A3B 在 **W4A16 NVFP4** 跑 single-stream **74.75 tok/s**，比公開 NVIDIA 論壇的 67 tok/s（[eugr 測的](https://forums.developer.nvidia.com/t/dgx-spark-nemotron3-and-nvfp4-getting-to-65-tps/355261)）快 **11.5%**，比我自己 [Part 20](/zh-TW/blog/dgx-spark-nvfp4-fp8-triton-patch) 的 47.6 tok/s FP8 hack 快 **57%**。能突破的關鍵是兩件事：4 層軟體 patch 把 b12x 在 SM121 上跑通，加上挑對 model — Nemotron 3 不是 hybrid 架構，沒有 Qwen 3.6 那套把單流壓在 44 tok/s 的 BF16 GDN tax。現在已經卡在 3.5B active params 規模在 273 GB/s LPDDR5X 上的頻寬綁住區段。
+</TLDRCard>
+
+<VideoEmbed src="/videos/dgx-spark-nemotron-3-nano-74-toks.mp4" />
+
+## 白話版：4-bit 數字怎麼能跑得比 8-bit 快
+
+DGX Spark 是 NVIDIA 賣的小型 AI 桌機，台幣大概 9 萬左右。它用一顆叫 GB10 的晶片，最大限制是記憶體頻寬只有 273 GB/s — 大概是資料中心 H100 的 1/12。本地跑 chat model 的時候，這個頻寬決定一切：weight 從記憶體拉出來多快，每秒就能吐多少 token。
+
+NVFP4 把每個 weight 壓到 4 bits，是 FP8 的一半。理論上速度應該翻倍。但 DGX Spark 用的是 SM121 這顆特殊晶片，早期 vLLM 的 FP4 路徑根本還沒準備好 — 我十天前 [Part 19](/zh-TW/blog/dgx-spark-nvfp4-trap-gb10-fp8-wins) 才寫過：NVFP4 比 FP8 慢 32%。
+
+今天同一台機器，跑 30B 參數的 model 用 NVFP4 拉到 **74.75 tok/s**。比我自己之前用 FP8 hack 出來的紀錄快、比網路上看得到的最佳值快、跟 273 GB/s 頻寬搬 4-bit weight 的物理上限差一點點而已。這篇是收據：補了什麼 patch、選了哪個 model、跑了什麼 bench script、撞了哪些牆。
+
+---
+
+## 前言
+
+之前那個坑是真的。但不是死路 — 我只是該停止怪硬體、開始讀 vLLM source code。
+
+Part 19 我宣告 NVFP4 是個坑。Part 20 提出 47.6 tok/s 的 Triton FP8 dequant hack 當 workaround。這篇 part 25 是大反轉。坑的本體不是 NVFP4，是三件事疊在一起：(a) hybrid SSM/Mamba 架構的 model 在 decoder stack 偷藏一堆 BF16 layer；(b) vLLM 在 runtime 期待 cutlass-dsl 已經 patch 過 `sm_121a` 但其實沒；(c) 單流場景挑錯 quant variant。
+
+整篇就講怎麼從 44 tok/s 一路推到 74.75。Cherry-pick [vLLM PR #40082](https://github.com/vllm-project/vllm/pull/40082) 是第一步。改 cutlass-dsl 跟 FlashInfer 是第二步。挑 Nemotron 3 Nano 跟 W4A16 是第三步。bench script 跟踩雷時間軸放後面。
+
+---
+
+## 公開最佳值是 67 tok/s — 同硬體不同 image，我們拉到 74.75
+
+| 來源 | Image | Model | Single-stream tok/s |
+|---|---|---|---|
+| eugr (論壇，Dec 2025) | `avarok/vllm-dgx-spark:v11` | `cybermotaz/nemotron3-nano-nvfp4-w4a16` | **67** |
+| Spark Arena 排行榜 | (各家) | Nemotron-3-Nano-30B-A3B | 56.11 |
+| **這次（May 2026）** | **`vllm-node-tf6-b12x`（自建）** | 跟 eugr 同一顆 | **74.75** |
+
+11.5% 算大差距，值得拆出來講。avarok image 是 Jan 2026 上架，當時 vLLM 還在 0.14 — b12x backend 那條 [PR #40082](https://github.com/vllm-project/vllm/pull/40082) 截稿時都還是 open 狀態，沒進 main。我們的客製化 image 是 vLLM 0.20.1 把那支 PR cherry-pick 進自己 fork，再加 4 層 SM121 patch（vLLM upstream 還是要手動補）。
+
+---
+
+## 4 層 patch 把 b12x 在 SM121 跑起來
+
+[CUTLASS PR #3082](https://github.com/NVIDIA/cutlass/pull/3082) 截至 2026 年 5 月還是 open 狀態。CUTLASS DSL 的 `warp/mma.py` 寫死只接受 `sm_120a`，但 FP4 MMA 需要的硬體 feature 在 `sm_121a` 也有。沒打 patch 的話，b12x kernel 不是拒絕 dispatch 就是吐出壞掉的 PTX。
+
+第 1 層 — 裝 CUDA 13 的 backing libs（pip 預設只裝 `libs-base`，少了 CUDA 13 的 runtime libs）：
+
+```bash
+pip install --no-deps nvidia-cutlass-dsl-libs-cu13==4.4.2
+```
+
+第 2 層 — 改 cutlass-dsl 的 `warp/mma.py`，admissible list 跟 base equality check 都要改：
+
+```python
+# /usr/local/lib/python3.12/dist-packages/nvidia_cutlass_dsl/python_packages/cutlass/cute/nvgpu/warp/mma.py
+
+# 改之前：
+admissible_archs = ["sm_120a"]
+if not arch == Arch.sm_120a:
+    raise OpError(...)
+
+# 改之後：
+admissible_archs = ["sm_120a", "sm_121a"]
+if arch not in (Arch.sm_120a, Arch.sm_121a):
+    raise OpError(...)
+```
+
+第 3 層 — 改 FlashInfer 的 `dense_blockscaled_gemm_sm120.py`。kernel 裡兩個地方寫死 `sm_version="sm_120"`，b12x dispatcher 看到 SM121 就直接拒絕：
+
+```python
+# /usr/local/lib/python3.12/dist-packages/flashinfer/gemm/kernels/dense_blockscaled_gemm_sm120.py
+
+# runtime check 接受 sm_121 系列
+if sm_version not in ("sm_120", "sm_120a", "sm_121", "sm_121a"):
+    raise ValueError(...)
+
+# 不要寫死 sm_120，改讀 env
+sm_version=__import__("os").environ.get("CUTE_DSL_ARCH", "sm_120"),
+```
+
+第 4 層 — recipe 補 env：
+
+```yaml
+env:
+  CUTE_DSL_ARCH: sm_121a
+  VLLM_NVFP4_GEMM_BACKEND: flashinfer-b12x
+  VLLM_FLASHINFER_MOE_BACKEND: latency
+```
+
+四層都打完，vLLM log 才會吐這行：
+
+```
+Using FlashInferB12xNvFp4LinearKernel for NVFP4 GEMM
+```
+
+完整 mod 我包成 `mods/sm121-b12x-full-enable/run.sh`，每次起 container 自動跑一次。
+
+---
+
+## Qwen 3.6 卡在 44 tok/s — 不是 kernel 慢，是模型本身
+
+4 層 patch 都到位之後，b12x 跑得很乾淨。但 Qwen 3.6-35B-A3B-NVFP4 single-stream 還是只到 44 tok/s。我寫了個 static audit，model load 完之後走 `model.named_modules()` 看每一層的 `type(quant_method).__name__`，答案一秒看出來。
+
+| Layer 類型 | 數量 | Quant method | 總 weight |
+|---|---|---|---|
+| `linear_attn.in_proj_qkvz` | 30 | `UnquantizedLinearMethod` | **1.44 GB BF16** |
+| `linear_attn.out_proj` | 30 | `UnquantizedLinearMethod` | 480 MB BF16 |
+| `mlp.gate`（router）| 40 | `UnquantizedLinearMethod` | 40 MB BF16 |
+| `lm_head` | 1 | `UnquantizedEmbeddingMethod` | 970 MB BF16 |
+
+也就是每跑一個 single-stream token，光是 BF16 weight 就要從記憶體讀 2.9 GB，再加上 active 3B MoE expert 的 1.7 GB NVFP4 weight。273 GB/s 算下來，這個 hybrid Qwen 3.5-MoE 架構的理論天花板大概 60 tok/s — 實測 44 tok/s 在 cuBLAS GEMV 在 batch=1 慢的範圍內。
+
+`linear_attn` 是 [Qwen3-Next 架構](https://huggingface.co/Qwen/Qwen3-Next-80B-A3B-Instruct)裡的 GDN/SSM mixer。每層 `in_proj_qkvz` 是個 `[12288, 2048]` 的投影，LLM Compressor 的 quant recipe 為了 SSM 精度問題明確排除掉、不動它。在記憶體頻寬綁住的平台上，這個排除決策會直接決定 single-stream throughput。b12x kernel 從頭到尾不是問題。
+
+---
+
+## 換 Nemotron 3 Nano：同 A3B 大小、沒 GDN tax
+
+Nemotron 3 Nano-30B-A3B 也是 hybrid SSM/Mamba（用 Nemotron-H base），但 quant 排除清單輕很多。`cybermotaz/nemotron3-nano-nvfp4-w4a16` 這個社群 quant 採 W4A16 — weight FP4，activation BF16。少掉每 step 的 activation FP4 quant overhead，single-stream latency 直接受惠。
+
+Bench 結果：
+
+| Model | Variant | Single-stream | c=16 aggregate |
+|---|---|---|---|
+| Qwen 3.6-35B-A3B-NVFP4 | hybrid | 44.32 | 363 |
+| Gemma 4-31B-IT-NVFP4 | dense | 6.85 | 105 |
+| **Nemotron 3 Nano** | **W4A16** | **74.75** | **400** |
+
+（多模態的 Nemotron 3 Nano Omni 沒放進來比 — b12x patched stack 餵給它 `modelopt_mixed` dispatch 會吐 NaN logits，要換 image 才能跑。多模態那條線在 [Part 26](/zh-TW/blog/dgx-spark-nemotron-omni-multimodal-video) 另開講。）
+
+兩個場景該選不同 quant：
+
+- **單流 chat** 選 W4A16 — 比 W4A4 快 28%。沒 activation quant overhead，每 token 算的東西少。
+- **server 多並發** 選 W4A4 — c=16 aggregate 比 W4A16 快 96%。activation 也壓掉 cache 友善，多並發 batch 更兇。
+
+兩個目標不一樣。
+
+Bench script：
+
+```python
+# 200 token deterministic decode、threading 控並發
+import json, time, urllib.request, threading
+
+def req(out):
+    data = json.dumps({
+        "model": "nemotron-w4a16",
+        "messages": [{"role": "user", "content": PROMPT}],
+        "max_tokens": 200, "temperature": 0.0,
+    }).encode()
+    t0 = time.perf_counter()
+    r = urllib.request.urlopen(urllib.request.Request(
+        URL, data=data, headers={"Content-Type": "application/json"}
+    ), timeout=600).read()
+    out.append((time.perf_counter() - t0,
+                json.loads(r)["usage"]["completion_tokens"]))
+
+# warmup 一次再 sweep concurrency 1-16
+```
+
+輸出品質我跑了三題隨機 prompt：「Taiwan 首都」、「英翻繁中」、「Python Fibonacci memoization」。沒 garbage、沒掉 token。`<think>` reasoning block 會直接寫在 `content` 裡（沒裝專屬 reasoning parser），實用上 OK。
+
+---
+
+## MTP 走的死路：5 次失敗、0 次成功
+
+[Multi-Token Prediction](https://arxiv.org/abs/2404.19737)（MTP）是突破記憶體頻寬天花板的標準招 — 每次 forward 預測 2-3 個 token、對的就接受、錯的重算。NVIDIA 自家[Spark Deployment Guide](https://docs.nvidia.com/nemotron/nightly/usage-cookbook/Nemotron-3-Super/SparkDeploymentGuide/README.html)就明寫 Nemotron 3 用 `--speculative_config '{"method":"mtp","num_speculative_tokens":3}'`。
+
+我試了 5 次，全掛：
+
+1. **Qwen 3.6 + b12x MoE backend**。`b12x` 不接 unquantized MoE，draft model 預設 BF16，dispatcher 直接拒絕。啟動就死。
+2. **Qwen 3.6 + flashinfer_cutlass + gpu_memory_utilization=0.85**。vLLM 的 CUDA-graph mem profiler 回傳 `-35.63 GiB`（負值 bug，沒 clamp），KV cache budget 被灌成 112 GB，128 GB 統一記憶體直接爆，cudagraph capture 中 SIGKILL。
+3. **同上，util 降到 0.70**。一樣 OOM、一樣 SIGKILL。
+4. **同上，util 0.65 + max_num_seqs 16**。一樣死。
+5. **Nemotron 3 Nano W4A16 + mtp method**。vLLM 0.20 只在 model config 有 `num_nextn_predict_layers > 0` 才把 nemotron_h 升成 mtp。`cybermotaz` 社群 quant 把那個 field 砍了，config 階段就吐 `NotImplementedError: Unsupported speculative method: 'mtp'`。
+
+退而求其次的 `ngram` speculative，跑 essay 內容**反而慢 25%**（74.75 → 55.70）。文章沒重複 pattern → prompt-lookup 命中率超低 → 浪費算力算 draft tokens 結果全 reject。
+
+我請 Codex 做了一輪深度檢查，結論是要再快得：(a) 多 cherry-pick [vLLM PR #35947](https://github.com/vllm-project/vllm/pull/35947)（E2M1 軟體 fallback，throughput 是否提升不確定），或 (b) 找 Nemotron-H 專屬的 EAGLE3 head（公開資料目前找不到）。兩條都不是 2 小時內能搞定的。
+
+「MTP 是下一個 speedup」變成「MTP 是下一個 6 個月研究計畫」。
+
+---
+
+## 收穫
+
+### 最花時間的地方
+
+MTP 的死路。5 種失敗模式各看起來像上一個的鬼影。OOM 直接把系統凍住那次最痛 — 要使用者實際按重開機按鈕才救得回來。vLLM 的 CUDA-graph mem profiler 沒 clamp 負值，回傳 `-35.63 GiB` 在高 `gpu_memory_utilization` 下會悄悄分配超過統一記憶體上限，把 kernel 一起拖死。
+
+真正推進 throughput 的是一連串 static introspection：dump `model.named_modules()` 找哪些投影層是 `UnquantizedLinearMethod`、讀 `vllm/config/speculative.py` 才知道 `mtp` 卡在 model config 的某個 field（社群 quant 會砍掉）、grep FlashInfer source code 看到 b12x kernel 寫死 `sm_120` 三個地方。
+
+### 可搬走的診斷方法
+
+**1. Static module audit 比 forward hook 強。** model 跑得慢、不知道哪層拖累的時候，`load_model()` 之後走 `model.named_modules()`，按 `type(m.quant_method).__name__` 分類。BF16 fallback 那些層一秒看出來。不用 NVTX、不用 profiler trace、不用改框架。
+
+**2. Dispatch log 講的是 intent，不是 behavior。** `Using FlashInferB12xNvFp4LinearKernel for NVFP4 GEMM` 這行從第一天就出現在 launch log，但 kernel 裡有三個地方寫死 `sm_version="sm_120"`，要逐個 monkey-patch。Log 確認意圖、source code 確認行為。
+
+**3. CUDA-graph 記憶體 bug 假裝是 OOM。** vLLM `gpu_worker.py:448` 如果 log 寫 `Estimated CUDA graph memory: -X GiB`，profiler 壞了、KV-cache budget 算錯。直接 pin `--kv-cache-memory-bytes`，不要靠 `--gpu-memory-utilization` 自動分。
+
+### 通用原則
+
+記憶體頻寬是物理事實。273 GB/s 配 LPDDR5X 是每個 token 要讀的所有東西的預算 — quantized weight 加上 lm_head 跟 checkpoint 沒量化掉的 BF16 殘留層。確切上限要看那些非量化部分有多少（Nemotron 3 W4A16 拿筆算下大概落在 80 出頭 tok/s），74.75 已經沿著那條曲線爬得很上面了，下一個 gain 必須改 bytes-per-token regime — speculative decoding、更小的 active params、或更快的記憶體。kernel 怎麼調都沒用了。
+
+---
+
+## 收尾
+
+要在 DGX Spark 上拿到 NVFP4 single-stream 速度，今天的配方：
+
+1. Cherry-pick [vLLM PR #40082](https://github.com/vllm-project/vllm/pull/40082) 進 vLLM main。
+2. 補 4 層 SM121 patch（`libs-cu13`、`cutlass-dsl mma.py`、FlashInfer dense kernel、env vars）。
+3. 挑非 hybrid model。`cybermotaz/nemotron3-nano-nvfp4-w4a16` 是我目前測到 single-stream 最快的。
+4. Chat 用 W4A16，serving 用 W4A4。兩個解的問題不一樣。
+5. MTP 先不要碰。vLLM 跟 checkpoint 的相容矩陣還沒打通。
+
+完整 mod 跟 recipe 在 spark-vllm-docker fork 的 `mods/sm121-b12x-full-enable/run.sh` 跟 `recipes/nemotron-w4a16.yaml`。從乾淨 image 重建，30 分鐘可以複現 74.75。
+
+系列其他文章：
+- [Part 26：DGX Spark 跑英文影片 — Nemotron Omni 多模態實戰](/zh-TW/blog/dgx-spark-nemotron-omni-multimodal-video) — 同硬體，多模態：3 分鐘演講 89 秒看完
+- [Part 19：NVFP4 在 GB10 是個坑 — FP8 反而快 32%](/zh-TW/blog/dgx-spark-nvfp4-trap-gb10-fp8-wins) — 十天前我以為的 NVFP4
+- [Part 20：NVFP4→FP8 Triton patch — 47.6 tok/s](/zh-TW/blog/dgx-spark-nvfp4-fp8-triton-patch) — 這次打贏的 FP8 hack
+- [Part 7：Gemma 4 26B NVFP4 — 52 tok/s on DGX Spark](/zh-TW/blog/dgx-spark-gemma4-26b-nvfp4-52-toks) — 同套路，不同 model

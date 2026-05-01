@@ -1,11 +1,503 @@
 # ai-muninn — Full Site Content
 # https://ai-muninn.com
-# Generated: 2026-04-30
-# Articles: 63
+# Generated: 2026-05-01
+# Articles: 65
 
 This file contains the full text of all articles on ai-muninn.com.
 It is intended for AI tools that need complete site context.
 For the article index only, see /llms.txt.
+
+---
+
+# [vLLM] Nemotron 3 Nano on DGX Spark: 74.75 tok/s NVFP4 — 11.5% Past the Public Baseline
+URL: https://ai-muninn.com/en/blog/dgx-spark-nemotron-3-nano-w4a16-74-toks
+Date: 2026-05-01
+Series: DGX Spark (Part 25)
+
+import { TLDRCard } from "@/components/blog/TLDRCard";
+
+
+Nemotron 3 Nano 30B-A3B in **W4A16 NVFP4** runs at **74.75 tok/s** single-stream on DGX Spark, **+11.5%** past the public 67 tok/s forum baseline ([eugr](https://forums.developer.nvidia.com/t/dgx-spark-nemotron3-and-nvfp4-getting-to-65-tps/355261)), and **+57%** past my own 47.6 tok/s FP8 hack from [Part 20](/en/blog/dgx-spark-nvfp4-fp8-triton-patch). The fix that closed the gap was a 4-layer software stack to enable `b12x` dispatch on SM121, plus picking the right model — Nemotron 3 is non-hybrid, so it dodges the BF16 GDN tax that capped Qwen 3.6 at 44 tok/s. We're now firmly in the bandwidth-bound regime for a 3.5B active-param model on 273 GB/s LPDDR5X.
+
+
+<VideoEmbed src="/videos/dgx-spark-nemotron-3-nano-74-toks.mp4" />
+
+## Plain-Language Version: Why a 4-bit number can run faster than an 8-bit number
+
+DGX Spark is a small AI computer that NVIDIA sells around US$3,000. It has a chip called GB10, and one big constraint: the memory bus moves data at 273 GB/s — about 1/12 the speed of a data-center H100. For local chat models, that memory speed is the whole game. The faster you can pull weights out of memory, the more tokens per second you generate.
+
+NVFP4 packs each model weight into 4 bits — half of FP8's 8 bits. Theoretically, you should double the speed. But on DGX Spark's specific chip (SM121), the FP4 hardware path was broken in early vLLM builds. I wrote about that ten days ago in [Part 19](/en/blog/dgx-spark-nvfp4-trap-gb10-fp8-wins): NVFP4 was 32% **slower** than FP8.
+
+Today the same hardware hits **74.75 tok/s** on a 30B-parameter model in NVFP4. That's faster than my own FP8 ceiling, faster than the best public benchmark anyone has posted, and very close to the physical limit of how fast 273 GB/s can shuffle 4-bit weights. This article is the receipt: the patches, the model choice, the bench script, the dead-ends.
+
+---
+
+## Preface
+
+The trap was real. The trap was also surmountable. I just had to stop blaming the hardware and start reading vLLM source.
+
+Part 19 declared NVFP4 a trap. Part 20 proposed a Triton FP8 dequant hack at 47.6 tok/s as the workaround. This is part 25, the reversal. The "trap" wasn't NVFP4. It was the combination of (a) hybrid SSM/Mamba models that hide BF16 layers in their decoder stack, (b) missing CUTLASS DSL patches for `sm_121a` that vLLM expected at runtime, and (c) using the wrong quantization variant for single-stream workloads.
+
+This piece walks through the diagnostic chain that landed at 74.75 tok/s. Cherry-picking [vLLM PR #40082](https://github.com/vllm-project/vllm/pull/40082) was step one. Patching `cutlass-dsl` and FlashInfer was step two. Picking the right model and W4A16 quant was step three. The bench script and timeline at the end.
+
+---
+
+## The public baseline was 67 tok/s. We hit 74.75 — same hardware, different image
+
+| Source | Image | Model | Single-stream tok/s |
+|---|---|---|---|
+| eugr (forum, Dec 2025) | `avarok/vllm-dgx-spark:v11` | `cybermotaz/nemotron3-nano-nvfp4-w4a16` | **67** |
+| Spark Arena leaderboard | (various) | Nemotron-3-Nano-30B-A3B | 56.11 |
+| **This work (May 2026)** | **`vllm-node-tf6-b12x` (custom)** | Same as eugr | **74.75** |
+
+11.5% past the public best is a big enough delta to be worth explaining. The avarok image was shipped Jan 2026 with vLLM 0.14, before the b12x backend was available — and as of writing, [vLLM PR #40082](https://github.com/vllm-project/vllm/pull/40082) is still open. Our custom image is built on vLLM 0.20.1 with that PR cherry-picked into our local fork, plus the 4-layer SM121 patches that vLLM upstream still requires manually.
+
+---
+
+## The 4-layer patch stack to enable b12x on SM121
+
+[CUTLASS PR #3082](https://github.com/NVIDIA/cutlass/pull/3082) was still open as of May 2026. The CUTLASS DSL `warp/mma.py` rejects anything that isn't `sm_120a`, even though the actual hardware features needed for FP4 MMA exist on `sm_121a`. Without the patches, the b12x kernel either refuses to dispatch or compiles broken PTX.
+
+Layer 1 — install the CUDA-13 backing libraries (the default `pip install nvidia-cutlass-dsl` only pulls `libs-base`, missing the runtime libs for CUDA 13):
+
+```bash
+pip install --no-deps nvidia-cutlass-dsl-libs-cu13==4.4.2
+```
+
+Layer 2 — patch `cutlass-dsl` `warp/mma.py` to admit `sm_121a`. Both the visible list AND the base equality check:
+
+```python
+# /usr/local/lib/python3.12/dist-packages/nvidia_cutlass_dsl/python_packages/cutlass/cute/nvgpu/warp/mma.py
+
+# Before:
+admissible_archs = ["sm_120a"]
+if not arch == Arch.sm_120a:
+    raise OpError(...)
+
+# After:
+admissible_archs = ["sm_120a", "sm_121a"]
+if arch not in (Arch.sm_120a, Arch.sm_121a):
+    raise OpError(...)
+```
+
+Layer 3 — patch FlashInfer's `dense_blockscaled_gemm_sm120.py`. The kernel hardcodes `sm_version="sm_120"` in two places, which the b12x dispatcher then rejects when running on SM121:
+
+```python
+# /usr/local/lib/python3.12/dist-packages/flashinfer/gemm/kernels/dense_blockscaled_gemm_sm120.py
+
+# Accept sm_121 family in the runtime check
+if sm_version not in ("sm_120", "sm_120a", "sm_121", "sm_121a"):
+    raise ValueError(...)
+
+# Pass through the env-controlled arch instead of hardcoding sm_120
+sm_version=__import__("os").environ.get("CUTE_DSL_ARCH", "sm_120"),
+```
+
+Layer 4 — recipe env vars:
+
+```yaml
+env:
+  CUTE_DSL_ARCH: sm_121a
+  VLLM_NVFP4_GEMM_BACKEND: flashinfer-b12x
+  VLLM_FLASHINFER_MOE_BACKEND: latency
+```
+
+After all four layers, vLLM logs confirm dispatch:
+
+```
+Using FlashInferB12xNvFp4LinearKernel for NVFP4 GEMM
+```
+
+The full mod ships as `mods/sm121-b12x-full-enable/run.sh` and runs once per container start.
+
+---
+
+## Qwen 3.6 capped at 44 tok/s — the bottleneck wasn't the kernel
+
+With the 4-layer patch in place, b12x ran cleanly. But Qwen 3.6-35B-A3B-NVFP4 still topped out at 44 tok/s single-stream. A static audit of the loaded model explained why.
+
+A small forward-hook patch on `vllm.v1.worker.gpu_model_runner.GPUModelRunner.load_model` walked `model.named_modules()` after weight loading and dumped each module's `type(quant_method).__name__`. The result was unambiguous:
+
+| Layer type | Count | Quant method | Total weight |
+|---|---|---|---|
+| `linear_attn.in_proj_qkvz` | 30 | `UnquantizedLinearMethod` | **1.44 GB BF16** |
+| `linear_attn.out_proj` | 30 | `UnquantizedLinearMethod` | 480 MB BF16 |
+| `mlp.gate` (router) | 40 | `UnquantizedLinearMethod` | 40 MB BF16 |
+| `lm_head` | 1 | `UnquantizedEmbeddingMethod` | 970 MB BF16 |
+
+That's about 2.9 GB of BF16 weights read **per single-stream decode token**, on top of the 1.7 GB of NVFP4 weights for the active 3B MoE experts. At 273 GB/s, that hybrid Qwen 3.5-MoE architecture has a theoretical ceiling around 60 tok/s — and we measured 44, in the right neighborhood for "BF16 cuBLAS GEMV at batch=1 is slow."
+
+`linear_attn` is the GDN/SSM mixer in the [Qwen3-Next architecture](https://huggingface.co/Qwen/Qwen3-Next-80B-A3B-Instruct). Each layer's `in_proj_qkvz` is a `[12288, 2048]` projection that the LLM Compressor recipe explicitly excluded from quantization for SSM precision reasons. On a memory-bound platform, that decision dominates single-stream throughput. The b12x kernel was never the issue.
+
+---
+
+## Switching to Nemotron 3 Nano: same A3B size, no GDN tax
+
+Nemotron 3 Nano-30B-A3B uses a Nemotron-H base — also hybrid SSM/Mamba — but a much lighter quantization-exclusion list. The W4A16 community quant by `cybermotaz/nemotron3-nano-nvfp4-w4a16` keeps weights in FP4 and activations in BF16. That avoids the per-step activation FP4 quantization overhead that hurts single-stream latency.
+
+The bench:
+
+| Model | Variant | Single-stream | c=16 aggregate |
+|---|---|---|---|
+| Qwen 3.6-35B-A3B-NVFP4 | hybrid | 44.32 | 363 |
+| Gemma 4-31B-IT-NVFP4 | dense | 6.85 | 105 |
+| **Nemotron 3 Nano** | **W4A16** | **74.75** | **400** |
+
+(Nemotron 3 Nano Omni — the multimodal sibling — is excluded here because the b12x patched stack feeds it NaN logits via `modelopt_mixed` dispatch. That model needs a different image; see [Part 26](/en/blog/dgx-spark-nemotron-omni-multimodal-video) for the working multimodal recipe.)
+
+Single-stream and aggregate are different regimes:
+
+- **W4A16 wins single-stream** by 28% over W4A4 — no per-step activation quant, less compute per token.
+- **W4A4 wins aggregate** by 96% over W4A16 — compressed activations let you batch more tokens per HBM read, so multi-batch scales harder.
+
+If your workload is one user typing into a chat box, ship W4A16. If you're running a serving cluster with concurrency 16+, ship W4A4. They are not the same trade-off.
+
+The bench script:
+
+```python
+# 200-token deterministic decode, threaded concurrency
+import json, time, urllib.request, threading
+
+def req(out):
+    data = json.dumps({
+        "model": "nemotron-w4a16",
+        "messages": [{"role": "user", "content": PROMPT}],
+        "max_tokens": 200, "temperature": 0.0,
+    }).encode()
+    t0 = time.perf_counter()
+    r = urllib.request.urlopen(urllib.request.Request(
+        URL, data=data, headers={"Content-Type": "application/json"}
+    ), timeout=600).read()
+    out.append((time.perf_counter() - t0,
+                json.loads(r)["usage"]["completion_tokens"]))
+
+# Warm up first, then sweep concurrency 1-16
+```
+
+Output quality verified across factual, translation, and code tasks. No `!!!!!` garbage runs, no token degeneration. The model handles `<think>` reasoning blocks correctly even without the dedicated `nano_v3_reasoning_parser` (it just lands in `content` instead of being split into a separate field).
+
+---
+
+## The MTP detour: 5 failures, 0 wins
+
+[Multi-Token Prediction](https://arxiv.org/abs/2404.19737) is the standard speculative decoding trick to break past memory bandwidth ceilings — predict 2-3 tokens per forward pass, accept what's right, retry what's wrong. NVIDIA's [Spark Deployment Guide](https://docs.nvidia.com/nemotron/nightly/usage-cookbook/Nemotron-3-Super/SparkDeploymentGuide/README.html) explicitly recommends `--speculative_config '{"method":"mtp","num_speculative_tokens":3}'` for Nemotron 3.
+
+Five attempts, none successful:
+
+1. **Qwen 3.6 + b12x MoE backend.** `b12x` doesn't support unquantized MoE — the draft model defaulted to BF16 and the dispatcher refused. Errored at startup.
+2. **Qwen 3.6 + flashinfer_cutlass + gpu_memory_utilization=0.85.** vLLM's CUDA-graph memory profiler returned `-35.63 GiB` (sign bug, no clamp), which inflated the available KV cache budget to 112 GB on a 128 GB unified-memory system. SIGKILL during graph capture.
+3. **Same, with util=0.70.** Same OOM, same kill.
+4. **Same, with util=0.65 + max_num_seqs=16.** Same OOM, same kill.
+5. **Nemotron 3 Nano W4A16 + mtp method.** vLLM 0.20 promotes Nemotron-H to MTP only when `num_nextn_predict_layers > 0` exists in the model config. The `cybermotaz` community quant stripped that field. `NotImplementedError: Unsupported speculative method: 'mtp'` at config validation.
+
+`ngram` speculative as a workaround **lost 25%** on essay-generation prompts (74.75 → 55.70). Essays don't have repeating n-grams, so the prompt-lookup table never hits, and the wasted draft compute slows things down.
+
+The Codex review I ran on this concluded that breaking past 74.75 with this exact stack would require either (a) a new vLLM cherry-pick like [PR #35947](https://github.com/vllm-project/vllm/pull/35947) for the E2M1 software fallback (uncertain throughput gain), or (b) finding an EAGLE3 head trained for Nemotron-H (none exists publicly). Neither is a 2-hour fix.
+
+The shape of "MTP is the speedup" became "MTP is the next 6-month research project."
+
+---
+
+## What was gained
+
+### What cost the most time
+
+The MTP cul-de-sac. Five separate failure modes, each looking like the last one's ghost. The OOM-then-system-freeze cycle in particular needed a physical reboot trigger from the user — vLLM's CUDA-graph memory profiler has no negative-value clamp, and a `-35.63 GiB` estimate at high `gpu_memory_utilization` will silently allocate more than the system's unified-memory ceiling and lock the kernel.
+
+What actually advanced the throughput was a sequence of static introspection passes — dumping `model.named_modules()` to find which projections were `UnquantizedLinearMethod`, reading `vllm/config/speculative.py` to learn that `mtp` is gated on a model config field that community quants strip out, and grepping the FlashInfer source to confirm the b12x kernel hardcoded `sm_120` in three places.
+
+### Transferable diagnostic patterns
+
+**1. Static module audit beats forward hooks.** When a model is too slow and you don't know which layers dominate, walk `model.named_modules()` after `load_model()` and group by `type(m.quant_method).__name__`. You'll see the BF16 fallback layers immediately. No NVTX, no profiler trace, no framework changes.
+
+**2. Read the kernel's source before trusting the dispatch log.** `Using FlashInferB12xNvFp4LinearKernel for NVFP4 GEMM` appeared in the launch log on day 1, but the kernel itself had `sm_version="sm_120"` baked in three places that needed monkey-patching. The dispatch log confirms intent, not behavior.
+
+**3. CUDA-graph memory bugs masquerade as OOM.** If vLLM's `gpu_worker.py:448` log says `Estimated CUDA graph memory: -X GiB`, the estimator is broken and the KV-cache budget is wrong. Pin `--kv-cache-memory-bytes` directly instead of relying on `--gpu-memory-utilization`.
+
+### Universal pattern
+
+Memory bandwidth is a physical fact. 273 GB/s on LPDDR5X is the budget for everything you need to read per token — quantized weights, plus whatever lm_head and unquantized layers the checkpoint kept in BF16. The exact ceiling depends on those non-quant residuals (a clean back-of-envelope for Nemotron 3 W4A16 lands somewhere in the low 80s tok/s), and 74.75 tok/s is far enough up that curve that the next gain has to come from changing the bytes-per-token regime, not optimizing kernels. Speculative decoding, smaller active param counts, or faster memory are the only directions left.
+
+---
+
+## Conclusion
+
+If you want NVFP4 single-stream throughput on DGX Spark today:
+
+1. Cherry-pick [vLLM PR #40082](https://github.com/vllm-project/vllm/pull/40082) onto vLLM main.
+2. Apply the 4-layer SM121 patch stack (`libs-cu13`, `cutlass-dsl mma.py`, FlashInfer dense kernel, env vars).
+3. Use a non-hybrid model. `cybermotaz/nemotron3-nano-nvfp4-w4a16` is the highest single-stream tok/s I've measured.
+4. Pick W4A16 for chat, W4A4 for serving. They optimize for different metrics.
+5. Skip MTP for now. The vLLM/checkpoint compatibility matrix isn't clean yet.
+
+The complete mod and recipe ship in [the spark-vllm-docker fork](/Users/coolthor/spark-vllm-docker) as `mods/sm121-b12x-full-enable/run.sh` and `recipes/nemotron-w4a16.yaml`. Reproducing the 74.75 should take about 30 minutes from a clean image build.
+
+Also in this series:
+- [Part 26: Watching English Videos with DGX Spark — Nemotron Omni Audio+Video](/en/blog/dgx-spark-nemotron-omni-multimodal-video) — same hardware, multimodal: 3-min talk transcribed in 89s
+- [Part 19: NVFP4 Is a Trap on GB10 — FP8 Wins by 32%](/en/blog/dgx-spark-nvfp4-trap-gb10-fp8-wins) — what I thought NVFP4 was 10 days ago
+- [Part 20: NVFP4 → FP8 Triton Patch — 47.6 tok/s](/en/blog/dgx-spark-nvfp4-fp8-triton-patch) — the FP8 hack this article beats
+- [Part 7: Gemma 4 26B NVFP4 — 52 tok/s on DGX Spark](/en/blog/dgx-spark-gemma4-26b-nvfp4-52-toks) — same approach, different model
+
+---
+
+# [vLLM] Watching English Videos with DGX Spark: Nemotron Omni Multimodal on GB10
+URL: https://ai-muninn.com/en/blog/dgx-spark-nemotron-omni-multimodal-video
+Date: 2026-05-01
+Series: DGX Spark (Part 26)
+
+import TLDRCard from "@/components/TLDRCard";
+import VideoEmbed from "@/components/VideoEmbed";
+import YouTubeEmbed from "@/components/YouTubeEmbed";
+
+
+Same DGX Spark hardware that hit 74.75 tok/s on text in [Part 25](/en/blog/dgx-spark-nemotron-3-nano-w4a16-74-toks) can also watch English videos. **Nemotron-3-Nano-Omni-30B-A3B** transcribed Jawed Karim's 19-second "Me at the zoo" in **15 seconds wall** and the first 3 minutes of Andrej Karpathy's LLM talk in **89 seconds wall** with **53,842 prompt tokens**, both factually correct. Two traps got me first: `use_audio_in_video` must go at the top level of the request (not inside `video_url`), and the b12x-patched image breaks Omni's `modelopt_mixed` dispatch with NaN logits — fix is the upstream `vllm/vllm-openai:v0.20.0` image. Recipe at the end.
+
+
+<VideoEmbed src="/videos/dgx-spark-nemotron-omni-multimodal-video.mp4" />
+
+## Plain-Language Version: how a $3000 desktop watches videos for you
+
+DGX Spark is a small desktop computer that runs AI models locally. Until now I'd been using it for text — chat, code, the usual. But the same chip can also process video and audio if you load a multimodal model. NVIDIA released one called **Nemotron-3-Nano-Omni-30B-A3B** that bundles three things: a vision encoder for video frames, a Parakeet speech encoder for audio, and a 30B-A3B language model that fuses them (NVIDIA's card lists ~31B total params, with 3B active per token in the MoE).
+
+The use case I cared about: I find an English YouTube video, a podcast clip, a conference talk — and I want the model to watch it, listen to it, and write me a summary. Not just transcription, not just visual captioning, but the actual fused understanding of what was said and what was shown.
+
+This article is the working setup. Two traps cost me an evening, the third is a knob you turn for video length. The numbers come from the test runs.
+
+---
+
+## Preface
+
+[Part 25](/en/blog/dgx-spark-nemotron-3-nano-w4a16-74-toks) was about pushing single-stream text throughput to 74.75 tok/s on a 30B parameter model. Different goal here — multimodal correctness, not raw speed. Throughput stops being the headline once your bottleneck is "did the model hear what was said."
+
+The traps in this piece are config-level, not architectural. The model works. The vLLM serving layer works. But two flag placements decide whether you get real audio understanding or a confident hallucination — and they're both undocumented in the model card example I started from.
+
+---
+
+## The 19-second video that exposed the audio trap
+
+The first video I sent was the famous "Me at the zoo" — Jawed Karim, 19 seconds, the first video ever uploaded to YouTube in 2005. Public, short, has clear English narration.
+
+<YouTubeEmbed id="jNQXAC9IVRw" caption="Jawed Karim, 'Me at the zoo' (April 23, 2005) — first YouTube upload, 19 seconds." />
+
+The model's first response described the visuals perfectly — young man in blue shirt and red-grey jacket, two elephants, hay, fence. But the transcription it returned was:
+
+> "I'm here at the San Diego Zoo. And I'm going to show you some elephants. There are three of them. One is eating hay..."
+
+That's a hallucination. YouTube's English caption track for the clip says:
+
+> "Alright, so here we are in front of the elephants. The cool thing about these guys is that they have really, really, really long trunks. And that's, that's cool. And that's pretty much all there is to say."
+
+San Diego Zoo isn't mentioned. There aren't three elephants. The model wasn't listening — it was inferring plausible commentary from the visual scene. Because the visual was correct, it took me a beat to realize what was happening.
+
+The fix lives in vLLM's chat parser, `chat_utils.py:910`:
+
+```python
+# Extract audio from video if use_audio_in_video is True
+if (
+    video_url
+    and self._mm_processor_kwargs
+    and self._mm_processor_kwargs.get("use_audio_in_video", False)
+):
+    audio = self._connector.fetch_audio(video_url) if video_url else None
+    audio_placeholder = self._tracker.add("audio", (audio, uuid))
+    self._add_placeholder("audio", audio_placeholder)
+```
+
+Without that flag, vLLM never extracts the audio track from the video and never feeds it to the Parakeet encoder. The model gets video frames only and is forced to guess what the speaker said.
+
+The flag belongs at the **top level** of the chat completion request, not inside the `video_url` object:
+
+```json
+{
+  "model": "nemotron-omni",
+  "mm_processor_kwargs": {"use_audio_in_video": true},
+  "messages": [{
+    "role": "user",
+    "content": [
+      {"type": "video_url", "video_url": {"url": "data:video/mp4;base64,..."}},
+      {"type": "text", "text": "Transcribe the audio. Then describe the scene."}
+    ]
+  }]
+}
+```
+
+With the flag at the root, the second run produced:
+
+> "Alright, so here we are, one of the uh elephants. Um, cool thing about these guys is that they have really, really, really long um trunks. And that's that's cool. And that's pretty much all there is to say."
+
+Substantially correct — same elephants framing, same "really, really, really long trunks" anchor, same closing. Slight ASR drift ("one of the uh" vs "in front of the") and extra "um" hesitations, but the meaning is preserved. 15 seconds wall, 5,637 prompt tokens, 689 completion tokens.
+
+---
+
+## The 3-minute Karpathy talk: scaling up
+
+Once the flag was right, the next question was how long a video the box could handle. I downloaded the first 3 minutes of Andrej Karpathy's "Intro to Large Language Models" — talking head, slide-driven, dense technical content.
+
+<YouTubeEmbed id="zjkBMFhNj_g" caption="Andrej Karpathy, 'The busy person's intro to LLMs' — tested on the first 3 minutes." />
+
+The model's output (paraphrased structure, the actual content was timestamped):
+
+> Andrej Karpathy introduces himself, mentions an earlier 30-minute LLM talk that wasn't recorded so he's re-recording it for YouTube. Title slide reads "The busy person's intro to LLMs". The slide changes to show a `llama-2-70b` directory with two files: `parameters` (140GB) and `run.c` (~500 lines of C). He explains the parameters file is 140GB because it's a 70-billion-parameter model with each parameter stored as 2-byte float16. The C file has no dependencies — you compile it into a binary, copy the parameters file, and you have a working LLM on a MacBook with no internet.
+
+Every fact is correct. `llama-2-70b`, the 140 GB number, the ~500-line `run.c`, the MacBook framing — all match Karpathy's actual content. The output was a paraphrase rather than a verbatim transcript, but the model preserved the technical claims.
+
+| Metric | Value |
+|---|---|
+| Video duration | 180 seconds (3 minutes) |
+| Wall time | 89 seconds |
+| Prompt tokens | 53,842 |
+| Completion tokens | 2,000 (capped at max_tokens) |
+| Effective rate | ~300 prompt tokens per second of video |
+
+The 300 prompt-tokens-per-video-second figure is consistent across both clips and is the number you use to plan longer videos.
+
+---
+
+## The other trap: don't use the b12x image
+
+In [Part 25](/en/blog/dgx-spark-nemotron-3-nano-w4a16-74-toks) I built `vllm-node-tf6-b12x` — vLLM 0.20.1 with [PR #40082](https://github.com/vllm-project/vllm/pull/40082) cherry-picked plus four SM121 patches. That image hit 74.75 tok/s on text. My first instinct was to run Omni on the same image.
+
+It didn't work. First decode step produced NaN logits, output was `!!!!!!!!!!!!`, and the engine refused to recover. The vLLM startup log said the dispatch was:
+
+```
+Selected FlashInferFP8ScaledMMLinearKernel for ModelOptFp8LinearMethod
+```
+
+Omni uses `modelopt_mixed` quantization — vision and audio encoders in one precision, the LLM body in another. Our SM121 patches changed the FP8 GEMM kernel selection in a way that's wrong for that mixed config. I didn't trace it to the patched source line, because the pragmatic fix was simpler: use the upstream image.
+
+```bash
+docker run -d --name vllm_upstream --gpus all --network host --ipc=host \
+  --shm-size 16g \
+  -v ~/.cache/huggingface:/root/.cache/huggingface \
+  --entrypoint /bin/bash \
+  vllm/vllm-openai:v0.20.0 \
+  /tmp/launch-upstream-omni.sh
+```
+
+The upstream `vllm/vllm-openai:v0.20.0` doesn't have our patches and hits the standard kernel selection path that Omni was tested against. Same hardware, same model, two different images for two different jobs.
+
+This isn't a permanent split. It says: when our patched image is wrong for a model, ship the model on a separate stock-image container. Trying to make one image cover everything is the usual integration mistake.
+
+---
+
+## Mamba block_size assertion: a launch-time gotcha
+
+First boot of the upstream image with `--max-model-len 65536` died at engine init:
+
+```
+AssertionError: In Mamba cache align mode,
+block_size (2128) must be <= max_num_batched_tokens (2048).
+```
+
+Nemotron-3 is a hybrid architecture with Mamba/SSM layers. The Mamba KV cache uses a block size derived from the model config, and vLLM's default `max_num_batched_tokens=2048` is smaller than that block size. The fix is one flag:
+
+```bash
+--max-num-batched-tokens 8192
+```
+
+Bumping the prefill batch budget makes the assertion pass. There's no perf tradeoff at our concurrency=1 workload — the flag controls the *upper limit* of how many tokens vLLM will batch together for prefill, and we never approach that limit with a single video request anyway.
+
+---
+
+## How long a video can fit?
+
+The math from the 3-minute Karpathy run gives a clean rule: ~300 prompt tokens per second of video at fps=2. The choke points are `--max-model-len`, `num_frames`, and the fps you sample at.
+
+| Video length | fps | num_frames cap | max-model-len | Est. prompt tokens | Notes |
+|---|---|---|---|---|---|
+| 1 min | 2 | 128 | 32768 | ~18k | Default config works |
+| 2 min | 2 | 256 | 32768 | ~36k | Bump max-model-len to 65536 |
+| **3 min** | **2** | **512** | **65536** | **~54k** | **What this article tested** |
+| 5 min | 1 | 300 | 65536 | ~45k | Half the visual detail; audio unchanged |
+| 10 min | 0.5 | 300 | 98304 | ~45k | Quarter the visual detail; gestures/slides lost |
+| >10 min | — | — | — | — | Chunk with ffmpeg, summarize per chunk, stitch |
+
+Two trade-offs hide in this table:
+
+**fps↓ saves tokens without losing audio detail.** Parakeet runs on the audio waveform at 16 kHz, independent of the video frame rate. The audio path produces about 12.5 audio tokens per second of clip regardless of fps. So lowering fps cuts visual token count and visual detail (gestures, slide changes) — but the speech transcription stays as good as the input audio. That's actually the win condition for long-form: drop fps to 0.5, keep the audio.
+
+**num_frames↑ + max-model-len↑ costs unified memory.** GB10's 128 GB is shared between weights and KV cache. Doubling `max-model-len` doubles the KV cache budget. At the 98k context, you're using more than half the box's RAM for one in-flight video request.
+
+For anything over 10 minutes I'd chunk in ffmpeg, run the model per chunk, and concatenate the per-chunk summaries with a small text-only LLM. Single-pass long-form is not the win condition for a $3,000 desktop.
+
+---
+
+## The working recipe
+
+`spark-vllm-docker/recipes/nemotron-omni.yaml`:
+
+```yaml
+recipe_version: "1"
+name: nemotron-omni
+description: Nemotron-3-Nano-Omni multimodal (video+audio) on upstream vLLM 0.20.0
+
+model: nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4
+container: vllm/vllm-openai:v0.20.0
+solo_only: true
+
+defaults:
+  port: 8004
+  host: 0.0.0.0
+  gpu_memory_utilization: 0.80
+  max_model_len: 65536
+  max_num_seqs: 8
+  max_num_batched_tokens: 8192
+
+command: |
+  pip install "vllm[audio]" --quiet && \
+  vllm serve nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4 \
+    --served-model-name nemotron-omni \
+    --trust-remote-code \
+    --gpu-memory-utilization {gpu_memory_utilization} \
+    --max-model-len {max_model_len} \
+    --max-num-seqs {max_num_seqs} \
+    --max-num-batched-tokens {max_num_batched_tokens} \
+    --kv-cache-dtype fp8 \
+    --reasoning-parser nemotron_v3 \
+    --enable-auto-tool-choice \
+    --tool-call-parser qwen3_coder \
+    --limit-mm-per-prompt '{{"video":1,"image":1,"audio":1}}' \
+    --media-io-kwargs '{{"video":{{"fps":2,"num_frames":512}}}}' \
+    --enable-prefix-caching \
+    --host {host} \
+    --port {port}
+```
+
+Drop a 3-minute MP4 into `/tmp/`, base64-encode it, send the request with `mm_processor_kwargs: {"use_audio_in_video": true}` at the top level, and you get a transcribed-and-described answer in about 90 seconds.
+
+---
+
+## What was gained
+
+### Transferable patterns
+
+**1. When a multimodal model hallucinates, suspect the modality is silently dropped.** A confident, scene-consistent transcription for audio you know the model can't have heard is the signature of a flag that was supposed to enable that modality but didn't. Grep the framework source for the flag name and confirm the gating condition was actually true.
+
+**2. One image rarely fits all models.** Patches optimized for one model's kernel path can break another model's dispatch. When something breaks under your custom image, A/B against the upstream image before debugging the model — half the time the upstream just works.
+
+**3. Multimodal token budgets follow video duration, not text length.** Plan for ~300 prompt tokens per second of video at fps=2 on Nemotron-3-Nano-Omni. The math is dominated by frame embeddings, not the text prompt around them.
+
+### Universal pattern
+
+A single multimodal request on this box uses 50,000+ prompt tokens for 3 minutes of input. That's 5x the typical text-only chat request. KV cache and prefill batch budgets that you'd never think about for text become live constraints for video. If you're planning multi-tenant serving on this hardware, video tenants and text tenants need separate queues — they're not in the same throughput regime at all.
+
+---
+
+## Conclusion
+
+DGX Spark can watch English videos and tell you what was said. The recipe is:
+
+1. Use the upstream `vllm/vllm-openai:v0.20.0` image, not a patched one.
+2. Set `--max-num-batched-tokens 8192` to clear the Mamba block-size assertion.
+3. Set `--max-model-len 65536`, `num_frames=512`, `fps=2` for videos up to ~4 minutes.
+4. Always pass `mm_processor_kwargs: {"use_audio_in_video": true}` at the top level of the chat request — without it, audio is silently dropped.
+5. For >5-minute videos, lower fps — Parakeet runs at 16 kHz independent of fps, so audio quality stays intact. For >10-minute, chunk in ffmpeg.
+
+The same DGX Spark from [Part 25](/en/blog/dgx-spark-nemotron-3-nano-w4a16-74-toks) hits 74.75 tok/s on text and now also handles 3-minute video in 90 seconds. Two images, one box, two different jobs.
+
+Also in this series:
+- [Part 25: Nemotron 3 Nano on DGX Spark — 74.75 tok/s NVFP4](/en/blog/dgx-spark-nemotron-3-nano-w4a16-74-toks) — text throughput on the same hardware
+- [Part 7: Gemma 4 26B NVFP4 — 52 tok/s](/en/blog/dgx-spark-gemma4-26b-nvfp4-52-toks) — earlier benchmark on the same box
 
 ---
 

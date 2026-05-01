@@ -122,6 +122,14 @@ experimentation with real hardware and production systems.
   https://ai-muninn.com/en/blog/swe-bench-qwen36-failure-modes
   Qwen 3.6 35B-A3B FP8 hits 145/300 = 48.33% on SWE-bench Lite. Of the 155 unresolved: 76% wrong_logic (right file, valid patch, wrong logic), 14% incomplete_patch, 10% no_submission. Same scaffold gives Gemma 4 26B 38.67%. The 9.66-point gap is hypothesized to come from Gemma reaching the patch-writing step less often, not writing worse patches at the same step — verifiable with the same classifier on Gemma's 184 trajectories.
 
+- [Part 25] Nemotron 3 Nano on DGX Spark: 74.75 tok/s NVFP4 — 11.5% Past the Public Baseline
+  https://ai-muninn.com/en/blog/dgx-spark-nemotron-3-nano-w4a16-74-toks
+  cybermotaz/nemotron3-nano-nvfp4-w4a16 on GB10 single-stream 74.75 tok/s, +11.5% past eugr's public 67 tok/s baseline and +57% past our own 47.6 tok/s FP8 hack. The fix is a 4-layer software stack (libs-cu13, cutlass-dsl mma.py, FlashInfer dense kernel, env vars) plus cherry-picking still-open vLLM PR #40082 for the b12x dispatcher. Switching from Qwen 3.6 (hybrid, BF16 GDN tax caps it at 44 tok/s) to Nemotron 3 (lighter quant-exclusion list) closed the gap. W4A16 wins single-stream chat; W4A4 wins concurrency-16 serving. MTP speculative decoding is still broken (5 distinct failure modes documented).
+
+- [Part 26] Watching English Videos with DGX Spark: Nemotron Omni Multimodal on GB10
+  https://ai-muninn.com/en/blog/dgx-spark-nemotron-omni-multimodal-video
+  Same DGX Spark, multimodal use case: Nemotron-3-Nano-Omni-30B-A3B transcribes Karpathy's 3-minute LLM intro in 89 seconds (53,842 prompt tokens). Two configuration traps documented: (1) use_audio_in_video flag must go in top-level mm_processor_kwargs of the chat request — putting it inside video_url silently no-ops and the model hallucinates audio from visual frames; (2) the b12x-patched image from Part 25 breaks Omni's modelopt_mixed dispatch with NaN logits, requiring upstream vllm/vllm-openai:v0.20.0 instead. Long-video knob math: ~300 prompt tok/sec at fps=2; Parakeet runs at 16 kHz independent of fps so lowering fps drops visual detail without hurting audio quality.
+
 ### Series: NemoClaw (NVIDIA's AI agent framework on DGX Spark)
 
 - [Part 1] NemoClaw Explained: NVIDIA's All-in-One AI Agent Framework for DGX Spark

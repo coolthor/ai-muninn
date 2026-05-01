@@ -9,6 +9,7 @@ import { routing } from '@/i18n/routing'
 import type { Metadata } from 'next'
 import TLDRCard from '@/components/TLDRCard'
 import VideoEmbed from '@/components/VideoEmbed'
+import YouTubeEmbed from '@/components/YouTubeEmbed'
 import ShareButtons from '@/components/ShareButtons'
 import CoffeeCard from '@/components/CoffeeCard'
 import TocSidebar from '@/components/TocSidebar'
@@ -285,7 +286,7 @@ export default async function BlogPost({
 
         {/* content */}
         <div className="prose">
-          <MDXRemote source={post.content} components={{ TLDRCard, VideoEmbed }} options={{ mdxOptions: { remarkPlugins: [remarkGfm], rehypePlugins: [rehypeSlug] } }} />
+          <MDXRemote source={post.content} components={{ TLDRCard, VideoEmbed, YouTubeEmbed }} options={{ mdxOptions: { remarkPlugins: [remarkGfm], rehypePlugins: [rehypeSlug] } }} />
         </div>
       </div>
 
