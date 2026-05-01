@@ -129,7 +129,7 @@ Model 吐出來的內容（結構我有整理過、原輸出帶時間戳）：
 
 先把這顆 model 的架構畫出來，後面講 b12x dispatch 不相容、Mamba assertion、音訊 token 數，才會落在脈絡裡：
 
-![Nemotron-3-Nano-Omni 架構：三條輸入（video / audio / text）分別走 CRADIO v4-H、Parakeet、BPE，匯成一條多模態 token stream，過 Nemotron-H hybrid backbone（Mamba SSM 跟 Transformer attention 交替、共用 MoE FFN），最後 lm_head 接 autoregressive text decode。use_audio_in_video flag 決定 audio 那條路要不要跑。](/images/nemotron-omni-architecture.png)
+![Nemotron-3-Nano-Omni 架構：三條輸入（影片 / 音訊 / 文字）分別走 CRADIO v4-H、Parakeet、BPE，匯成一條多模態 token stream，過 Nemotron-H hybrid backbone（Mamba SSM 跟 Transformer attention 交替、共用 MoE FFN），最後 lm_head 接自回歸文字 decode。use_audio_in_video flag 決定音訊那條路要不要跑。](/images/nemotron-omni-architecture-zh.png)
 
 這張圖三個重點直接連到後面三段：
 
