@@ -53,7 +53,7 @@ Part 19 我宣告 NVFP4 是個坑。Part 20 提出 47.6 tok/s 的 Triton FP8 deq
 | Spark Arena 排行榜 | (各家) | Nemotron-3-Nano-30B-A3B | 56.11 |
 | **這次（May 2026）** | **`vllm-node-tf6-b12x`（自建）** | 跟 eugr 同一顆 | **74.75** |
 
-11.5% 算大差距，值得拆出來講。avarok image 是 Jan 2026 上架，當時 vLLM 還在 0.14 — b12x backend 那條 [PR #40082](https://github.com/vllm-project/vllm/pull/40082) 截稿時都還是 open 狀態，沒進 main。我們的客製化 image 是 vLLM 0.20.1 把那支 PR cherry-pick 進自己 fork，再加 4 層 SM121 patch（vLLM upstream 還是要手動補）。
+11.5% 算大差距，值得拆出來講。avarok image 是 Jan 2026 上架，當時 vLLM 還在 0.14 — b12x backend 那條 [PR #40082](https://github.com/vllm-project/vllm/pull/40082) 在 2026-05-01 都還是 open 狀態，沒進 main。我們的客製化 image 是 vLLM 0.20.1 把那支 PR cherry-pick 進自己 fork，再加 4 層 SM121 patch（vLLM upstream 還是要手動補）。
 
 ---
 

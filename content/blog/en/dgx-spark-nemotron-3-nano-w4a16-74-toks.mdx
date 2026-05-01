@@ -53,7 +53,7 @@ This piece walks through the diagnostic chain that landed at 74.75 tok/s. Cherry
 | Spark Arena leaderboard | (various) | Nemotron-3-Nano-30B-A3B | 56.11 |
 | **This work (May 2026)** | **`vllm-node-tf6-b12x` (custom)** | Same as eugr | **74.75** |
 
-11.5% past the public best is a big enough delta to be worth explaining. The avarok image was shipped Jan 2026 with vLLM 0.14, before the b12x backend was available — and as of writing, [vLLM PR #40082](https://github.com/vllm-project/vllm/pull/40082) is still open. Our custom image is built on vLLM 0.20.1 with that PR cherry-picked into our local fork, plus the 4-layer SM121 patches that vLLM upstream still requires manually.
+11.5% past the public best is a big enough delta to be worth explaining. The avarok image was shipped Jan 2026 with vLLM 0.14, before the b12x backend was available — and as of 2026-05-01, [vLLM PR #40082](https://github.com/vllm-project/vllm/pull/40082) is still open. Our custom image is built on vLLM 0.20.1 with that PR cherry-picked into our local fork, plus the 4-layer SM121 patches that vLLM upstream still requires manually.
 
 ---
 
