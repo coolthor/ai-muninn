@@ -25,13 +25,13 @@ faq:
 
 ## 白話版：你的 ChatGPT Plus 訂閱其實能做更多
 
-很多人每個月付 20 美金訂 ChatGPT Plus，用來聊天、寫文章、問問題。但大部分人不知道的是，這個訂閱背後的 AI 模型（GPT-5.4）其實可以被「借」出來給其他工具用——不只是 ChatGPT 網頁。
+很多人每個月付 20 美金訂 ChatGPT Plus，用來聊天、寫文章、問問題。但很多人不知道，你其實可以把 ChatGPT Plus 裡那顆 GPT-5.4 拿來給其他工具接，不只是在 ChatGPT 網頁版用。
 
 openclaw 是一個開源的 AI agent 框架，讓你在自己的電腦上跑 AI 助手。2026 年 3 月的更新加了一個功能：用你的 ChatGPT Plus 帳號登入，你的 agent 就能直接使用 GPT-5.4，不需要另外買 OpenAI 的 API 額度。
 
 這代表什麼？如果你本來就在付 ChatGPT Plus，你現在可以讓自己的 AI agent 也用到同一個模型的能力——100 萬 token 的上下文視窗、最新的推理能力——而且不用多花一毛錢。就像你已經有健身房月費了，現在發現原來游泳池也包含在裡面。
 
-設定大概五分鐘，但有三個地雷在官方文件裡沒寫清楚。這篇會帶你走完全程。
+設定大概五分鐘，但官方文件漏了三個關鍵點。下面把流程跑一遍。
 
 ---
 
@@ -81,7 +81,7 @@ openclaw config set agents.defaults.model.primary openai-codex/gpt-5.4
 
 ## 重啟 Gateway
 
-**地雷三：gateway 要重啟。** 動態 config reload 可以處理大部分的設定變更，但 model provider registration 不在其中。
+**地雷三：gateway 要重啟。** 動態 config reload 對大部分設定變更都吃得到，但 model provider registration 不會跟著 reload。
 
 ```bash
 # macOS launchd
@@ -93,7 +93,7 @@ launchctl start ai.openclaw.gateway
 
 ## GPT-5.4 帶來什麼
 
-100 萬 token context window，128,000 token 最大輸出。對一個透過 Telegram 跑長篇研究或處理大文件的 agent 來說，這消除了本地 120B 模型大約在 128K 撞到的上限。
+100 萬 token context window，128,000 token 最大輸出。對於要用 Telegram 跑長篇研究或吃大檔案的 agent，就不會像本地 120B 模型那樣很快撞到 128K 上限。
 
 代價是：GPT-5.4 跑在 OpenAI 的 server，不是本機。agent 傳送的任何內容都會經過 ChatGPT 後端。如果 agent 在處理交易紀錄或其他私人資料，換 primary model 之前要想清楚。
 
@@ -101,7 +101,7 @@ launchctl start ai.openclaw.gateway
 
 **最花時間的地方：** TTY 那關。錯誤訊息寫得清楚，但「互動式 TTY」不會直接讓人想到「去開螢幕分享」。`ssh -t` 看起來應該能解決，試了才發現沒用。
 
-**下次遇到類似問題可以先想到的：** openclaw config 改了但 `models list` 沒反應，幾乎都是少了重啟 gateway 這步。file-watcher reload 是真的有，但只管憑證和路由，provider registration 要完整重啟才會生效。
+**下次遇到類似問題可以先想到的：** openclaw config 改了但 `models list` 沒反應，幾乎都是少了重啟 gateway 這步。file-watcher reload 確實有，但它只 reload 憑證和路由；provider registration 還是要整個重啟才會生效。
 
 **記住這一件事：** 只要 auth flow 的 callback 是 localhost（像這裡的 `localhost:1455/auth/callback`），就沒辦法透過 SSH 跑。瀏覽器、CLI、callback listener 三個要在同一台機器上，缺一不可。
 
