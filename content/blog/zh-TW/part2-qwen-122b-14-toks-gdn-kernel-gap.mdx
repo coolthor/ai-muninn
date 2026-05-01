@@ -101,7 +101,7 @@ Marlin 對標準 linear 層和 MoE expert GEMM 有快速的特化 kernel。對 G
 - 瓶頸是軟體缺口（Marlin 缺少 GDN kernel），不是硬體限制。
 - GB10 有足夠的算力跑 Qwen3.5-122B。問題完全在軟體堆疊。
 
-**診斷模式：** 如果 Qwen3.5-122B 在 SM121 上跑很慢，你已經設了 `VLLM_MXFP4_BACKEND=marlin` 和 `--moe-backend marlin`，啟動 log 確認顯示 `Using backend: marlin`，輸出也正確——你碰到的就是 kernel 缺口。停止調整。等 kernel 來了數字才會動。
+**診斷模式：** 如果 Qwen3.5-122B 在 SM121 上跑很慢，你已經設了 `VLLM_MXFP4_BACKEND=marlin` 和 `--moe-backend marlin`，啟動 log 確認顯示 `Using backend: marlin`，輸出也正確——你碰到的就是 kernel 缺口。先別再調，現在再怎麼調都一樣，要等 kernel 補上數字才會動。
 
 ---
 
