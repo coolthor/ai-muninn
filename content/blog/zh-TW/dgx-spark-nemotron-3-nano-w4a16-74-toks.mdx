@@ -10,7 +10,7 @@ faq:
   - q: "Nemotron 3 Nano NVFP4 在 DGX Spark 多快？"
     a: "single-stream 74.75 tok/s。model 是 cybermotaz/nemotron3-nano-nvfp4-w4a16（W4A16），跑在我自己 build 的 vLLM image 上。比 NVIDIA 論壇公開的 67 tok/s 快 11.5%。這個數字已經卡在 GB10 的頻寬天花板區段了（3.5B active 配 273 GB/s LPDDR5X），再去調 kernel 也擠不太出來。"
   - q: "DGX Spark 上 W4A16 跟 W4A4 該選哪個？"
-    a: "看你要單流還是多並發。單人 chat → W4A16（74.75 tok/s vs W4A4 的 58.27）。Server 多人 → W4A4（c=16 aggregate 786 vs W4A16 的 400 tok/s）。W4A4 把 activation 也壓 FP4，多並發的 cache 利用率高；但每 step 多一個 activation quant overhead，單流被拖。"
+    a: "看你要單流還是多人同時打。單人 chat → W4A16（74.75 tok/s vs W4A4 的 58.27）。Server 多人 → W4A4（c=16 aggregate 786 vs W4A16 的 400 tok/s）。W4A4 把 activation 也壓 FP4，concurrency 高的時候 cache 利用率高；但每 step 多一個 activation quant overhead，單流被拖。"
   - q: "NVFP4 終於在 GB10 贏 FP8 了嗎？"
     a: "贏了 — 但贏在 bandwidth，不是 compute。每個 weight param 從 1 byte（FP8）砍到 0.5 byte（NVFP4），在頻寬綁住的機器上光這條就讓 throughput 翻倍。真正的 FP4 tensor core（mma.kind::mxf4nvf4）只有 W4A4 才會跑、74.75 tok/s 的 W4A16 不會跑 — W4A16 在 register 內就把 FP4 weight 反量化成 BF16，乘法本身是 BF16 GEMM。所以「NVFP4 贏 FP8」這句話指的是 NVFP4 的 storage 格式贏，不是第 5 代 Blackwell tensor core 真的有跑。當初 Part 19 說「NVFP4 是個坑」對 Qwen 3.6 hybrid 是對的 — 真正的瓶頸是 BF16 的 GDN linear_attn 投影層。"
   - q: "4 層 patch 是哪 4 層？"
@@ -149,14 +149,14 @@ Bench 結果：
 兩個場景挑不一樣的 quant：
 
 - **單流 chat** 選 W4A16 — 比 W4A4 快 28%。沒有 activation quant 開銷、每 token 算的東西少。
-- **多人 serving** 選 W4A4 — c=16 aggregate 比 W4A16 快 96%。activation 也壓掉、cache 用得兇，高併發時 batch 吃得比較滿。
+- **多人 serving** 選 W4A4 — c=16 aggregate 比 W4A16 快 96%。activation 也壓掉、cache 用得兇，concurrency 高的時候 batch 吃得比較滿。
 
 兩個目標不一樣。
 
 Bench script：
 
 ```python
-# 200 token deterministic decode、threading 控並發
+# 200 token deterministic decode、threading 控 concurrency
 import json, time, urllib.request, threading
 
 def req(out):
@@ -183,7 +183,7 @@ def req(out):
 
 老實說：**weight 是 NVFP4 沒錯，compute 不是。** 這要另外講清楚，因為說「NVFP4 終於贏 FP8 了」其實有點講過頭。
 
-![NVFP4 W4A16 vs W4A4 在 GB10 上的兩條 decode path：上方共用 LPDDR5X memory bus，下方左右兩條 pipeline。W4A16 把 NVFP4 weight load 進來、on-chip 反量化成 BF16、跑 BF16 GEMM，FP4 tensor core 沒在跑，單流贏 74.75 tok/s。W4A4 把同一份 NVFP4 weight load 進來，每 step 把 activation 從 BF16 量化成 FP4，再走真正的 FP4×FP4 mma.kind::mxf4nvf4 tensor core MMA，多並發贏 c=16 aggregate 786 tok/s。](/images/nvfp4-w4a16-vs-w4a4-paths-zh.png)
+![NVFP4 W4A16 vs W4A4 在 GB10 上的兩條 decode path：上方共用 LPDDR5X memory bus，下方左右兩條 pipeline。W4A16 把 NVFP4 weight load 進來、on-chip 反量化成 BF16、跑 BF16 GEMM，FP4 tensor core 沒在跑，單流贏 74.75 tok/s。W4A4 把同一份 NVFP4 weight load 進來，每 step 把 activation 從 BF16 量化成 FP4，再走真正的 FP4×FP4 mma.kind::mxf4nvf4 tensor core MMA，多人同時打贏 c=16 aggregate 786 tok/s。](/images/nvfp4-w4a16-vs-w4a4-paths-zh.png)
 
 圖把 W4A16（單流 batch=1 贏）跟 W4A4（concurrency 16+ 贏）拆成兩條路，標出 FP4 tensor core 在哪一條真的有跑、哪一條沒跑。三層分開看：
 
@@ -201,7 +201,7 @@ def req(out):
 
 W4A4 **真的有用** FP4 tensor core，但 batch=1 一樣還是慢（58.27 tok/s）— 因為每 step 都要把 BF16 activation 重新量化成 FP4，這個開銷比 FP4 MMA 省下來的時間還多。到了 concurrency=16，activation 量化的成本被 batch 攤掉，W4A4 的 compute 優勢才終於划算（786 tok/s aggregate vs W4A16 的 400）。
 
-結論：**NVFP4 當 storage 兩條路都贏。NVFP4 當 compute（FP4 tensor core）只有多並發才贏。** 如果你看到「NVFP4 跑到 74.75 tok/s」就以為第 5 代 Blackwell tensor core 在火力全開 — 沒有，那是頻寬數學贏的，不是 tensor core 真的在跑。
+結論：**NVFP4 當 storage 兩條路都贏。NVFP4 當 compute（FP4 tensor core）只有多人 serving 才贏。** 如果你看到「NVFP4 跑到 74.75 tok/s」就以為第 5 代 Blackwell tensor core 在火力全開 — 沒有，那是頻寬數學贏的，不是 tensor core 真的在跑。
 
 ---
 
