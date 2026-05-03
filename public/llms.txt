@@ -293,6 +293,10 @@ A separate listicle-format series for non-technical Traditional Chinese readers.
   https://ai-muninn.com/zh-TW/blog/ai-ask-right-express-find-needs
   打開 ChatGPT 腦袋空白？需求是被找出來的。從每週重複的事、最常 Google 的問題、想做卻拖的事、看不懂的東西、做完後卡住的下一步五個角度挖場景。文末有 copy-paste prompt 範本。
 
+- [Part 5] AI 答案是不是亂編？三招 30 秒驗證
+  https://ai-muninn.com/zh-TW/blog/ai-ask-right-express-verify-ai-answer
+  AI 一樣自信地給你對的答案跟編的答案，靠語氣分不出來。三招：具體事實 Google 一次、叫 AI 補原始連結點開看那段話真的有寫、換家問或開 Temporary Chat 再問一次。AI 自評信心不能當 verification — 連結要點開、原文要對。文末有 copy-paste prompt 範本。
+
 ### Standalone: Infrastructure Postmortems
 
 - Vercel Hobby Hit 1M/1M Edge Requests: The Bug Was a Cache-Control Header
