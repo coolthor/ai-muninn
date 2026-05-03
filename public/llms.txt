@@ -295,7 +295,7 @@ A separate listicle-format series for non-technical Traditional Chinese readers.
 
 - [Part 5] AI 答案是不是亂編？三招 30 秒驗證
   https://ai-muninn.com/zh-TW/blog/ai-ask-right-express-verify-ai-answer
-  AI 一樣自信地給你對的答案跟編的答案，靠語氣分不出來。三招：具體事實 Google 一次、叫 AI 補原始連結點開看那段話真的有寫、換家問或開 Temporary Chat 再問一次。AI 自評信心不能當 verification — 連結要點開、原文要對。文末有 copy-paste prompt 範本。
+  AI 一樣自信地給你對的答案跟編的答案，靠語氣分不出來。三招：具體事實 Google 一次、叫 AI 補原始連結點開看那段話真的有寫、換家問或開「臨時聊天」再問一次。AI 自評的信心只是粗篩、不算驗證 — 連結要點開、原文要對。文末有 copy-paste prompt 範本。
 
 ### Standalone: Infrastructure Postmortems
 
