@@ -1,9 +1,12 @@
 import Link from 'next/link'
 import { getAllTags, getPostsByTag } from '@/lib/blog'
 import { routing } from '@/i18n/routing'
+import { notFound } from 'next/navigation'
 import type { Metadata } from 'next'
 
 type Locale = (typeof routing.locales)[number]
+
+export const dynamicParams = false
 
 export function generateStaticParams() {
   const params: { locale: string; tag: string }[] = []
@@ -21,6 +24,7 @@ export async function generateMetadata(
   const { locale, tag } = await params
   const isZh = locale === 'zh-TW'
   const decodedTag = decodeURIComponent(tag)
+  if (!getAllTags(locale).some(t => t.slug === decodedTag)) notFound()
   const posts = getPostsByTag(locale, decodedTag)
 
   return {
@@ -43,6 +47,7 @@ export default async function TagPage({ params }: { params: Promise<{ locale: st
   const l = locale as Locale
   const isZh = l === 'zh-TW'
   const decodedTag = decodeURIComponent(tag)
+  if (!getAllTags(locale).some(t => t.slug === decodedTag)) notFound()
   const posts = getPostsByTag(locale, decodedTag)
 
   return (

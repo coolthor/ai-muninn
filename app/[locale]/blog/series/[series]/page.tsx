@@ -6,6 +6,8 @@ import type { Metadata } from 'next'
 
 type Locale = (typeof routing.locales)[number]
 
+export const dynamicParams = false
+
 export function generateStaticParams() {
   const params: { locale: string; series: string }[] = []
   for (const locale of routing.locales) {
@@ -27,7 +29,8 @@ export async function generateMetadata(
   const { locale, series } = await params
   const isZh = locale === 'zh-TW'
   const seriesSlug = decodeURIComponent(series)
-  const name = resolveSeriesName(locale, seriesSlug) ?? seriesSlug
+  const name = resolveSeriesName(locale, seriesSlug)
+  if (!name) notFound()
   const posts = getPostsBySeries(locale, seriesSlug)
 
   return {
