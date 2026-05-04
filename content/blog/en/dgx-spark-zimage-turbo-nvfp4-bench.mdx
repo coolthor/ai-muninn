@@ -11,7 +11,7 @@ faq:
   - q: "How fast is Z-Image Turbo on DGX Spark GB10?"
     a: "1024×1024, 8 step, N=10 isolated GPU: BF16 baseline 7.55s warm, NVFP4 transformer 5.50s warm (1.37× speedup). All three FP8 transformer paths (cast standard, cast fast, Kijai pre-quantized) are 0.6–0.9s slower than BF16."
   - q: "Recommended Z-Image Turbo quant combo on DGX Spark?"
-    a: "**NVFP4 transformer + qwen_3_4b_fp8_mixed encoder**. Warm 5.52s (same tier as NVFP4+BF16 encoder, but disk 2.4 GB smaller). Model working set RSS 11.5 GB (versus BF16 baseline 20.6 GB — 44% smaller). Disk total 9.8 GB (versus BF16 19.8 GB, half the size)."
+    a: "**NVFP4 transformer + qwen_3_4b_fp8_mixed encoder**. Warm 5.52s (same tier as NVFP4+BF16 encoder, but disk 2.4 GB smaller). Model working set RSS 11.5 GB (versus BF16 baseline 20.6 GB — 44% smaller). Disk total 10.4 GB (versus BF16 ~20.6 GB — about half, ~49% smaller)."
   - q: "Why is FP8 transformer slower than BF16?"
     a: "All three FP8 paths are slower: weight_dtype=fp8_e4m3fn loses 0.72s, fp8_e4m3fn_fast loses 0.90s, Kijai pre-quantized scaled loses 0.64s. The mechanism deep dive is Part 3; this article only reports measured numbers."
   - q: "Does Z-Image quantization break image quality?"
@@ -21,14 +21,14 @@ faq:
 import { TLDRCard } from "@/components/blog/TLDRCard";
 
 <TLDRCard>
-DGX Spark GB10, six Z-Image Turbo quant configs measured with N=10 isolated GPU. **NVFP4 transformer hits 5.50s warm (versus BF16 7.55s — 1.37× speedup)**. **All three FP8 paths are slower than BF16** (8.19–8.45s). Recommended combo: **NVFP4 transformer + qwen_3_4b FP8 mixed encoder**. Disk 9.8 GB (51% smaller). Working set **11.5 GB vs BF16 20.6 GB (44% smaller)**. Warm time matches NVFP4+BF16 encoder. ⚠️ The `weight_dtype=fp8_e4m3fn` cast path does not save RAM — for actual memory savings you need a natively quantized file. The "why" is deferred to the next article.
+DGX Spark GB10, six Z-Image Turbo quant configs measured with N=10 isolated GPU. **NVFP4 transformer hits 5.50s warm (versus BF16 7.55s — 1.37× speedup)**. **All three FP8 paths are slower than BF16** (8.19–8.45s). Recommended combo: **NVFP4 transformer + qwen_3_4b FP8 mixed encoder**. Disk 10.4 GB (~49% smaller, roughly half BF16's 20.6 GB). Working set **11.5 GB vs BF16 20.6 GB (44% smaller)**. Warm time matches NVFP4+BF16 encoder. ⚠️ The `weight_dtype=fp8_e4m3fn` cast path does not save RAM — for actual memory savings you need a natively quantized file. The "why" is deferred to the next article.
 </TLDRCard>
 
 <VideoEmbed src="/videos/dgx-spark-zimage-turbo-nvfp4-bench.mp4" />
 
 ## Plain-language version: what is Z-Image Turbo and why this bench exists
 
-[Z-Image Turbo](https://huggingface.co/Comfy-Org/z_image_turbo) is an open-source image generation model released by Alibaba's Tongyi-MAI team in late November 2025. The distilled variant generates images in just 8 sampling steps. Apache 2.0 licensed, fine for commercial use, fully self-host.
+Z-Image Turbo is an open-source image generation model released by Alibaba's [Tongyi-MAI](https://huggingface.co/Tongyi-MAI/Z-Image-Turbo) team in late November 2025 (Apache 2.0 per the official repo's LICENSE; check there for canonical terms). The distilled variant generates images in just 8 sampling steps. This article uses the [Comfy-Org repack](https://huggingface.co/Comfy-Org/z_image_turbo) — the upstream weights restructured into ComfyUI's `split_files/` layout, with extra NVFP4 transformer and FP8 mixed encoder quants included.
 
 If you are new to quantization — what FP8 / NVFP4 / BF16 are, why fewer bits saves memory, why fewer bits sometimes runs slower — start with the primer:
 
@@ -190,8 +190,8 @@ By eye, all six portraits hold up — hair, eyes, the coffee-shop background. Bu
 | Speedup vs BF16 | 1.37× |
 | Cold start | 16.3s |
 | Model working set RSS | **11.52 GB** (BF16 baseline 20.64 GB, 44% smaller) |
-| Disk | 4.5 + 5.6 + 0.34 = **10.4 GB** |
-| Disk savings vs BF16 | 51% |
+| Disk | 4.5 + 5.6 + 0.34 = **10.44 GB** |
+| Disk savings vs BF16 | ~49% (BF16 total 20.64 GB) |
 
 Download:
 

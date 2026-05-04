@@ -11,7 +11,7 @@ faq:
   - q: "Z-Image Turbo 在 DGX Spark GB10 上跑多快?"
     a: "1024×1024 8 step 跑 N=10 隔離 GPU 實測:BF16 baseline 7.55s warm,NVFP4 transformer 5.50s warm(1.37× 加速),三種 FP8 transformer(cast 標準 / cast fast / Kijai 預量化版)全部都比 BF16 慢 0.6-0.9s。"
   - q: "DGX Spark 跑 Z-Image Turbo 推薦哪個量化組合?"
-    a: "**NVFP4 transformer + qwen_3_4b_fp8_mixed encoder**。warm 5.52s(跟 NVFP4+BF16 encoder 同 tier 但 disk 省 2.4 GB),模型工作集 RSS 11.5 GB(BF16 是 20.6 GB,省 44%),整套 disk 9.8 GB(BF16 整套 19.8 GB 的一半)。"
+    a: "**NVFP4 transformer + qwen_3_4b_fp8_mixed encoder**。warm 5.52s(跟 NVFP4+BF16 encoder 同 tier 但 disk 省 2.4 GB),模型工作集 RSS 11.5 GB(BF16 是 20.6 GB,省 44%),整套 disk 10.4 GB(BF16 整套 20.6 GB 的一半,省 ~49%)。"
   - q: "FP8 transformer 為何反而比 BF16 慢?"
     a: "三種 FP8 path 都比 BF16 慢:weight_dtype=fp8_e4m3fn 慢 0.72s、fp8_e4m3fn_fast 慢 0.90s、Kijai 預量化 scaled 版 慢 0.64s。為什麼留給 Part 3 深挖,本篇只報實測結果。"
   - q: "Z-Image Turbo 量化版品質會崩嗎?"
@@ -21,14 +21,14 @@ faq:
 import { TLDRCard } from "@/components/blog/TLDRCard";
 
 <TLDRCard>
-DGX Spark GB10 跑 Z-Image Turbo,N=10 隔離 GPU 實測 6 種量化組合。**NVFP4 transformer 5.50s warm(比 BF16 7.55s 快 1.37×)**,**三條 FP8 path 全比 BF16 慢**(8.19-8.45s)。推薦:**NVFP4 + qwen_3_4b FP8 mixed encoder**,disk 9.8 GB(省 51%),工作集 **11.5 GB(BF16 是 20.6 GB,省 44%)**,warm 速度跟 NVFP4+BF16 encoder 同 tier。⚠️ `weight_dtype=fp8_e4m3fn` cast 路徑記憶體不會變小,要省 RAM 必須用 native 量化檔。為什麼 FP8 慢留給下一篇。
+DGX Spark GB10 跑 Z-Image Turbo,N=10 隔離 GPU 實測 6 種量化組合。**NVFP4 transformer 5.50s warm(比 BF16 7.55s 快 1.37×)**,**三條 FP8 path 全比 BF16 慢**(8.19-8.45s)。推薦:**NVFP4 + qwen_3_4b FP8 mixed encoder**,disk 10.4 GB(省 ~49%),工作集 **11.5 GB(BF16 是 20.6 GB,省 44%)**,warm 速度跟 NVFP4+BF16 encoder 同 tier。⚠️ `weight_dtype=fp8_e4m3fn` cast 路徑記憶體不會變小,要省 RAM 必須用 native 量化檔。為什麼 FP8 慢留給下一篇。
 </TLDRCard>
 
 <VideoEmbed src="/videos/dgx-spark-zimage-turbo-nvfp4-bench.mp4" />
 
 ## 白話版:Z-Image Turbo 是什麼,為何要做這份 bench
 
-[Z-Image Turbo](https://huggingface.co/Comfy-Org/z_image_turbo) 是 Alibaba 通義(Tongyi-MAI)2025 年 11 月底發布的開源 image gen 模型。distilled 版只要 8 step 就能生圖。Apache 2.0 商用 OK,Self-host 全套自架。
+Z-Image Turbo 是 Alibaba 通義 [Tongyi-MAI](https://huggingface.co/Tongyi-MAI/Z-Image-Turbo) 在 2025 年 11 月底發布的開源 image gen 模型(Apache 2.0、商用 OK,以官方 repo 的 LICENSE 為準)。distilled 版只要 8 step 就能生圖。本文用的是 [Comfy-Org repack](https://huggingface.co/Comfy-Org/z_image_turbo) — 把官方權重切成 ComfyUI 直接吃的 split_files/ 結構,額外打包了 NVFP4 / FP8 mixed encoder 量化版。
 
 如果你不熟「量化」(quantization)— FP8 / NVFP4 / BF16 這幾個數值格式分別是什麼、為什麼壓位元能省 memory、為什麼有時候反而會慢 — 先看入門:
 
@@ -190,8 +190,8 @@ Prompt:`a photorealistic portrait of a young woman with long flowing black hair,
 | 比 BF16 加速 | 1.37× |
 | Cold 啟動 | 16.3s |
 | 模型工作集 RSS | **11.52 GB**(BF16 baseline 20.64 GB,省 44%) |
-| Disk 占用 | 4.5 + 5.6 + 0.34 = **10.4 GB** |
-| 比 BF16 disk 省 | 51% |
+| Disk 占用 | 4.5 + 5.6 + 0.34 = **10.44 GB** |
+| 比 BF16 disk 省 | ~49%(BF16 整套 20.64 GB) |
 
 下載清單:
 

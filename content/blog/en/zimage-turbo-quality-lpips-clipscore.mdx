@@ -1,6 +1,6 @@
 ---
 title: "[Field Guide] Z-Image Turbo — does choosing a faster config hurt quality? LPIPS + CLIPScore answer"
-description: "Does Z-Image Turbo quantization break image quality? I ran a two-axis benchmark — LPIPS (perceptual distance vs BF16) plus CLIPScore (image-text alignment) — across 6 prompts × 4 configs × 3 seeds = 72 samples. Result: NVFP4 produces images that look different from BF16, but prompt fidelity holds; **NVFP4+FP8e encoder beats BF16 on 3 of 6 prompts by 0.001–0.009 CLIPScore**."
+description: "Does Z-Image Turbo quantization break image quality? Two-axis benchmark — LPIPS (perceptual distance vs BF16) + CLIPScore (image-text alignment) — across 6 prompts × 4 configs × 3 seeds = 72 samples. Result: NVFP4 produces images that look different from BF16, but no measured regression in this sample — all 4 configs land within ±0.04 std on CLIPScore, smaller than the noise floor. Production users should re-verify with their own prompt set."
 date: "2026-05-04"
 updatedAt: "2026-05-04"
 tags: ["Z-Image", "ComfyUI", "NVFP4", "FP8", "DGX Spark", "GB10", "image gen", "benchmark", "quantization", "LPIPS", "CLIPScore", "quality"]
@@ -9,19 +9,19 @@ part: 2
 draft: false
 faq:
   - q: "Does Z-Image Turbo quantization break image quality?"
-    a: "**No.** A two-axis benchmark on 72 samples: all four configs (BF16 / FP8scaled / NVFP4 / NVFP4+FP8e) sit at CLIPScore 0.334–0.339 with overlapping std bands. LPIPS distance from BF16 ranges from 0.167 (FP8scaled) up to 0.307 (NVFP4+FP8e), but that means \"the image looks different from BF16,\" not \"quality dropped\" — equal CLIPScore proves prompt fidelity is preserved."
+    a: "**No measured regression in this N=72 sample.** Two-axis benchmark: all four configs (BF16 / FP8scaled / NVFP4 / NVFP4+FP8e) sit at CLIPScore 0.334–0.339, and the std band of ±0.04 is an order of magnitude larger than the 0.001–0.005 mean differences between configs — not statistically distinguishable. LPIPS distance from BF16 ranges from 0.167 (FP8scaled) up to 0.307 (NVFP4+FP8e), but that's \"different image,\" not \"degraded image.\" Caveat: N=3 seeds × 6 prompts is not enough to rule out tail-risk on specific subjects — re-verify with your own prompt set before production use."
   - q: "What do LPIPS and CLIPScore actually measure?"
     a: "**LPIPS** = perceptual distance with BF16 as the ground-truth reference (0 = identical). **CLIPScore** = image-text alignment, scored independently per image without needing BF16 reference. Combining the two avoids the LPIPS trap: high LPIPS does not imply quality regression — CLIPScore tells you whether the image still matches the prompt."
   - q: "How does the recommended NVFP4+FP8 encoder combo do on quality?"
-    a: "**Equal to or marginally better than BF16. It wins on 3 of 6 prompts.** photo_woman 0.343 vs BF16 0.340, photo_machine 0.343 vs 0.327, chinese 0.273 vs 0.264 — all NVFP4+FP8e leads. The other three prompts are within noise. Overall mean CLIPScore 0.339 vs BF16 0.334."
+    a: "**No measured regression.** Overall mean CLIPScore 0.3388 vs BF16 0.3344 — a 0.0044 gap that is far below the ±0.04 std, so we cannot claim a significant win. Per-prompt, NVFP4+FP8e mean is directionally higher on 3 of 6 prompts (photo_woman, photo_machine, chinese); the other 3 are directionally lower. With only N=3 seeds per cell there's no power for a paired t-test, and the correct framing is \"not worse,\" not \"better.\""
   - q: "Does Chinese prompt break under quantization?"
-    a: "**No, NVFP4+FP8e wins.** Mean CLIPScore over 3 chinese-prompt seeds: BF16 0.264 / FP8scaled 0.263 / NVFP4 0.266 / NVFP4+FP8e **0.273**. The overall lower numbers on Chinese (0.26 vs ~0.35 English) reflect a CLIP model bias toward English training data, not a quantization issue."
+    a: "**No measured regression.** Mean CLIPScore over 3 chinese-prompt seeds: BF16 0.264 / FP8scaled 0.263 / NVFP4 0.266 / NVFP4+FP8e **0.273**. NVFP4+FP8e is directionally higher but still inside the ±0.04 std band. The overall lower numbers on Chinese (0.26 vs ~0.35 English) reflect a CLIP model bias toward English training data, not a quantization issue."
 ---
 
 import { TLDRCard } from "@/components/blog/TLDRCard";
 
 <TLDRCard>
-Z-Image Turbo quantization quality, measured properly: a **two-axis benchmark** — LPIPS plus CLIPScore — across 6 prompts × 4 configs × 3 seeds = 72 samples. LPIPS shows NVFP4 produces images visually distinct from BF16 (distance 0.29–0.31), but **all four configs land at CLIPScore 0.334–0.339, std bands overlapping** (prompt fidelity preserved). **NVFP4+FP8e beats BF16 on photo_woman / photo_machine / chinese**. Bottom line: the [Part 1](/en/blog/dgx-spark-zimage-turbo-nvfp4-bench) recommended combo (1.37× faster, 9.1 GB working set saved) keeps quality. Use it.
+Z-Image Turbo quantization quality, measured properly: a **two-axis benchmark** — LPIPS plus CLIPScore — across 6 prompts × 4 configs × 3 seeds = 72 samples. LPIPS shows NVFP4 produces images visually distinct from BF16 (distance 0.29–0.31), but **all four configs land at CLIPScore 0.334–0.339 — the ±0.04 std band is an order of magnitude larger than the 0.001–0.005 differences between configs**. No measured prompt-fidelity regression in any quantized config. NVFP4+FP8e is directionally higher on 3 of 6 prompts, but with N=3 seeds per cell that's not a statistically defensible win — call it "not worse." Bottom line: the [Part 1](/en/blog/dgx-spark-zimage-turbo-nvfp4-bench) recommended combo (1.37× faster, 9.1 GB working set saved) shows no quality regression in this sample — re-verify with your own prompt set + N≥10 seeds before production use.
 </TLDRCard>
 
 <VideoEmbed src="/videos/zimage-turbo-quality-lpips-clipscore.mp4" />
@@ -141,7 +141,7 @@ NVFP4        0.2886 ± 0.086    0.3356 ± 0.045   ← matches BF16
 NVFP4+FP8e   0.3069 ± 0.093    0.3388 ± 0.040   ← +0.0044 over BF16
 ```
 
-**All four configs sit between 0.334 and 0.339 on CLIPScore, with overlapping std bands.** Quantization-driven changes in image-text alignment are below the noise floor — **not a single quantized config loses prompt fidelity to BF16**.
+**All four configs sit between 0.334 and 0.339 on CLIPScore.** NVFP4+FP8e's mean is 0.0044 above BF16, but **the ±0.04 std band is an order of magnitude larger than this gap** — quantization-driven changes are buried in the noise floor. With only N=3 seeds per cell there's no power for a meaningful paired t-test; **the defensible claim is "no measured prompt-fidelity regression in any quantized config," not "equal to" or "better than" BF16**.
 
 LPIPS captures relative distance to BF16: FP8scaled is closest (0.167), NVFP4 mid (0.289), NVFP4+FP8e farthest (0.307). This is exactly what you would expect — the more aggressive the quantization, the earlier the latent trajectory diverges. **That distance is not a quality loss; it is just "different model, different image"**.
 
@@ -156,10 +156,12 @@ LPIPS captures relative distance to BF16: FP8scaled is closest (0.167), NVFP4 mi
 | chinese | 0.2642 | 0.2626 | 0.2658 | **0.2731** | NVFP4+FP8e ↑0.0089 |
 | abstract | 0.3932 | 0.3926 | **0.4030** | 0.3938 | NVFP4 ↑0.0098 |
 
-Two takeaways:
+Honest takeaways (statistical caveats first):
 
-1. **NVFP4+FP8e wins on 3 of 6 prompts** (photo_woman, photo_machine, chinese). The other 3 are within noise.
-2. **No prompt has a quantized version losing to BF16 by more than 0.005 CLIPScore.** The largest "loss" is anime (BF16 over NVFP4 by 0.006), well within the std-0.04 band.
+1. **NVFP4+FP8e mean is directionally higher on 3 of 6 prompts** (photo_woman, photo_machine, chinese), with deltas of 0.002–0.016. But all of these gaps are below the 0.04 std band, and N=3 seeds gives no paired-t-test power — **these are directional observations, not statistically defensible wins**.
+2. **The reverse direction also exists**: BF16 leads NVFP4 on anime by 0.006, FP8scaled leads BF16 on text_render by 0.003, NVFP4 leads NVFP4+FP8e on abstract by 0.009 — same noise band, also not regressions.
+3. **No multiple-comparison correction was applied across the 6 independent per-prompt comparisons** (Bonferroni or similar). Treating any single row's mean ranking as a strong claim would be p-hacking.
+4. The defensible conclusion: **no quantized config systematically falls below BF16 on CLIPScore in this sample** — the four configs are statistically indistinguishable on prompt fidelity, so quality concerns are not a reason to avoid NVFP4+FP8e.
 
 ### Chinese CLIPScore is generally lower (0.26 vs ~0.32–0.39 for English)
 
@@ -251,12 +253,12 @@ Part 1's recommended combo — **NVFP4 transformer + qwen_3_4b_fp8_mixed encoder
 
 - **Speed**: 5.52s warm vs BF16 7.55s, **1.37× faster**
 - **Working set RSS**: 11.52 GB vs BF16 20.64 GB, **9.12 GB saved (44%)**
-- **Disk**: 10.4 GB vs BF16 19.8 GB, **51% saved**
-- **Quality**: CLIPScore 0.3388 vs BF16 0.3344, **equal or marginally better**
+- **Disk**: 10.4 GB vs BF16 ~20.6 GB, **~49% saved**
+- **Quality**: CLIPScore 0.3388 vs BF16 0.3344 — gap is far below the ±0.04 std band, **no measured regression in this N=72 sample** (and not statistically distinguishable from "equal" either)
 
-The intuition that "quantization always breaks quality" **does not hold for Z-Image Turbo on GB10**. LPIPS shows quantized images look different from BF16, but that is just latent trajectory divergence, not quality loss. CLIPScore confirms prompt fidelity is preserved — the quantized combo even nudges ahead on 3 of 6 prompts.
+The intuition that "quantization always breaks quality" **does not show up in this benchmark for Z-Image Turbo on GB10**. LPIPS shows quantized images look different from BF16, but that is latent trajectory divergence, not quality loss. CLIPScore differences across the 4 configs are below noise — prompt fidelity is preserved within measurement power, even if N=3 seeds is too small to claim anyone *wins*.
 
-**Verdict: copy Part 1's recommended combo with confidence. Quality is not a reason to prefer BF16.**
+**Verdict: Part 1's recommended combo shows no measured quality regression in this sample, so it's safe as a default.** For production-grade anime or portrait services, **bring your own prompt set + N≥10 seeds and re-verify** — 6 prompts × 3 seeds is not enough to rule out subject-specific tail risk.
 
 ---
 
