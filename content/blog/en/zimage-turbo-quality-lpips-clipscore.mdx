@@ -6,7 +6,7 @@ updatedAt: "2026-05-04"
 tags: ["Z-Image", "ComfyUI", "NVFP4", "FP8", "DGX Spark", "GB10", "image gen", "benchmark", "quantization", "LPIPS", "CLIPScore", "quality"]
 series: "Z-Image Turbo"
 part: 2
-draft: true
+draft: false
 faq:
   - q: "Does Z-Image Turbo quantization break image quality?"
     a: "**No.** A two-axis benchmark on 72 samples: all four configs (BF16 / FP8scaled / NVFP4 / NVFP4+FP8e) sit at CLIPScore 0.334–0.339 with overlapping std bands. LPIPS distance from BF16 ranges from 0.167 (FP8scaled) up to 0.307 (NVFP4+FP8e), but that means \"the image looks different from BF16,\" not \"quality dropped\" — equal CLIPScore proves prompt fidelity is preserved."

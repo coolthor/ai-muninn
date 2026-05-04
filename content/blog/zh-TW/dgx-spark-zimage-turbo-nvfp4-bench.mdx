@@ -6,7 +6,7 @@ updatedAt: "2026-05-04"
 tags: ["Z-Image", "ComfyUI", "NVFP4", "FP8", "DGX Spark", "GB10", "SM121", "image gen", "benchmark", "量化"]
 series: "Z-Image Turbo"
 part: 1
-draft: true
+draft: false
 faq:
   - q: "Z-Image Turbo 在 DGX Spark GB10 上跑多快?"
     a: "1024×1024 8 step 跑 N=10 隔離 GPU 實測:BF16 baseline 7.55s warm,NVFP4 transformer 5.50s warm(1.37× 加速),三種 FP8 transformer(cast 標準 / cast fast / Kijai 預量化版)全部都比 BF16 慢 0.6-0.9s。"

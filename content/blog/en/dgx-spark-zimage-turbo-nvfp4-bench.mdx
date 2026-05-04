@@ -6,7 +6,7 @@ updatedAt: "2026-05-04"
 tags: ["Z-Image", "ComfyUI", "NVFP4", "FP8", "DGX Spark", "GB10", "SM121", "image gen", "benchmark", "quantization"]
 series: "Z-Image Turbo"
 part: 1
-draft: true
+draft: false
 faq:
   - q: "How fast is Z-Image Turbo on DGX Spark GB10?"
     a: "1024×1024, 8 step, N=10 isolated GPU: BF16 baseline 7.55s warm, NVFP4 transformer 5.50s warm (1.37× speedup). All three FP8 transformer paths (cast standard, cast fast, Kijai pre-quantized) are 0.6–0.9s slower than BF16."

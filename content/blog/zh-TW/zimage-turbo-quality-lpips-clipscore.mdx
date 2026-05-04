@@ -6,7 +6,7 @@ updatedAt: "2026-05-04"
 tags: ["Z-Image", "ComfyUI", "NVFP4", "FP8", "DGX Spark", "GB10", "image gen", "benchmark", "quantization", "LPIPS", "CLIPScore", "quality"]
 series: "Z-Image Turbo"
 part: 2
-draft: true
+draft: false
 faq:
   - q: "Z-Image Turbo 量化會崩品質嗎?"
     a: "**不會**。72 sample 雙軸實測,所有 4 個 config(BF16 / FP8scaled / NVFP4 / NVFP4+FP8e)的 CLIPScore 都在 0.334-0.339 範圍,std 重疊。LPIPS vs BF16 從 0.167(FP8scaled)到 0.307(NVFP4+FP8e)都有,但這是「圖長得不一樣」不是「品質變差」 — CLIPScore 同分證明 prompt fidelity 沒輸。"
