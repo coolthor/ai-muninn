@@ -24,6 +24,8 @@ import { TLDRCard } from "@/components/blog/TLDRCard";
 Z-Image Turbo 量化品質實測:**LPIPS + CLIPScore 雙軸**跑 6 prompt × 4 config × 3 seed = 72 sample。LPIPS 顯示 NVFP4 跟 BF16 圖長得不一樣(distance 0.29-0.31),但 **CLIPScore 4 config 都在 0.334-0.339 同 tier**(std 重疊,prompt fidelity 沒輸)。**NVFP4+FP8e 在 photo_woman / photo_machine / chinese 3 個 prompt 微贏 BF16**。結論:[Part 1](/zh-TW/blog/dgx-spark-zimage-turbo-nvfp4-bench) 推薦的 NVFP4+FP8e(快 1.37×、省 9.4 GB VRAM)品質沒崩,可放心抄。
 </TLDRCard>
 
+<VideoEmbed src="/videos/zimage-turbo-quality-lpips-clipscore.mp4" />
+
 ## 為什麼要做這篇
 
 [Part 1](/zh-TW/blog/dgx-spark-zimage-turbo-nvfp4-bench) 量了 6 種量化組合的速度跟資源 — NVFP4 transformer warm 5.50s 比 BF16 7.55s 快 1.37×,VRAM peak 從 70 GB 降到 60.7 GB。但留了一個黑洞:**這些量化版的圖,品質有崩嗎?**

@@ -24,6 +24,8 @@ import { TLDRCard } from "@/components/blog/TLDRCard";
 Z-Image Turbo quantization quality, measured properly: a **two-axis benchmark** — LPIPS plus CLIPScore — across 6 prompts × 4 configs × 3 seeds = 72 samples. LPIPS shows NVFP4 produces images visually distinct from BF16 (distance 0.29–0.31), but **all four configs land at CLIPScore 0.334–0.339, std bands overlapping** (prompt fidelity preserved). **NVFP4+FP8e beats BF16 on photo_woman / photo_machine / chinese**. Bottom line: the [Part 1](/en/blog/dgx-spark-zimage-turbo-nvfp4-bench) recommended combo (1.37× faster, 9.4 GB VRAM saved) keeps quality. Use it.
 </TLDRCard>
 
+<VideoEmbed src="/videos/zimage-turbo-quality-lpips-clipscore.mp4" />
+
 ## Why this article exists
 
 [Part 1](/en/blog/dgx-spark-zimage-turbo-nvfp4-bench) measured speed and VRAM for six Z-Image Turbo quant combos. NVFP4 transformer hits 5.50s warm versus BF16 7.55s (1.37× speedup), peak VRAM drops from 70 GB to 60.7 GB. But it left an open question: **do these quantized configs preserve image quality?**

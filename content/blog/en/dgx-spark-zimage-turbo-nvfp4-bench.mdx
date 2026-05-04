@@ -24,6 +24,8 @@ import { TLDRCard } from "@/components/blog/TLDRCard";
 DGX Spark GB10, six Z-Image Turbo quant configs measured with N=10 isolated GPU. **NVFP4 transformer hits 5.50s warm (versus BF16 7.55s — 1.37× speedup)**. **All three FP8 paths are slower than BF16** (8.19–8.45s). Recommended combo: **NVFP4 transformer + qwen_3_4b FP8 mixed encoder**. Disk 9.8 GB (51% smaller). Peak VRAM 60.7 GB (9.4 GB saved). Warm time matches NVFP4+BF16 encoder. The "why" is deferred to the next article.
 </TLDRCard>
 
+<VideoEmbed src="/videos/dgx-spark-zimage-turbo-nvfp4-bench.mp4" />
+
 ## Plain-language version: what is Z-Image Turbo and why this bench exists
 
 [Z-Image Turbo](https://huggingface.co/Comfy-Org/z_image_turbo) is an open-source image generation model released by Alibaba PAI in April 2026. The distilled variant generates images in just 8 sampling steps. Apache 2.0 licensed, fine for commercial use, fully self-host.
