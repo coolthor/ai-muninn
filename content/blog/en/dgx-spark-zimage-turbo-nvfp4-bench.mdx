@@ -11,7 +11,7 @@ faq:
   - q: "How fast is Z-Image Turbo on DGX Spark GB10?"
     a: "1024×1024, 8 step, N=10 isolated GPU: BF16 baseline 7.55s warm, NVFP4 transformer 5.50s warm (1.37× speedup). All three FP8 transformer paths (cast standard, cast fast, Kijai pre-quantized) are 0.6–0.9s slower than BF16."
   - q: "Recommended Z-Image Turbo quant combo on DGX Spark?"
-    a: "**NVFP4 transformer + qwen_3_4b_fp8_mixed encoder**. Warm 5.52s (same tier as NVFP4+BF16 encoder, but disk 2.4 GB smaller). Peak VRAM 60.71 GB (versus BF16 baseline 70 GB — 9.4 GB saved). Disk total 9.8 GB (versus BF16 19.8 GB, half the size)."
+    a: "**NVFP4 transformer + qwen_3_4b_fp8_mixed encoder**. Warm 5.52s (same tier as NVFP4+BF16 encoder, but disk 2.4 GB smaller). Model working set RSS 11.5 GB (versus BF16 baseline 20.6 GB — 44% smaller). Disk total 9.8 GB (versus BF16 19.8 GB, half the size)."
   - q: "Why is FP8 transformer slower than BF16?"
     a: "All three FP8 paths are slower: weight_dtype=fp8_e4m3fn loses 0.72s, fp8_e4m3fn_fast loses 0.90s, Kijai pre-quantized scaled loses 0.64s. The mechanism deep dive is Part 3; this article only reports measured numbers."
   - q: "Does Z-Image quantization break image quality?"
@@ -21,7 +21,7 @@ faq:
 import { TLDRCard } from "@/components/blog/TLDRCard";
 
 <TLDRCard>
-DGX Spark GB10, six Z-Image Turbo quant configs measured with N=10 isolated GPU. **NVFP4 transformer hits 5.50s warm (versus BF16 7.55s — 1.37× speedup)**. **All three FP8 paths are slower than BF16** (8.19–8.45s). Recommended combo: **NVFP4 transformer + qwen_3_4b FP8 mixed encoder**. Disk 9.8 GB (51% smaller). Peak VRAM 60.7 GB (9.4 GB saved). Warm time matches NVFP4+BF16 encoder. The "why" is deferred to the next article.
+DGX Spark GB10, six Z-Image Turbo quant configs measured with N=10 isolated GPU. **NVFP4 transformer hits 5.50s warm (versus BF16 7.55s — 1.37× speedup)**. **All three FP8 paths are slower than BF16** (8.19–8.45s). Recommended combo: **NVFP4 transformer + qwen_3_4b FP8 mixed encoder**. Disk 9.8 GB (51% smaller). Working set **11.5 GB vs BF16 20.6 GB (44% smaller)**. Warm time matches NVFP4+BF16 encoder. ⚠️ The `weight_dtype=fp8_e4m3fn` cast path does not save RAM — for actual memory savings you need a natively quantized file. The "why" is deferred to the next article.
 </TLDRCard>
 
 <VideoEmbed src="/videos/dgx-spark-zimage-turbo-nvfp4-bench.mp4" />
@@ -124,18 +124,24 @@ Three observations:
 
 Mostly determined by file size (BF16 12.3 GB > FP8 5.7 GB > NVFP4 4.5 GB). NVFP4 cold at 12.5s is 5× faster than BF16's 60.9s — a meaningful win on every restart.
 
-### Peak VRAM (working set)
+### Model working set (ComfyUI process RSS peak, idle subtracted)
 
-| Config | Peak VRAM | vs BF16 |
-|---|---|---|
-| BF16+BF16 | 70.12 GB | 0 |
-| FP8cast e4m3fn | 64.34 GB | -5.78 GB |
-| FP8cast FAST | 65.46 GB | -4.66 GB |
-| FP8scaled Kijai | 63.98 GB | -6.14 GB |
-| NVFP4+BF16 | 63.37 GB | -6.75 GB |
-| **NVFP4+FP8e** (recommended) | **60.71 GB** | **-9.41 GB** |
+| Config | RSS peak | Working set (− idle ComfyUI 0.98 GB) | vs BF16 |
+|---|---|---|---|
+| BF16+BF16 | 21.62 GB | 20.64 GB | 0 (baseline) |
+| FP8cast e4m3fn | 21.62 GB | 20.63 GB | **±0 (no saving!)** |
+| FP8cast FAST | 21.68 GB | 20.69 GB | **±0 (no saving!)** |
+| FP8scaled Kijai | 15.95 GB | 14.97 GB | -5.67 GB |
+| NVFP4 + BF16 | 14.75 GB | 13.76 GB | -6.88 GB |
+| **NVFP4 + FP8 ⭐** (recommended) | **12.50 GB** | **11.52 GB** | **-9.12 GB (44% smaller)** |
 
-Disk savings are not the only saving. The actual working-set VRAM (sampled at 200 ms via ComfyUI's `vram_used`, GB10 unified arch) for NVFP4 + FP8 mixed encoder is **9.41 GB lower** than BF16 baseline.
+Two surprises:
+
+- **`weight_dtype: fp8_e4m3fn` does not save memory.** The cast path loads the full BF16 file (12.3 GB) first, then casts in-memory to FP8 — process RSS ends up identical to plain BF16. The `weight_dtype` flag only changes the *compute path*, **it does not change how much memory the model actually occupies**.
+- **Only natively quantized files actually save memory** (NVFP4 transformer / FP8scaled Kijai / FP8 mixed encoder). These ship pre-compressed on disk and stay compressed in memory.
+- NVFP4 + FP8 mixed encoder working set lands at **11.52 GB**, **44% smaller** than the BF16 baseline of 20.64 GB.
+
+(An earlier version of this post quoted "70 GB peak VRAM" numbers — those came from ComfyUI's `/system_stats` `vram_used`, which is system-wide and includes OS, Linux page cache, and other processes. They were not just the ComfyUI process model footprint. The correct metric is process RSS peak, which is what the table above now reports.)
 
 ---
 
@@ -183,7 +189,7 @@ By eye, all six portraits hold up — hair, eyes, the coffee-shop background. Bu
 | Warm time | 5.52s / 1024×1024 image |
 | Speedup vs BF16 | 1.37× |
 | Cold start | 16.3s |
-| Peak VRAM | 60.71 GB |
+| Model working set RSS | **11.52 GB** (BF16 baseline 20.64 GB, 44% smaller) |
 | Disk | 4.5 + 5.6 + 0.34 = **10.4 GB** |
 | Disk savings vs BF16 | 51% |
 

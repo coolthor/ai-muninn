@@ -11,7 +11,7 @@ faq:
   - q: "Z-Image Turbo 在 DGX Spark GB10 上跑多快?"
     a: "1024×1024 8 step 跑 N=10 隔離 GPU 實測:BF16 baseline 7.55s warm,NVFP4 transformer 5.50s warm(1.37× 加速),三種 FP8 transformer(cast 標準 / cast fast / Kijai 預量化版)全部都比 BF16 慢 0.6-0.9s。"
   - q: "DGX Spark 跑 Z-Image Turbo 推薦哪個量化組合?"
-    a: "**NVFP4 transformer + qwen_3_4b_fp8_mixed encoder**。warm 5.52s(跟 NVFP4+BF16 encoder 同 tier 但 disk 省 2.4 GB),peak VRAM 60.71 GB(比 BF16 baseline 70 GB 省 9.4 GB),整套 disk 9.8 GB(BF16 整套 19.8 GB 的一半)。"
+    a: "**NVFP4 transformer + qwen_3_4b_fp8_mixed encoder**。warm 5.52s(跟 NVFP4+BF16 encoder 同 tier 但 disk 省 2.4 GB),模型工作集 RSS 11.5 GB(BF16 是 20.6 GB,省 44%),整套 disk 9.8 GB(BF16 整套 19.8 GB 的一半)。"
   - q: "FP8 transformer 為何反而比 BF16 慢?"
     a: "三種 FP8 path 都比 BF16 慢:weight_dtype=fp8_e4m3fn 慢 0.72s、fp8_e4m3fn_fast 慢 0.90s、Kijai 預量化 scaled 版 慢 0.64s。為什麼留給 Part 3 深挖,本篇只報實測結果。"
   - q: "Z-Image Turbo 量化版品質會崩嗎?"
@@ -21,7 +21,7 @@ faq:
 import { TLDRCard } from "@/components/blog/TLDRCard";
 
 <TLDRCard>
-DGX Spark GB10 跑 Z-Image Turbo,N=10 隔離 GPU 實測 6 種量化組合。**NVFP4 transformer 5.50s warm(比 BF16 7.55s 快 1.37×)**,**三條 FP8 path 全比 BF16 慢**(8.19-8.45s)。推薦:**NVFP4 + qwen_3_4b FP8 mixed encoder**,disk 9.8 GB(省 51%),VRAM peak 60.7 GB(比 BF16 70 GB 省 9.4 GB),warm 速度跟 NVFP4+BF16 encoder 同 tier。為什麼 FP8 慢留給下一篇。
+DGX Spark GB10 跑 Z-Image Turbo,N=10 隔離 GPU 實測 6 種量化組合。**NVFP4 transformer 5.50s warm(比 BF16 7.55s 快 1.37×)**,**三條 FP8 path 全比 BF16 慢**(8.19-8.45s)。推薦:**NVFP4 + qwen_3_4b FP8 mixed encoder**,disk 9.8 GB(省 51%),工作集 **11.5 GB(BF16 是 20.6 GB,省 44%)**,warm 速度跟 NVFP4+BF16 encoder 同 tier。⚠️ `weight_dtype=fp8_e4m3fn` cast 路徑記憶體不會變小,要省 RAM 必須用 native 量化檔。為什麼 FP8 慢留給下一篇。
 </TLDRCard>
 
 <VideoEmbed src="/videos/dgx-spark-zimage-turbo-nvfp4-bench.mp4" />
@@ -124,18 +124,24 @@ CLIPLoader: type=lumina2(Z-Image 借 Lumina2 pipeline)
 
 主要由 model 大小決定(BF16 12.3 GB > FP8 5.7 GB > NVFP4 4.5 GB)。NVFP4 cold 12.5s 比 BF16 60.9s 快 5×,**冷啟動省下大量等待時間**。
 
-### Peak VRAM(working set)
+### 模型工作集(ComfyUI process RSS peak,扣掉 idle baseline)
 
-| config | peak VRAM | vs BF16 |
-|---|---|---|
-| BF16+BF16 | 70.12 GB | 0 |
-| FP8cast e4m3fn | 64.34 GB | -5.78 GB |
-| FP8cast FAST | 65.46 GB | -4.66 GB |
-| FP8scaled Kijai | 63.98 GB | -6.14 GB |
-| NVFP4+BF16 | 63.37 GB | -6.75 GB |
-| **NVFP4+FP8e**(推薦)| **60.71 GB** | **-9.41 GB** |
+| config | RSS peak | 工作集(扣 idle ComfyUI 0.98 GB)| vs BF16 |
+|---|---|---|---|
+| BF16+BF16 | 21.62 GB | 20.64 GB | 0(baseline)|
+| FP8cast e4m3fn | 21.62 GB | 20.63 GB | **±0**(沒省!)|
+| FP8cast FAST | 21.68 GB | 20.69 GB | **±0**(沒省!)|
+| FP8scaled Kijai | 15.95 GB | 14.97 GB | -5.67 GB |
+| NVFP4 + BF16 | 14.75 GB | 13.76 GB | -6.88 GB |
+| **NVFP4 + FP8 ⭐**(推薦)| **12.50 GB** | **11.52 GB** | **-9.12 GB(省 44%)** |
 
-不是只有 disk 省。**真實 working set VRAM**(GB10 unified arch 下用 ComfyUI `vram_used` 200ms 取樣)NVFP4+FP8 mixed encoder 比 BF16 baseline 省 **9.41 GB**。
+**意外的發現**:
+
+- **FP8 cast(`weight_dtype=fp8_e4m3fn`)記憶體沒省** — 它先載入 BF16 完整檔(12.3 GB)後 in-memory cast 成 FP8,實際 process RSS 跟 BF16 一樣。所以 `weight_dtype` flag 只改變 forward 計算路徑,**不影響 model 在記憶體裡的實際大小**
+- **真省記憶體的只有 native quantized 檔**(NVFP4 transformer / FP8scaled Kijai / FP8 mixed encoder)— 這些檔在 disk 上就已經是壓縮格式,載進記憶體也是壓縮格式
+- NVFP4 + FP8 mixed encoder 工作集 **11.52 GB**,比 BF16 baseline 20.64 GB 省 **44%**
+
+(早期版本本篇貼過「70 GB peak VRAM」這種大數字 — 那是 ComfyUI `/system_stats` 的 system-wide vram_used,含 OS + Linux page cache + 其他 process,不是純 ComfyUI process 的 model 工作集。Process RSS peak 才是真實 model footprint,本表已換成正確 metric。)
 
 ---
 
@@ -183,7 +189,7 @@ Prompt:`a photorealistic portrait of a young woman with long flowing black hair,
 | Warm 速度 | 5.52s / 1024×1024 圖 |
 | 比 BF16 加速 | 1.37× |
 | Cold 啟動 | 16.3s |
-| Peak VRAM | 60.71 GB |
+| 模型工作集 RSS | **11.52 GB**(BF16 baseline 20.64 GB,省 44%) |
 | Disk 占用 | 4.5 + 5.6 + 0.34 = **10.4 GB** |
 | 比 BF16 disk 省 | 51% |
 

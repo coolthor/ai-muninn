@@ -21,14 +21,14 @@ faq:
 import { TLDRCard } from "@/components/blog/TLDRCard";
 
 <TLDRCard>
-Z-Image Turbo quantization quality, measured properly: a **two-axis benchmark** — LPIPS plus CLIPScore — across 6 prompts × 4 configs × 3 seeds = 72 samples. LPIPS shows NVFP4 produces images visually distinct from BF16 (distance 0.29–0.31), but **all four configs land at CLIPScore 0.334–0.339, std bands overlapping** (prompt fidelity preserved). **NVFP4+FP8e beats BF16 on photo_woman / photo_machine / chinese**. Bottom line: the [Part 1](/en/blog/dgx-spark-zimage-turbo-nvfp4-bench) recommended combo (1.37× faster, 9.4 GB VRAM saved) keeps quality. Use it.
+Z-Image Turbo quantization quality, measured properly: a **two-axis benchmark** — LPIPS plus CLIPScore — across 6 prompts × 4 configs × 3 seeds = 72 samples. LPIPS shows NVFP4 produces images visually distinct from BF16 (distance 0.29–0.31), but **all four configs land at CLIPScore 0.334–0.339, std bands overlapping** (prompt fidelity preserved). **NVFP4+FP8e beats BF16 on photo_woman / photo_machine / chinese**. Bottom line: the [Part 1](/en/blog/dgx-spark-zimage-turbo-nvfp4-bench) recommended combo (1.37× faster, 9.1 GB working set saved) keeps quality. Use it.
 </TLDRCard>
 
 <VideoEmbed src="/videos/zimage-turbo-quality-lpips-clipscore.mp4" />
 
 ## Why this article exists
 
-[Part 1](/en/blog/dgx-spark-zimage-turbo-nvfp4-bench) measured speed and VRAM for six Z-Image Turbo quant combos. NVFP4 transformer hits 5.50s warm versus BF16 7.55s (1.37× speedup), peak VRAM drops from 70 GB to 60.7 GB. But it left an open question: **do these quantized configs preserve image quality?**
+[Part 1](/en/blog/dgx-spark-zimage-turbo-nvfp4-bench) measured speed and memory for six Z-Image Turbo quant combos. NVFP4 transformer hits 5.50s warm versus BF16 7.55s (1.37× speedup), and model working set drops from 20.6 GB to 11.5 GB (44% smaller). But it left an open question: **do these quantized configs preserve image quality?**
 
 Eyeballing six photorealistic portrait samples showed no obvious damage. But that prompt is the gentlest possible stress test for quantization. What about Chinese prompts, text rendering, dense detail in anime style, abstract composition? Part 1 did not answer; Part 2 does.
 
@@ -248,7 +248,7 @@ NVFP4 paths come out slightly below BF16/FP8scaled here, but all four images cle
 Part 1's recommended combo — **NVFP4 transformer + qwen_3_4b_fp8_mixed encoder** — is vindicated:
 
 - **Speed**: 5.52s warm vs BF16 7.55s, **1.37× faster**
-- **VRAM**: peak 60.71 GB vs BF16 70.12 GB, **9.4 GB saved**
+- **Working set RSS**: 11.52 GB vs BF16 20.64 GB, **9.12 GB saved (44%)**
 - **Disk**: 10.4 GB vs BF16 19.8 GB, **51% saved**
 - **Quality**: CLIPScore 0.3388 vs BF16 0.3344, **equal or marginally better**
 
