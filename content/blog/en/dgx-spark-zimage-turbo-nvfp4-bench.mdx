@@ -1,6 +1,6 @@
 ---
 title: "[Benchmark] Z-Image Turbo on DGX Spark — 6 quantization configs measured, best speed+VRAM combo"
-description: "I ran six Z-Image Turbo quantization configs on DGX Spark GB10 — BF16 baseline, FP8 cast standard, FP8 cast fast, FP8 scaled (Kijai), NVFP4, NVFP4+FP8 encoder. With N=10 isolated GPU, NVFP4 transformer hits 5.50s warm versus BF16 7.55s (1.37× faster). All three FP8 paths are slower than BF16. Peak VRAM drops from 70 GB to 60.7 GB."
+description: "I ran six Z-Image Turbo quantization configs on DGX Spark GB10 — BF16 baseline, FP8 cast standard, FP8 cast fast, FP8 scaled (Kijai), NVFP4, NVFP4+FP8 encoder. With N=10 isolated GPU, NVFP4 transformer hits 5.50s warm versus BF16 7.55s (1.37× faster). All three FP8 paths are slower than BF16. Model working set drops from 20.6 GB (BF16) to 11.5 GB (NVFP4+FP8 encoder) — 44% smaller."
 date: "2026-05-04"
 updatedAt: "2026-05-04"
 tags: ["Z-Image", "ComfyUI", "NVFP4", "FP8", "DGX Spark", "GB10", "SM121", "image gen", "benchmark", "quantization"]

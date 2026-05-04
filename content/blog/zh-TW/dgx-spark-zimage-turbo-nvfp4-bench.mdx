@@ -1,6 +1,6 @@
 ---
 title: "[Benchmark] Z-Image Turbo on DGX Spark — 6 種量化組合實測,速度+資源最佳組合"
-description: "DGX Spark GB10 上 Z-Image Turbo 6 種量化組合(BF16 / FP8 cast 標準 / FP8 cast fast / FP8 scaled Kijai / NVFP4 / NVFP4+FP8 encoder)實測。N=10 隔離 GPU 測,NVFP4 5.50s warm 比 BF16 7.55s 快 1.37×,FP8 三條 path 全比 BF16 慢。VRAM peak 從 70 GB 省到 60.7 GB。"
+description: "DGX Spark GB10 上 Z-Image Turbo 6 種量化組合(BF16 / FP8 cast 標準 / FP8 cast fast / FP8 scaled Kijai / NVFP4 / NVFP4+FP8 encoder)實測。N=10 隔離 GPU 測,NVFP4 5.50s warm 比 BF16 7.55s 快 1.37×,FP8 三條 path 全比 BF16 慢。模型工作集 RSS 從 BF16 20.6 GB 降到 NVFP4+FP8 11.5 GB(省 44%)。"
 date: "2026-05-04"
 updatedAt: "2026-05-04"
 tags: ["Z-Image", "ComfyUI", "NVFP4", "FP8", "DGX Spark", "GB10", "SM121", "image gen", "benchmark", "量化"]
