@@ -1,0 +1,268 @@
+---
+title: "[Benchmark] Z-Image Turbo on DGX Spark — 6 quantization configs measured, best speed+VRAM combo"
+description: "I ran six Z-Image Turbo quantization configs on DGX Spark GB10 — BF16 baseline, FP8 cast standard, FP8 cast fast, FP8 scaled (Kijai), NVFP4, NVFP4+FP8 encoder. With N=10 isolated GPU, NVFP4 transformer hits 5.50s warm versus BF16 7.55s (1.37× faster). All three FP8 paths are slower than BF16. Peak VRAM drops from 70 GB to 60.7 GB."
+date: "2026-05-04"
+updatedAt: "2026-05-04"
+tags: ["Z-Image", "ComfyUI", "NVFP4", "FP8", "DGX Spark", "GB10", "SM121", "image gen", "benchmark", "quantization"]
+series: "Z-Image Turbo"
+part: 1
+draft: true
+faq:
+  - q: "How fast is Z-Image Turbo on DGX Spark GB10?"
+    a: "1024×1024, 8 step, N=10 isolated GPU: BF16 baseline 7.55s warm, NVFP4 transformer 5.50s warm (1.37× speedup). All three FP8 transformer paths (cast standard, cast fast, Kijai pre-quantized) are 0.6–0.9s slower than BF16."
+  - q: "Recommended Z-Image Turbo quant combo on DGX Spark?"
+    a: "**NVFP4 transformer + qwen_3_4b_fp8_mixed encoder**. Warm 5.52s (same tier as NVFP4+BF16 encoder, but disk 2.4 GB smaller). Peak VRAM 60.71 GB (versus BF16 baseline 70 GB — 9.4 GB saved). Disk total 9.8 GB (versus BF16 19.8 GB, half the size)."
+  - q: "Why is FP8 transformer slower than BF16?"
+    a: "All three FP8 paths are slower: weight_dtype=fp8_e4m3fn loses 0.72s, fp8_e4m3fn_fast loses 0.90s, Kijai pre-quantized scaled loses 0.64s. The mechanism deep dive is Part 3; this article only reports measured numbers."
+  - q: "Does Z-Image quantization break image quality?"
+    a: "This article only covers speed and VRAM. Quality testing is Part 2 — LPIPS + CLIPScore on 6 prompts × 4 configs × 3 seeds. Visual inspection of six warm samples shows no obvious portrait artifacts, but photographic prompts are the easiest stress test for FP4 quantization. Cannot extrapolate to text rendering, dense detail, or anime style."
+---
+
+import { TLDRCard } from "@/components/blog/TLDRCard";
+
+<TLDRCard>
+DGX Spark GB10, six Z-Image Turbo quant configs measured with N=10 isolated GPU. **NVFP4 transformer hits 5.50s warm (versus BF16 7.55s — 1.37× speedup)**. **All three FP8 paths are slower than BF16** (8.19–8.45s). Recommended combo: **NVFP4 transformer + qwen_3_4b FP8 mixed encoder**. Disk 9.8 GB (51% smaller). Peak VRAM 60.7 GB (9.4 GB saved). Warm time matches NVFP4+BF16 encoder. The "why" is deferred to the next article.
+</TLDRCard>
+
+## Plain-language version: what is Z-Image Turbo and why this bench exists
+
+[Z-Image Turbo](https://huggingface.co/Comfy-Org/z_image_turbo) is an open-source image generation model released by Alibaba PAI in April 2026. The distilled variant generates images in just 8 sampling steps. Apache 2.0 licensed, fine for commercial use, fully self-host.
+
+If you are new to quantization — what FP8 / NVFP4 / BF16 are, why fewer bits saves memory, why fewer bits sometimes runs slower — start with the primer:
+
+- [LLM 101: What is quantization? Q4, Q8, FP16 — what's the difference](/en/blog/llm-101-what-is-quantization) — the entry-level explainer
+- One level deeper (algorithm layer): [LLM Deep Dive: What quantization algorithms actually do, from Q4_K_M to TurboQuant](/en/blog/llm-deep-dive-quantization-algorithms)
+
+The short version: **image generation uses the same FP8 / NVFP4 / BF16 formats as LLMs, the same .safetensors file format. Only the inference backend differs — LLMs run on vLLM / SGLang, image generation runs on ComfyUI + comfy_kitchen.**
+
+DGX Spark is NVIDIA's desktop AI workstation (around USD 3,000), built on a GB10 GPU with 128 GB unified memory and 273 GB/s of memory bandwidth. I ran six Z-Image Turbo quant combos on this box, measured speed and VRAM, and produced one copy-pasteable best-config table.
+
+---
+
+## Why this benchmark exists
+
+When the community debates NVFP4 versus FP8, the default assumption is "fewer bits, faster inference." That assumption breaks on GB10. In [Part 19: NVFP4 is a trap on GB10](/en/blog/dgx-spark-nvfp4-trap-gb10-fp8-wins) I showed FP8 beats NVFP4 by 32% on the LLM side (Qwen 3.6 35B via vLLM).
+
+Does the same thing happen on the image generation side? A diffusion transformer's forward pass and an LLM's autoregressive decode have very different memory access patterns, so the LLM result does not transfer. **You have to measure**.
+
+---
+
+## Test stack
+
+### Environment
+
+- **Hardware**: DGX Spark (GB10 / SM12.1, 128 GB unified, 273 GB/s LPDDR5x)
+- **OS**: Ubuntu, NVIDIA driver 580, CUDA 13.0
+- **ComfyUI**: 0.20.1, PyTorch 2.10.0+cu130, comfy_kitchen 0.2.8
+- **Isolated GPU**: vllm-gx10 LLM stopped (`docker stop qwen-abliterated`) freeing 70 GB before bench
+- **Idle VRAM**: 41 GB (system + ComfyUI + buffer cache)
+
+### Six configs
+
+| Label | Transformer file | weight_dtype | Encoder file |
+|------|------|------|------|
+| BF16+BF16 (baseline) | z_image_turbo_bf16.safetensors (12.3 GB) | default | qwen_3_4b.safetensors (8.0 GB) |
+| FP8cast e4m3fn | same (BF16 source) | fp8_e4m3fn | same as BF16 |
+| FP8cast FAST | same | fp8_e4m3fn_fast | same as BF16 |
+| FP8scaled Kijai | z-image-turbo_fp8_scaled_e4m3fn_KJ.safetensors (5.7 GB) | default | same as BF16 |
+| NVFP4+BF16 | z_image_turbo_nvfp4.safetensors (4.5 GB) | default | same as BF16 |
+| **NVFP4+FP8e** (recommended) | NVFP4 | default | qwen_3_4b_fp8_mixed.safetensors (5.6 GB) |
+
+NVFP4 transformer and FP8 mixed encoder come from the official [Comfy-Org/z_image_turbo](https://huggingface.co/Comfy-Org/z_image_turbo) repo. The FP8 scaled file is from [Kijai/Z-Image_comfy_fp8_scaled](https://huggingface.co/Kijai/Z-Image_comfy_fp8_scaled), a community pre-quantized variant that ships with weight_scale tensors and routes through a different ComfyUI pipeline than the cast paths.
+
+### Inference settings (fixed across configs)
+
+```
+KSampler: steps=8, cfg=1.0, sampler=res_multistep, scheduler=simple
+ModelSamplingAuraFlow: shift=3
+Latent: EmptySD3LatentImage 1024×1024
+Negative: ConditioningZeroOut (FLUX-family convention; an empty CLIPTextEncode is wrong)
+CLIPLoader: type=lumina2 (Z-Image rides on the Lumina2 pipeline)
+```
+
+### What I measured
+
+- **Warm latency**: same prompt + same seed; one cold load to bring the model into VRAM, then ten consecutive warm runs, wall-clock recorded each time
+- **Peak VRAM**: a background thread polls ComfyUI's `/system_stats` every 200 ms and tracks the max
+- **Cold latency**: time of the first run (disk to RAM plus JIT compile)
+
+---
+
+## Results
+
+### Warm latency (N=10 mean ± std)
+
+| Config | Warm mean ± std | Min | Max | vs BF16 |
+|---|---|---|---|---|
+| BF16+BF16 | **7.55 ± 0.01s** | 7.54s | 7.57s | 1.0× baseline |
+| FP8cast e4m3fn | 8.27 ± 0.10s | 8.15s | 8.46s | 0.91× ❌ slower 0.72s |
+| FP8cast FAST | 8.45 ± 0.01s | 8.45s | 8.47s | 0.89× ❌ **slowest** |
+| FP8scaled Kijai | 8.19 ± 0.04s | 8.14s | 8.24s | 0.92× ❌ slower 0.64s |
+| **NVFP4+BF16** | **5.50 ± 0.07s** | 5.44s | 5.58s | **1.37×** ✅ |
+| **NVFP4+FP8e** (recommended) | 5.52 ± 0.10s | 5.43s | 5.74s | **1.37×** ✅ |
+
+Three observations:
+
+1. **NVFP4 transformer is the genuine winner.** Warm 5.50s, std 0.07s. The 2.05s gap versus BF16 7.55s is far larger than the 0.07s std on either side — the worst max-min comparison still differs by 1.86s. The 1.37× speedup is solid.
+
+2. **All three FP8 paths are slower than BF16.** This is the surprise. **`fp8_e4m3fn_fast` is even 0.18s slower than the standard cast** — I expected the "fast" flag to dispatch the real FP8 matmul kernel (`torch._scaled_mm`) and gain something, but it adds the most overhead instead. Kijai's pre-quantized version (with weight_scale tensors) is slightly faster than the cast variants but still 0.64s behind BF16.
+
+3. **Encoder quantization barely affects warm time.** NVFP4+BF16 encoder versus NVFP4+FP8 mixed encoder is 5.50s versus 5.52s, well inside the std band. Z-Image encodes the prompt once per image, so encoder size has almost no impact on inference latency.
+
+### Cold latency
+
+| Config | Cold (s) |
+|---|---|
+| BF16+BF16 | 60.9 |
+| FP8cast e4m3fn | 47.2 |
+| FP8cast FAST | 24.6 |
+| FP8scaled Kijai | 21.4 |
+| NVFP4+BF16 | 12.5 |
+| NVFP4+FP8e | 16.3 |
+
+Mostly determined by file size (BF16 12.3 GB > FP8 5.7 GB > NVFP4 4.5 GB). NVFP4 cold at 12.5s is 5× faster than BF16's 60.9s — a meaningful win on every restart.
+
+### Peak VRAM (working set)
+
+| Config | Peak VRAM | vs BF16 |
+|---|---|---|
+| BF16+BF16 | 70.12 GB | 0 |
+| FP8cast e4m3fn | 64.34 GB | -5.78 GB |
+| FP8cast FAST | 65.46 GB | -4.66 GB |
+| FP8scaled Kijai | 63.98 GB | -6.14 GB |
+| NVFP4+BF16 | 63.37 GB | -6.75 GB |
+| **NVFP4+FP8e** (recommended) | **60.71 GB** | **-9.41 GB** |
+
+Disk savings are not the only saving. The actual working-set VRAM (sampled at 200 ms via ComfyUI's `vram_used`, GB10 unified arch) for NVFP4 + FP8 mixed encoder is **9.41 GB lower** than BF16 baseline.
+
+---
+
+## Six warm samples (same prompt, same seed=42)
+
+Prompt: `a photorealistic portrait of a young woman with long flowing black hair, soft natural lighting, gentle smile, sitting in a coffee shop, depth of field, highly detailed eyes`
+
+<div className="grid grid-cols-2 gap-4 my-6">
+  <figure className="m-0">
+    <figcaption className="text-center font-semibold mb-2">BF16 + BF16 (7.55s baseline)</figcaption>
+    <img src="/images/dgx-spark-zimage-turbo-nvfp4-bench/v3-warm-bf16.png" alt="BF16 + BF16" className="w-full m-0" />
+  </figure>
+  <figure className="m-0">
+    <figcaption className="text-center font-semibold mb-2">FP8cast + BF16 (8.27s)</figcaption>
+    <img src="/images/dgx-spark-zimage-turbo-nvfp4-bench/v3-warm-fp8cast.png" alt="FP8cast + BF16" className="w-full m-0" />
+  </figure>
+  <figure className="m-0">
+    <figcaption className="text-center font-semibold mb-2">FP8cast FAST + BF16 (8.45s)</figcaption>
+    <img src="/images/dgx-spark-zimage-turbo-nvfp4-bench/v3-warm-fp8cast-fast.png" alt="FP8cast FAST + BF16" className="w-full m-0" />
+  </figure>
+  <figure className="m-0">
+    <figcaption className="text-center font-semibold mb-2">FP8scaled + BF16 (8.19s)</figcaption>
+    <img src="/images/dgx-spark-zimage-turbo-nvfp4-bench/v3-warm-fp8scaled.png" alt="FP8scaled + BF16" className="w-full m-0" />
+  </figure>
+  <figure className="m-0">
+    <figcaption className="text-center font-semibold mb-2">NVFP4 + BF16 (5.50s)</figcaption>
+    <img src="/images/dgx-spark-zimage-turbo-nvfp4-bench/v3-warm-nvfp4-bf16enc.png" alt="NVFP4 + BF16" className="w-full m-0" />
+  </figure>
+  <figure className="m-0">
+    <figcaption className="text-center font-semibold mb-2">NVFP4 + FP8 ⭐ (5.52s, recommended)</figcaption>
+    <img src="/images/dgx-spark-zimage-turbo-nvfp4-bench/v3-warm-nvfp4-fp8enc.png" alt="NVFP4 + FP8" className="w-full m-0" />
+  </figure>
+</div>
+
+By eye, all six portraits hold up — hair, eyes, the coffee-shop background. But a photorealistic human portrait is one of the gentler prompts for FP4 quantization. **Whether complex Chinese prompts, text rendering, dense detail, or anime style hold up will be answered in Part 2 by an LPIPS + CLIPScore quantitative test**.
+
+---
+
+## Recommended combo
+
+**`NVFP4 transformer + qwen_3_4b FP8 mixed encoder + ae VAE`**
+
+| Axis | Value |
+|---|---|
+| Warm time | 5.52s / 1024×1024 image |
+| Speedup vs BF16 | 1.37× |
+| Cold start | 16.3s |
+| Peak VRAM | 60.71 GB |
+| Disk | 4.5 + 5.6 + 0.34 = **10.4 GB** |
+| Disk savings vs BF16 | 51% |
+
+Download:
+
+```bash
+HF_REPO=https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main
+
+# transformer
+curl -L -o models/diffusion_models/split_files/diffusion_models/z_image_turbo_nvfp4.safetensors \
+  $HF_REPO/split_files/diffusion_models/z_image_turbo_nvfp4.safetensors
+
+# text encoder (FP8 mixed)
+curl -L -o models/text_encoders/split_files/text_encoders/qwen_3_4b_fp8_mixed.safetensors \
+  $HF_REPO/split_files/text_encoders/qwen_3_4b_fp8_mixed.safetensors
+
+# vae
+curl -L -o models/vae/split_files/vae/ae.safetensors \
+  $HF_REPO/split_files/vae/ae.safetensors
+```
+
+ComfyUI workflow JSON template (POST directly to `/prompt`):
+
+```json
+{
+  "1": {"class_type": "UNETLoader", "inputs": {
+    "unet_name": "split_files/diffusion_models/z_image_turbo_nvfp4.safetensors",
+    "weight_dtype": "default"}},
+  "2": {"class_type": "CLIPLoader", "inputs": {
+    "clip_name": "split_files/text_encoders/qwen_3_4b_fp8_mixed.safetensors",
+    "type": "lumina2", "device": "default"}},
+  "3": {"class_type": "VAELoader", "inputs": {"vae_name": "split_files/vae/ae.safetensors"}},
+  "11": {"class_type": "ModelSamplingAuraFlow", "inputs": {"model": ["1", 0], "shift": 3.0}},
+  "4": {"class_type": "CLIPTextEncode", "inputs": {"text": "<your prompt>", "clip": ["2", 0]}},
+  "5": {"class_type": "ConditioningZeroOut", "inputs": {"conditioning": ["4", 0]}},
+  "6": {"class_type": "EmptySD3LatentImage", "inputs": {"width": 1024, "height": 1024, "batch_size": 1}},
+  "7": {"class_type": "KSampler", "inputs": {
+    "model": ["11", 0], "seed": 42, "steps": 8, "cfg": 1.0,
+    "sampler_name": "res_multistep", "scheduler": "simple",
+    "positive": ["4", 0], "negative": ["5", 0],
+    "latent_image": ["6", 0], "denoise": 1.0}},
+  "8": {"class_type": "VAEDecode", "inputs": {"samples": ["7", 0], "vae": ["3", 0]}},
+  "9": {"class_type": "SaveImage", "inputs": {"images": ["8", 0], "filename_prefix": "zimage"}}
+}
+```
+
+Easy traps:
+- `CLIPLoader.type` must be `lumina2` (Z-Image piggybacks on the Lumina2 pipeline; there is no standalone `z_image` type)
+- Must wire in the `ModelSamplingAuraFlow shift=3` patch — without it, sampling does not converge
+- Latent uses `EmptySD3LatentImage`, not `EmptyFlux2LatentImage`
+- Model paths need the `split_files/` prefix (Comfy-Org HF repo structure)
+
+---
+
+## Methodology caveats
+
+The N=10 dataset is publication-grade, but it has limits:
+
+1. **Single prompt, single seed for latency.** Different prompts hit different attention patterns, but quantization paths affect transformer/encoder kernels independently of prompt content, so the single-prompt result should generalize for *latency*. (Quality is a different story — Part 2.)
+2. **No quality measurement here.** Part 2 will run LPIPS + CLIPScore on six prompts across multiple seeds.
+3. **No mechanism analysis.** Why is FP8 slower than BF16? Why is NVFP4 faster than both? Part 3 digs through the ComfyUI ops.py and comfy_kitchen kernel dispatch logic.
+4. **GB10 is unique.** `vram_used` here is unified memory, not the dedicated VRAM you would see on a discrete GPU. The same configs on RTX 5090 / B200 may give very different numbers.
+
+---
+
+## Contrast with the LLM result in Part 19
+
+[Part 19](/en/blog/dgx-spark-nvfp4-trap-gb10-fp8-wins) conclusion: **on the LLM side** (Qwen 3.6 35B under vLLM), NVFP4 was 32% slower than FP8. FP8 always wins.
+
+This article: **on the image generation side** (Z-Image Turbo under ComfyUI), NVFP4 is 33% faster than FP8, and FP8 is even slower than BF16.
+
+The conclusion is reversed. But this is **not** a head-to-head NVFP4 versus FP8 verdict on the same hardware — the LLM trap was specific to vLLM's Marlin kernel quality on SM12.1, while image generation runs on PyTorch + comfy_kitchen, an entirely different backend. **The conclusion depends on the stack and workload, not on GB10 itself**.
+
+Why those two paths handle quantization so differently — and end up with opposite speed conclusions — is the subject of Part 3, which digs into ComfyUI's `ops.py` and `comfy_kitchen` kernel dispatch.
+
+---
+
+## Related reading
+
+- [Part 19 — NVFP4 is a trap on GB10: FP8 wins by 32%](/en/blog/dgx-spark-nvfp4-trap-gb10-fp8-wins) — the LLM-side counter-example
+- [Part 23 — Self-quantizing abliterated 35B FP8 on DGX Spark](/en/blog/dgx-spark-abliterated-fp8-uma-quantization) — my LLM stack
+- [Z-Image Turbo on Hugging Face](https://huggingface.co/Comfy-Org/z_image_turbo)
+- [Kijai's Z-Image FP8 scaled quantization](https://huggingface.co/Kijai/Z-Image_comfy_fp8_scaled)
+- [ComfyUI workflow templates](https://github.com/Comfy-Org/workflow_templates)

@@ -1,0 +1,268 @@
+---
+title: "[Benchmark] Z-Image Turbo on DGX Spark — 6 種量化組合實測,速度+資源最佳組合"
+description: "DGX Spark GB10 上 Z-Image Turbo 6 種量化組合(BF16 / FP8 cast 標準 / FP8 cast fast / FP8 scaled Kijai / NVFP4 / NVFP4+FP8 encoder)實測。N=10 隔離 GPU 測,NVFP4 5.50s warm 比 BF16 7.55s 快 1.37×,FP8 三條 path 全比 BF16 慢。VRAM peak 從 70 GB 省到 60.7 GB。"
+date: "2026-05-04"
+updatedAt: "2026-05-04"
+tags: ["Z-Image", "ComfyUI", "NVFP4", "FP8", "DGX Spark", "GB10", "SM121", "image gen", "benchmark", "量化"]
+series: "Z-Image Turbo"
+part: 1
+draft: true
+faq:
+  - q: "Z-Image Turbo 在 DGX Spark GB10 上跑多快?"
+    a: "1024×1024 8 step 跑 N=10 隔離 GPU 實測:BF16 baseline 7.55s warm,NVFP4 transformer 5.50s warm(1.37× 加速),三種 FP8 transformer(cast 標準 / cast fast / Kijai 預量化版)全部都比 BF16 慢 0.6-0.9s。"
+  - q: "DGX Spark 跑 Z-Image Turbo 推薦哪個量化組合?"
+    a: "**NVFP4 transformer + qwen_3_4b_fp8_mixed encoder**。warm 5.52s(跟 NVFP4+BF16 encoder 同 tier 但 disk 省 2.4 GB),peak VRAM 60.71 GB(比 BF16 baseline 70 GB 省 9.4 GB),整套 disk 9.8 GB(BF16 整套 19.8 GB 的一半)。"
+  - q: "FP8 transformer 為何反而比 BF16 慢?"
+    a: "三種 FP8 path 都比 BF16 慢:weight_dtype=fp8_e4m3fn 慢 0.72s、fp8_e4m3fn_fast 慢 0.90s、Kijai 預量化 scaled 版 慢 0.64s。為什麼留給 Part 3 深挖,本篇只報實測結果。"
+  - q: "Z-Image Turbo 量化版品質會崩嗎?"
+    a: "本篇只看速度+資源,品質測試留給 Part 2 用 LPIPS + CLIPScore 雙軸跑 6 prompt × 4 config × 3 seed 量化。眼睛看 6 張 sample warm 圖人像沒明顯崩壞,但這是寫實 prompt 對 FP4 是最弱 stress test,不能外推。"
+---
+
+import { TLDRCard } from "@/components/blog/TLDRCard";
+
+<TLDRCard>
+DGX Spark GB10 跑 Z-Image Turbo,N=10 隔離 GPU 實測 6 種量化組合。**NVFP4 transformer 5.50s warm(比 BF16 7.55s 快 1.37×)**,**三條 FP8 path 全比 BF16 慢**(8.19-8.45s)。推薦:**NVFP4 + qwen_3_4b FP8 mixed encoder**,disk 9.8 GB(省 51%),VRAM peak 60.7 GB(比 BF16 70 GB 省 9.4 GB),warm 速度跟 NVFP4+BF16 encoder 同 tier。為什麼 FP8 慢留給下一篇。
+</TLDRCard>
+
+## 白話版:Z-Image Turbo 是什麼,為何要做這份 bench
+
+[Z-Image Turbo](https://huggingface.co/Comfy-Org/z_image_turbo) 是 Alibaba PAI 在 2026 年 4 月發布的開源 image gen 模型。distilled 版只要 8 step 就能生圖。Apache 2.0 商用 OK,Self-host 全套自架。
+
+如果你不熟「量化」(quantization)— FP8 / NVFP4 / BF16 這幾個數值格式分別是什麼、為什麼壓位元能省 memory、為什麼有時候反而會慢 — 先看入門:
+
+- [LLM 101:什麼是量化?Q4、Q8、FP16 到底差在哪](/zh-TW/blog/llm-101-what-is-quantization) — 量化基本盤
+- 想再深一階(算法層):[LLM 深水區:量化演算法在做什麼?從 Q4_K_M 到 TurboQuant 三層拆解](/zh-TW/blog/llm-deep-dive-quantization-algorithms)
+
+簡而言之:**image gen 用的是跟 LLM 同一套 FP8 / NVFP4 / BF16 量化格式,model file 也是 .safetensors 同格式,只差 inference 的 backend(LLM 走 vLLM / SGLang,image gen 走 ComfyUI + comfy_kitchen)**。
+
+DGX Spark 是 NVIDIA 桌上型 AI 工作站(售價約 3,000 美元),用 GB10 GPU + 128 GB unified memory + 273 GB/s 記憶體頻寬。我在這台上跑 6 種 Z-Image Turbo 量化組合,測速度跟資源,給你一張可以照抄的最佳組合表。
+
+---
+
+## 為何要做這篇
+
+社群討論 NVFP4 vs FP8 哪個比較好的時候,大多假設「位元越少越快」。但這假設在 GB10 上**不成立** — 過去在 LLM 端([Part 19:NVFP4 在 GB10 是陷阱](/zh-TW/blog/dgx-spark-nvfp4-trap-gb10-fp8-wins))已經給出反例,FP8 比 NVFP4 快 32%。
+
+那 image gen 端呢?DiT(Diffusion Transformer)forward pass 跟 LLM autoregressive decode 訪問模式完全不同,結論不能直接套。**得自己量**。
+
+---
+
+## 測試 stack
+
+### 環境
+
+- **硬體**: DGX Spark (GB10 / SM12.1,128 GB unified,273 GB/s LPDDR5x)
+- **OS**: Ubuntu,nvidia driver 580,CUDA 13.0
+- **ComfyUI**: 0.20.1,PyTorch 2.10.0+cu130,comfy_kitchen 0.2.8
+- **隔離 GPU**:測試前 `docker stop qwen-abliterated`(關掉 vllm-gx10 LLM 釋出 70 GB)
+- **idle VRAM**:41 GB(系統 + ComfyUI + buffer cache)
+
+### 6 個 config
+
+| label | transformer 檔 | weight_dtype | encoder 檔 |
+|------|-----------|--------------|---------|
+| BF16+BF16(baseline)| z_image_turbo_bf16.safetensors(12.3 GB)| default | qwen_3_4b.safetensors(8.0 GB)|
+| FP8cast e4m3fn | 同上(BF16 source)| fp8_e4m3fn | 同 BF16 |
+| FP8cast FAST | 同上 | fp8_e4m3fn_fast | 同 BF16 |
+| FP8scaled Kijai | z-image-turbo_fp8_scaled_e4m3fn_KJ.safetensors(5.7 GB)| default | 同 BF16 |
+| NVFP4+BF16 | z_image_turbo_nvfp4.safetensors(4.5 GB)| default | 同 BF16 |
+| **NVFP4+FP8e**(推薦)| 同 NVFP4 | default | qwen_3_4b_fp8_mixed.safetensors(5.6 GB)|
+
+NVFP4 transformer 跟 FP8 mixed encoder 從 [Comfy-Org/z_image_turbo](https://huggingface.co/Comfy-Org/z_image_turbo) 官方 repo 抓。FP8 scaled 版本是 [Kijai/Z-Image_comfy_fp8_scaled](https://huggingface.co/Kijai/Z-Image_comfy_fp8_scaled) 社群預量化版,帶 weight_scale tensor,跟 cast 路徑用不同 ComfyUI pipeline。
+
+### 推理參數(全 config 固定)
+
+```
+KSampler: steps=8, cfg=1.0, sampler=res_multistep, scheduler=simple
+ModelSamplingAuraFlow: shift=3
+Latent: EmptySD3LatentImage 1024×1024
+Negative: ConditioningZeroOut(FLUX 系慣例,空字串 CLIPTextEncode 不對)
+CLIPLoader: type=lumina2(Z-Image 借 Lumina2 pipeline)
+```
+
+### 測什麼
+
+- **Warm latency**:同 prompt + 同 seed,先 1 個 cold 把 model 載進 VRAM,然後連跑 N=10 個 warm,記每次 wall-clock
+- **Peak VRAM**:背景 thread 200ms 取樣 ComfyUI `/system_stats` 的 vram_used,取整段 max
+- **Cold latency**:第一次載 model 進 VRAM 的時間(disk → RAM + JIT compile)
+
+---
+
+## 結果
+
+### Warm latency(N=10 mean ± std)
+
+| config | warm mean ± std | min | max | vs BF16 |
+|---|---|---|---|---|
+| BF16+BF16 | **7.55 ± 0.01s** | 7.54s | 7.57s | 1.0× baseline |
+| FP8cast e4m3fn | 8.27 ± 0.10s | 8.15s | 8.46s | 0.91× ❌ 慢 0.72s |
+| FP8cast FAST | 8.45 ± 0.01s | 8.45s | 8.47s | 0.89× ❌ **最慢** |
+| FP8scaled Kijai | 8.19 ± 0.04s | 8.14s | 8.24s | 0.92× ❌ 慢 0.64s |
+| **NVFP4+BF16** | **5.50 ± 0.07s** | 5.44s | 5.58s | **1.37×** ✅ |
+| **NVFP4+FP8e**(推薦)| 5.52 ± 0.10s | 5.43s | 5.74s | **1.37×** ✅ |
+
+兩個重點:
+
+1. **NVFP4 transformer 是真贏家** — warm 5.50s,std 0.07s,跟 BF16 7.55s 的差距(2.05s)遠大於 noise(每邊 std 0.07s,離得最近 max-min 也差 1.86s)。1.37× 加速是穩的。
+
+2. **三條 FP8 path 全比 BF16 慢** — 最意外。**`fp8_e4m3fn_fast` 還比 standard 多慢 0.18s**,本來預期 fast 會走真 FP8 matmul kernel(`torch._scaled_mm`),結果反而 overhead 最大。Kijai 預量化版本(帶 weight_scale)略快於 cast 版,但仍輸 BF16 0.64s。
+
+3. **encoder 量化對 warm 速度幾乎無影響** — NVFP4+BF16 encoder vs NVFP4+FP8 mixed encoder,5.50 vs 5.52s,std 範圍內。Z-Image 一張圖只 encode 一次 prompt,encoder 大小對 inference time 不影響。
+
+### Cold latency
+
+| config | cold(s) |
+|---|---|
+| BF16+BF16 | 60.9 |
+| FP8cast e4m3fn | 47.2 |
+| FP8cast FAST | 24.6 |
+| FP8scaled Kijai | 21.4 |
+| NVFP4+BF16 | 12.5 |
+| NVFP4+FP8e | 16.3 |
+
+主要由 model 大小決定(BF16 12.3 GB > FP8 5.7 GB > NVFP4 4.5 GB)。NVFP4 cold 12.5s 比 BF16 60.9s 快 5×,**冷啟動省下大量等待時間**。
+
+### Peak VRAM(working set)
+
+| config | peak VRAM | vs BF16 |
+|---|---|---|
+| BF16+BF16 | 70.12 GB | 0 |
+| FP8cast e4m3fn | 64.34 GB | -5.78 GB |
+| FP8cast FAST | 65.46 GB | -4.66 GB |
+| FP8scaled Kijai | 63.98 GB | -6.14 GB |
+| NVFP4+BF16 | 63.37 GB | -6.75 GB |
+| **NVFP4+FP8e**(推薦)| **60.71 GB** | **-9.41 GB** |
+
+不是只有 disk 省。**真實 working set VRAM**(GB10 unified arch 下用 ComfyUI `vram_used` 200ms 取樣)NVFP4+FP8 mixed encoder 比 BF16 baseline 省 **9.41 GB**。
+
+---
+
+## 6 張 warm sample(同 prompt + 同 seed=42)
+
+Prompt:`a photorealistic portrait of a young woman with long flowing black hair, soft natural lighting, gentle smile, sitting in a coffee shop, depth of field, highly detailed eyes`
+
+<div className="grid grid-cols-2 gap-4 my-6">
+  <figure className="m-0">
+    <figcaption className="text-center font-semibold mb-2">BF16 + BF16(7.55s baseline)</figcaption>
+    <img src="/images/dgx-spark-zimage-turbo-nvfp4-bench/v3-warm-bf16.png" alt="BF16 + BF16" className="w-full m-0" />
+  </figure>
+  <figure className="m-0">
+    <figcaption className="text-center font-semibold mb-2">FP8cast + BF16(8.27s)</figcaption>
+    <img src="/images/dgx-spark-zimage-turbo-nvfp4-bench/v3-warm-fp8cast.png" alt="FP8cast + BF16" className="w-full m-0" />
+  </figure>
+  <figure className="m-0">
+    <figcaption className="text-center font-semibold mb-2">FP8cast FAST + BF16(8.45s)</figcaption>
+    <img src="/images/dgx-spark-zimage-turbo-nvfp4-bench/v3-warm-fp8cast-fast.png" alt="FP8cast FAST + BF16" className="w-full m-0" />
+  </figure>
+  <figure className="m-0">
+    <figcaption className="text-center font-semibold mb-2">FP8scaled + BF16(8.19s)</figcaption>
+    <img src="/images/dgx-spark-zimage-turbo-nvfp4-bench/v3-warm-fp8scaled.png" alt="FP8scaled + BF16" className="w-full m-0" />
+  </figure>
+  <figure className="m-0">
+    <figcaption className="text-center font-semibold mb-2">NVFP4 + BF16(5.50s)</figcaption>
+    <img src="/images/dgx-spark-zimage-turbo-nvfp4-bench/v3-warm-nvfp4-bf16enc.png" alt="NVFP4 + BF16" className="w-full m-0" />
+  </figure>
+  <figure className="m-0">
+    <figcaption className="text-center font-semibold mb-2">NVFP4 + FP8 ⭐(5.52s,推薦)</figcaption>
+    <img src="/images/dgx-spark-zimage-turbo-nvfp4-bench/v3-warm-nvfp4-fp8enc.png" alt="NVFP4 + FP8" className="w-full m-0" />
+  </figure>
+</div>
+
+肉眼看 6 張人像沒明顯崩壞 — 髮絲、眼神、咖啡背景都站得住。但寫實人像對 FP4 來說是相對溫和的 prompt,**複雜中文 / 文字 / 細節密 / anime 風的 prompt 是不是也站得住,Part 2 用 LPIPS + CLIPScore 雙軸量化測試會給答案**。
+
+---
+
+## 推薦組合
+
+**`NVFP4 transformer + qwen_3_4b FP8 mixed encoder + ae VAE`**
+
+| 軸 | 數值 |
+|---|---|
+| Warm 速度 | 5.52s / 1024×1024 圖 |
+| 比 BF16 加速 | 1.37× |
+| Cold 啟動 | 16.3s |
+| Peak VRAM | 60.71 GB |
+| Disk 占用 | 4.5 + 5.6 + 0.34 = **10.4 GB** |
+| 比 BF16 disk 省 | 51% |
+
+下載清單:
+
+```bash
+HF_REPO=https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main
+
+# transformer
+curl -L -o models/diffusion_models/split_files/diffusion_models/z_image_turbo_nvfp4.safetensors \
+  $HF_REPO/split_files/diffusion_models/z_image_turbo_nvfp4.safetensors
+
+# text encoder (FP8 mixed)
+curl -L -o models/text_encoders/split_files/text_encoders/qwen_3_4b_fp8_mixed.safetensors \
+  $HF_REPO/split_files/text_encoders/qwen_3_4b_fp8_mixed.safetensors
+
+# vae
+curl -L -o models/vae/split_files/vae/ae.safetensors \
+  $HF_REPO/split_files/vae/ae.safetensors
+```
+
+ComfyUI workflow JSON 範本(API 直接 POST 到 `/prompt`):
+
+```json
+{
+  "1": {"class_type": "UNETLoader", "inputs": {
+    "unet_name": "split_files/diffusion_models/z_image_turbo_nvfp4.safetensors",
+    "weight_dtype": "default"}},
+  "2": {"class_type": "CLIPLoader", "inputs": {
+    "clip_name": "split_files/text_encoders/qwen_3_4b_fp8_mixed.safetensors",
+    "type": "lumina2", "device": "default"}},
+  "3": {"class_type": "VAELoader", "inputs": {"vae_name": "split_files/vae/ae.safetensors"}},
+  "11": {"class_type": "ModelSamplingAuraFlow", "inputs": {"model": ["1", 0], "shift": 3.0}},
+  "4": {"class_type": "CLIPTextEncode", "inputs": {"text": "<your prompt>", "clip": ["2", 0]}},
+  "5": {"class_type": "ConditioningZeroOut", "inputs": {"conditioning": ["4", 0]}},
+  "6": {"class_type": "EmptySD3LatentImage", "inputs": {"width": 1024, "height": 1024, "batch_size": 1}},
+  "7": {"class_type": "KSampler", "inputs": {
+    "model": ["11", 0], "seed": 42, "steps": 8, "cfg": 1.0,
+    "sampler_name": "res_multistep", "scheduler": "simple",
+    "positive": ["4", 0], "negative": ["5", 0],
+    "latent_image": ["6", 0], "denoise": 1.0}},
+  "8": {"class_type": "VAEDecode", "inputs": {"samples": ["7", 0], "vae": ["3", 0]}},
+  "9": {"class_type": "SaveImage", "inputs": {"images": ["8", 0], "filename_prefix": "zimage"}}
+}
+```
+
+幾個容易踩的雷:
+- `CLIPLoader.type` 必須設 `lumina2`(Z-Image 借 Lumina2 pipeline,沒有獨立 `z_image` type)
+- 必走 `ModelSamplingAuraFlow shift=3` patch(少這個 sampling 不收斂)
+- Latent 用 `EmptySD3LatentImage` 不是 `EmptyFlux2LatentImage`
+- model 路徑要帶 `split_files/` 前綴(Comfy-Org HF repo 結構)
+
+---
+
+## 方法學注意
+
+這份 N=10 數據是 **publication-grade**,但有限制:
+
+1. **單 prompt 單 seed 測 latency** — 不同 prompt 訪問模式不同,但量化路徑差異主要在 transformer / encoder kernel,跟 prompt 內容無關,所以單 prompt 結果應該可外推
+2. **品質沒測** — 第 29 篇會用 LPIPS + CLIPScore 雙軸跑 6 prompt × 多 seed
+3. **mechanism 沒解** — 為什麼 FP8 比 BF16 慢、為什麼 NVFP4 比兩者都快?第 28 篇深挖
+4. **GB10 unique** — `vram_used` 是 unified memory,跟 dGPU 上的 dedicated VRAM 計法不同。RTX 5090 / B200 上結果可能完全不同
+
+---
+
+## 跟 Part 19 LLM NVFP4 結論的對比
+
+[Part 19](/zh-TW/blog/dgx-spark-nvfp4-trap-gb10-fp8-wins) 結論:**LLM 端**(vLLM 跑 Qwen 3.6 35B)NVFP4 比 FP8 慢 32%,FP8 永遠贏。
+
+本篇結論:**Image gen 端**(ComfyUI 跑 Z-Image Turbo)NVFP4 比 FP8 快 33%,而且 FP8 比 BF16 還慢。
+
+**完全相反**。但這不是「同硬體上 NVFP4 vs FP8 的對立 evidence」 — LLM trap 是 vLLM Marlin kernel 在 SM12.1 上的特定品質問題,Image gen 走 PyTorch + comfy_kitchen 不同 backend。**結論依 stack/workload 而異,不是 GB10 universal truth**。
+
+為什麼這兩條 path 上量化會走不同路徑、得到相反速度結論?第 28 篇深挖 ComfyUI ops.py + comfy_kitchen 的 kernel dispatch 邏輯。
+
+---
+
+## 相關閱讀
+
+- [Part 19 — NVFP4 在 GB10 上是陷阱:FP8 快 32%](/zh-TW/blog/dgx-spark-nvfp4-trap-gb10-fp8-wins) — LLM 端的反例
+- [Part 23 — abliterated 35B FP8 on DGX Spark](/zh-TW/blog/dgx-spark-abliterated-fp8-uma-quantization) — 我的 LLM stack
+- [Z-Image Turbo on Hugging Face](https://huggingface.co/Comfy-Org/z_image_turbo)
+- [Kijai 的 Z-Image FP8 scaled 量化](https://huggingface.co/Kijai/Z-Image_comfy_fp8_scaled)
+- [ComfyUI Workflow Templates](https://github.com/Comfy-Org/workflow_templates)

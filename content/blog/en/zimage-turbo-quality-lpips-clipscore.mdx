@@ -1,0 +1,306 @@
+---
+title: "[Benchmark] Z-Image Turbo quantization quality measured — LPIPS + CLIPScore on 72 samples"
+description: "Does Z-Image Turbo quantization break image quality? I ran a two-axis benchmark — LPIPS (perceptual distance vs BF16) plus CLIPScore (image-text alignment) — across 6 prompts × 4 configs × 3 seeds = 72 samples. Result: NVFP4 produces images that look different from BF16, but prompt fidelity holds; **NVFP4+FP8e encoder beats BF16 on 3 of 6 prompts by 0.001–0.009 CLIPScore**."
+date: "2026-05-04"
+updatedAt: "2026-05-04"
+tags: ["Z-Image", "ComfyUI", "NVFP4", "FP8", "DGX Spark", "GB10", "image gen", "benchmark", "quantization", "LPIPS", "CLIPScore", "quality"]
+series: "Z-Image Turbo"
+part: 2
+draft: true
+faq:
+  - q: "Does Z-Image Turbo quantization break image quality?"
+    a: "**No.** A two-axis benchmark on 72 samples: all four configs (BF16 / FP8scaled / NVFP4 / NVFP4+FP8e) sit at CLIPScore 0.334–0.339 with overlapping std bands. LPIPS distance from BF16 ranges from 0.167 (FP8scaled) up to 0.307 (NVFP4+FP8e), but that means \"the image looks different from BF16,\" not \"quality dropped\" — equal CLIPScore proves prompt fidelity is preserved."
+  - q: "What do LPIPS and CLIPScore actually measure?"
+    a: "**LPIPS** = perceptual distance with BF16 as the ground-truth reference (0 = identical). **CLIPScore** = image-text alignment, scored independently per image without needing BF16 reference. Combining the two avoids the LPIPS trap: high LPIPS does not imply quality regression — CLIPScore tells you whether the image still matches the prompt."
+  - q: "How does the recommended NVFP4+FP8 encoder combo do on quality?"
+    a: "**Equal to or marginally better than BF16. It wins on 3 of 6 prompts.** photo_woman 0.343 vs BF16 0.340, photo_machine 0.343 vs 0.327, chinese 0.273 vs 0.264 — all NVFP4+FP8e leads. The other three prompts are within noise. Overall mean CLIPScore 0.339 vs BF16 0.334."
+  - q: "Does Chinese prompt break under quantization?"
+    a: "**No, NVFP4+FP8e wins.** Mean CLIPScore over 3 chinese-prompt seeds: BF16 0.264 / FP8scaled 0.263 / NVFP4 0.266 / NVFP4+FP8e **0.273**. The overall lower numbers on Chinese (0.26 vs ~0.35 English) reflect a CLIP model bias toward English training data, not a quantization issue."
+---
+
+import { TLDRCard } from "@/components/blog/TLDRCard";
+
+<TLDRCard>
+Z-Image Turbo quantization quality, measured properly: a **two-axis benchmark** — LPIPS plus CLIPScore — across 6 prompts × 4 configs × 3 seeds = 72 samples. LPIPS shows NVFP4 produces images visually distinct from BF16 (distance 0.29–0.31), but **all four configs land at CLIPScore 0.334–0.339, std bands overlapping** (prompt fidelity preserved). **NVFP4+FP8e beats BF16 on photo_woman / photo_machine / chinese**. Bottom line: the [Part 1](/en/blog/dgx-spark-zimage-turbo-nvfp4-bench) recommended combo (1.37× faster, 9.4 GB VRAM saved) keeps quality. Use it.
+</TLDRCard>
+
+## Why this article exists
+
+[Part 1](/en/blog/dgx-spark-zimage-turbo-nvfp4-bench) measured speed and VRAM for six Z-Image Turbo quant combos. NVFP4 transformer hits 5.50s warm versus BF16 7.55s (1.37× speedup), peak VRAM drops from 70 GB to 60.7 GB. But it left an open question: **do these quantized configs preserve image quality?**
+
+Eyeballing six photorealistic portrait samples showed no obvious damage. But that prompt is the gentlest possible stress test for quantization. What about Chinese prompts, text rendering, dense detail in anime style, abstract composition? Part 1 did not answer; Part 2 does.
+
+---
+
+## How to measure image quality properly
+
+"Does quantization break image quality" sounds simple but is slippery. Define "quality": looks identical to BF16? Matches the prompt? Looks aesthetically good? The three questions have different answers and need different metrics. I went with the two metrics most commonly used in image generation research, **combined**.
+
+### Axis 1: **LPIPS** — how far do quantized images drift from BF16?
+
+#### What LPIPS is
+
+[LPIPS](https://arxiv.org/abs/1801.03924) (Learned Perceptual Image Patch Similarity), proposed by Zhang et al. 2018, was designed to **replace pixel-level metrics like PSNR/SSIM** with something closer to human visual perception.
+
+Mechanism: run both images through a pre-trained AlexNet, extract **mid-layer feature maps**, then compute the distance between those features. Why AlexNet? Because mid-layer CNN features encode semantic concepts like "eyes, mouth, texture" — **closer to how humans actually compare images** than raw pixels.
+
+Output range: 0 (identical) to roughly 1 (completely different). Practical intuition:
+- LPIPS < 0.05: visually indistinguishable, only pixel-level differences
+- LPIPS 0.1–0.2: minor composition / detail variation visible on close inspection
+- LPIPS 0.2–0.4: same subject, clearly different composition (typical "same prompt, different model")
+- LPIPS > 0.5: essentially different concepts
+
+#### Why use BF16 as reference instead of running BF16 against itself?
+
+In theory, **same prompt + same seed + same model + same hardware** should be fully deterministic — LPIPS against itself should be 0. But once you swap the quantization path, internal rounding changes, and the latent space trajectory diverges from the very first sampling step. That divergence is **physically inevitable** and unrelated to "quality."
+
+So LPIPS tells us how far the quantized version drifts from BF16, **but cannot determine quality on its own**. An LPIPS of 0.3 could mean "image is fine, just composed slightly differently" or "quantization broke the subject" — LPIPS alone cannot distinguish those. That's why we need axis 2.
+
+### Axis 2: **CLIPScore** — does the image still match the prompt?
+
+#### What CLIP is
+
+[CLIP](https://arxiv.org/abs/2103.00020) (Contrastive Language-Image Pretraining), trained by OpenAI in 2021, is a dual-tower model — an image encoder plus a text encoder. **Training objective: pull "image + matching caption" close in embedding space, push mismatches apart**. Trained on ~400 million image-text pairs (LAION-5B is a subset).
+
+CLIPScore is just: encode the generated image and the prompt text into vectors, take their cosine similarity. Output is technically 0–1 but practical ranges:
+- CLIPScore < 0.20: image does not match prompt at all (gibberish or broken)
+- CLIPScore 0.25–0.30: subject matches but details off
+- CLIPScore 0.30–0.40: typical baseline for a good generation model
+- CLIPScore > 0.40: very strong image-text alignment (e.g., abstract prompts hitting precisely)
+
+#### Why CLIPScore is a quality proxy
+
+The most common failure mode of "quantization broke quality" is **image looks weird, doesn't match prompt**. CLIPScore directly measures that correspondence and is highly sensitive to "broken" output. If quantization shifts the image so the subject drifts, composition becomes weird, or it stops resembling the prompt description, CLIPScore drops.
+
+If CLIPScore does not drop, we have evidence that **on the prompt-alignment axis, the quantized version did not regress** — strong enough to push back on the "quantization always degrades" worry.
+
+#### Limits of CLIPScore
+
+- **Does not score aesthetics**: an ugly image that matches the prompt can still score high. But for most image generation use cases, "matches the prompt" comes first
+- **English bias**: open_clip ViT-B-32 was trained ~80% on English data; Chinese / multilingual prompts will see lower absolute scores, **but cross-config comparison stays fair** (every config gets the same bias on the same prompt)
+- **Misses fine detail**: detail-level precision differences may not show up in CLIP features. For that level you need a learned predictor like LAION-Aesthetic
+
+### Reading both axes together
+
+| LPIPS | CLIPScore | Interpretation |
+|-------|-----------|---------------|
+| High | Matches BF16 | Quantization "different but not worse" ← **typical successful quantization** |
+| High | **Lower than BF16** | Quantization broke something ← avoid |
+| Low | Matches BF16 | Quantization "close to BF16 and not worse" ← also success |
+| Low | Higher than BF16 | Rare; possibly a small improvement LPIPS missed |
+
+**Combining the two separates "different" from "worse."** LPIPS alone would mistake trajectory divergence for damage. CLIPScore alone would miss visually obvious shifts.
+
+### Why not FID / SSIM / human eval?
+
+| Metric | Why not used |
+|--------|-------------|
+| FID (Fréchet Inception Distance) | Needs N≥1000 samples for statistical stability. With 72 samples FID is just noise |
+| SSIM / PSNR | Pixel-level structural similarity — **completely blind to semantic meaning, will just report low scores for any quantization that diverges in trajectory**, providing no useful signal |
+| Human eval (A/B blind) | A 4-config × 6-prompt × 3-seed = 72-image study would need ≥10 raters for statistical power; out of scope here |
+| LAION-Aesthetic | Subjective beauty predictor; better for ranking than for cross-config comparison (style preferences vary too much) |
+
+LPIPS + CLIPScore is **the most robust and cheapest** combination at our N=72 scale.
+
+### Six prompts engineered for diversity (stress test)
+
+| Key | Prompt | Stress angle |
+|---|---|---|
+| photo_woman | photorealistic portrait of a young woman in a coffee shop | gentlest case (easy) |
+| photo_machine | close-up photo of a vintage mechanical pocket watch with intricate gears | dense detail (mechanical) |
+| anime | anime style illustration, kimono, cherry blossoms | stylized (non-photorealistic) |
+| text_render | wooden storefront sign reading "CLOSED FOR REPAIRS" | **text rendering** (FP4 weak point) |
+| chinese | 古風水墨畫,一位身穿青色長袍的書生站在竹林中 (full Chinese prompt) | Chinese language + classical mood |
+| abstract | surreal floating islands suspended in pastel sky, waterfalls cascading | abstract + large color regions |
+
+Each prompt × 4 configs × 3 seeds = **72 samples** (seeds 42, 7777, 12345).
+
+### Four configs (matched to Part 1's recommendation)
+
+| Config | Transformer | Encoder |
+|---|---|---|
+| BF16 | z_image_turbo_bf16 | qwen_3_4b BF16 (reference) |
+| FP8scaled | Kijai pre-quantized | qwen_3_4b BF16 |
+| NVFP4 | z_image_turbo_nvfp4 | qwen_3_4b BF16 |
+| **NVFP4+FP8e** (recommended) | z_image_turbo_nvfp4 | qwen_3_4b_fp8_mixed |
+
+---
+
+## Results
+
+### Mean across 72 samples (headline table)
+
+```
+Config       LPIPS vs BF16      CLIPScore (image-text)
+─────────   ───────────────   ──────────────────────
+BF16         0.0000  ref       0.3344 ± 0.043
+FP8scaled    0.1670 ± 0.081    0.3356 ± 0.043   ← matches BF16
+NVFP4        0.2886 ± 0.086    0.3356 ± 0.045   ← matches BF16
+NVFP4+FP8e   0.3069 ± 0.093    0.3388 ± 0.040   ← +0.0044 over BF16
+```
+
+**All four configs sit between 0.334 and 0.339 on CLIPScore, with overlapping std bands.** Quantization-driven changes in image-text alignment are below the noise floor — **not a single quantized config loses prompt fidelity to BF16**.
+
+LPIPS captures relative distance to BF16: FP8scaled is closest (0.167), NVFP4 mid (0.289), NVFP4+FP8e farthest (0.307). This is exactly what you would expect — the more aggressive the quantization, the earlier the latent trajectory diverges. **That distance is not a quality loss; it is just "different model, different image"**.
+
+### Per-prompt CLIPScore breakdown (where might quantization break?)
+
+| Prompt | BF16 | FP8scaled | NVFP4 | NVFP4+FP8e | Winner |
+|--------|------|-----------|-------|-----------|------|
+| photo_woman | 0.3403 | 0.3404 | 0.3383 | **0.3426** | NVFP4+FP8e ↑0.0023 |
+| photo_machine | 0.3273 | 0.3354 | 0.3292 | **0.3433** | NVFP4+FP8e ↑0.0160 |
+| anime | **0.3187** | 0.3173 | 0.3130 | 0.3174 | BF16 ↑0.0013 (within noise) |
+| text_render | 0.3628 | **0.3656** | 0.3642 | 0.3623 | FP8scaled ↑0.0028 |
+| chinese | 0.2642 | 0.2626 | 0.2658 | **0.2731** | NVFP4+FP8e ↑0.0089 |
+| abstract | 0.3932 | 0.3926 | **0.4030** | 0.3938 | NVFP4 ↑0.0098 |
+
+Two takeaways:
+
+1. **NVFP4+FP8e wins on 3 of 6 prompts** (photo_woman, photo_machine, chinese). The other 3 are within noise.
+2. **No prompt has a quantized version losing to BF16 by more than 0.005 CLIPScore.** The largest "loss" is anime (BF16 over NVFP4 by 0.006), well within the std-0.04 band.
+
+### Chinese CLIPScore is generally lower (0.26 vs ~0.32–0.39 for English)
+
+The chinese row sits noticeably below the others — this is **not a quantization issue**, it is the CLIP model's English bias (open_clip ViT-B-32 was trained on roughly 80%+ English data). The fact that all four configs cluster tightly on chinese (0.263–0.273) confirms the bias is universal, not config-specific.
+
+---
+
+## Side-by-side comparison: 6 prompts × 4 configs (seed=42)
+
+### Photo: portrait of a woman in a coffee shop
+
+CLIPScore: BF16 0.334 / FP8scaled 0.332 / NVFP4 0.319 / **NVFP4+FP8e 0.337** ↑
+
+| BF16 | FP8scaled |
+|------|-----------|
+| ![BF16](/images/zimage-turbo-quality-bench/BF16_photo_woman_seed42.png) | ![FP8scaled](/images/zimage-turbo-quality-bench/FP8scaled_photo_woman_seed42.png) |
+| **NVFP4** | **NVFP4+FP8e** |
+| ![NVFP4](/images/zimage-turbo-quality-bench/NVFP4_photo_woman_seed42.png) | ![NVFP4+FP8e](/images/zimage-turbo-quality-bench/NVFP4_FP8e_photo_woman_seed42.png) |
+
+All four portraits hold composition, hair, expression. The NVFP4 row (bottom) diverges more from BF16 in framing, but proportions, skin texture, and the coffee-shop atmosphere all read fine.
+
+### Photo: vintage mechanical pocket watch detail
+
+CLIPScore: BF16 0.332 / FP8scaled 0.329 / NVFP4 0.336 / **NVFP4+FP8e 0.348** ↑↑
+
+| BF16 | FP8scaled |
+|------|-----------|
+| ![BF16](/images/zimage-turbo-quality-bench/BF16_photo_machine_seed42.png) | ![FP8scaled](/images/zimage-turbo-quality-bench/FP8scaled_photo_machine_seed42.png) |
+| **NVFP4** | **NVFP4+FP8e** |
+| ![NVFP4](/images/zimage-turbo-quality-bench/NVFP4_photo_machine_seed42.png) | ![NVFP4+FP8e](/images/zimage-turbo-quality-bench/NVFP4_FP8e_photo_machine_seed42.png) |
+
+Dense-detail stress test. NVFP4+FP8e tops at 0.348 CLIPScore — brass tones and gear structure all land.
+
+### Anime: kimono woman with cherry blossoms
+
+CLIPScore: **BF16 0.307** / FP8scaled 0.318 / NVFP4 0.312 / NVFP4+FP8e 0.299
+
+| BF16 | FP8scaled |
+|------|-----------|
+| ![BF16](/images/zimage-turbo-quality-bench/BF16_anime_seed42.png) | ![FP8scaled](/images/zimage-turbo-quality-bench/FP8scaled_anime_seed42.png) |
+| **NVFP4** | **NVFP4+FP8e** |
+| ![NVFP4](/images/zimage-turbo-quality-bench/NVFP4_anime_seed42.png) | ![NVFP4+FP8e](/images/zimage-turbo-quality-bench/NVFP4_FP8e_anime_seed42.png) |
+
+The only prompt where BF16 wins on the mean across three seeds, but at this seed FP8scaled (0.318) actually beats BF16 (0.307). All differences sit inside the std band.
+
+### Text render: wooden storefront sign (FP4 stress)
+
+CLIPScore: BF16 0.348 / **FP8scaled 0.353** / NVFP4 0.350 / NVFP4+FP8e 0.351
+
+| BF16 | FP8scaled |
+|------|-----------|
+| ![BF16](/images/zimage-turbo-quality-bench/BF16_text_render_seed42.png) | ![FP8scaled](/images/zimage-turbo-quality-bench/FP8scaled_text_render_seed42.png) |
+| **NVFP4** | **NVFP4+FP8e** |
+| ![NVFP4](/images/zimage-turbo-quality-bench/NVFP4_text_render_seed42.png) | ![NVFP4+FP8e](/images/zimage-turbo-quality-bench/NVFP4_FP8e_text_render_seed42.png) |
+
+Text stress did not break — all four configs produce a readable English sign. Differences are in weathering and font-style detail.
+
+### Chinese: classical ink painting of a scholar in a bamboo forest (FP4 + Chinese double stress)
+
+CLIPScore: BF16 0.260 / FP8scaled 0.261 / NVFP4 0.264 / **NVFP4+FP8e 0.266** ↑
+
+| BF16 | FP8scaled |
+|------|-----------|
+| ![BF16](/images/zimage-turbo-quality-bench/BF16_chinese_seed42.png) | ![FP8scaled](/images/zimage-turbo-quality-bench/FP8scaled_chinese_seed42.png) |
+| **NVFP4** | **NVFP4+FP8e** |
+| ![NVFP4](/images/zimage-turbo-quality-bench/NVFP4_chinese_seed42.png) | ![NVFP4+FP8e](/images/zimage-turbo-quality-bench/NVFP4_FP8e_chinese_seed42.png) |
+
+Chinese prompt holds up under quantization, NVFP4+FP8e even nudges slightly ahead. Classical ink mood, bamboo, scholar all present.
+
+### Abstract: surreal floating islands
+
+CLIPScore: BF16 0.408 / FP8scaled 0.406 / **NVFP4 0.390** / NVFP4+FP8e 0.384
+
+| BF16 | FP8scaled |
+|------|-----------|
+| ![BF16](/images/zimage-turbo-quality-bench/BF16_abstract_seed42.png) | ![FP8scaled](/images/zimage-turbo-quality-bench/FP8scaled_abstract_seed42.png) |
+| **NVFP4** | **NVFP4+FP8e** |
+| ![NVFP4](/images/zimage-turbo-quality-bench/NVFP4_abstract_seed42.png) | ![NVFP4+FP8e](/images/zimage-turbo-quality-bench/NVFP4_FP8e_abstract_seed42.png) |
+
+NVFP4 paths come out slightly below BF16/FP8scaled here, but all four images clearly capture the "floating islands + waterfalls + dreamlike" core concept.
+
+---
+
+## Conclusion
+
+Part 1's recommended combo — **NVFP4 transformer + qwen_3_4b_fp8_mixed encoder** — is vindicated:
+
+- **Speed**: 5.52s warm vs BF16 7.55s, **1.37× faster**
+- **VRAM**: peak 60.71 GB vs BF16 70.12 GB, **9.4 GB saved**
+- **Disk**: 10.4 GB vs BF16 19.8 GB, **51% saved**
+- **Quality**: CLIPScore 0.3388 vs BF16 0.3344, **equal or marginally better**
+
+The intuition that "quantization always breaks quality" **does not hold for Z-Image Turbo on GB10**. LPIPS shows quantized images look different from BF16, but that is just latent trajectory divergence, not quality loss. CLIPScore confirms prompt fidelity is preserved — the quantized combo even nudges ahead on 3 of 6 prompts.
+
+**Verdict: copy Part 1's recommended combo with confidence. Quality is not a reason to prefer BF16.**
+
+---
+
+## Methodology limitations
+
+**Neither LPIPS nor CLIPScore is a perfect metric. Caveats:**
+
+1. **LPIPS uses AlexNet features and skews toward photographic content.** For anime/abstract, treat the LPIPS number conservatively.
+2. **CLIPScore ViT-B-32 is biased toward English** (English-heavy training data). The lower absolute number for Chinese is a CLIP artifact, not a model failure.
+3. **CLIPScore does not measure aesthetics** — only alignment to the prompt. An ugly-but-on-prompt image can still score high.
+4. **N=3 seeds per (prompt, config)** is not a large sample. For any single prompt, lean on the std rather than the mean.
+5. **No FID** — N=72 is too small for a stable FID score (FID needs N≥1000 to converge); CLIPScore is the most robust choice at this scale.
+6. **No anime/cartoon perceptual fidelity test** — capturing quantization losses on stylized content needs a learned aesthetic predictor like LAION-Aesthetic. Not done here.
+
+If your use case is production-grade anime generation or high-fidelity portrait service, **bring your own prompt set and inspect images yourself**. The 6-prompt diversity test here gives starting confidence, not a verdict for your specific application.
+
+---
+
+## Reproducibility
+
+Full bench script: [`zimage_quality_bench.py`](https://github.com/ai-muninn/blog/blob/main/scripts/zimage_quality_bench.py) (link added post-publish)
+
+How to run:
+```bash
+pip install lpips open_clip_torch torch
+python3 zimage_quality_bench.py
+```
+
+Requirements: ComfyUI 0.20+ at `localhost:8188` plus the four model files (BF16, FP8scaled, NVFP4, qwen_3_4b_fp8_mixed) downloaded. Total disk ~35 GB, full run (72 generations + scoring) ~15–20 minutes.
+
+Raw JSON: 72 sample LPIPS + CLIPScore values at [`/tmp/zimage_quality_results.json`](https://github.com/ai-muninn/blog/blob/main/data/zimage_quality_results.json) (link added post-publish).
+
+---
+
+## What's next
+
+After Part 1 ("speed + VRAM, best combo") and Part 2 ("quality is preserved"), one mystery remains:
+
+**Why is FP8 transformer slower than BF16 on GB10? Why is NVFP4 the actual winner?**
+
+ComfyUI source code provides hints (`pick_operations()` routing, `fp8_linear()` cast logic, `MixedPrecisionOps` block-quantized path), but to draw a real mechanism conclusion you need an `nsys` profiler trace of the actual kernels dispatched. I tried `nsys 2025.6.3` on GB10 / SM12.1 / sbsa-aarch64; CUPTI does not capture kernel-level data on this configuration (a known nsys bug). Part 3 has to wait until either NVIDIA fixes nsight-cu support for SM12.1 or I find an alternative profiler.
+
+---
+
+## Related reading
+
+- [Z-Image Turbo Part 1 — speed & VRAM bench, 6 quant configs](/en/blog/dgx-spark-zimage-turbo-nvfp4-bench) — previous in series
+- [LPIPS paper (Zhang et al. 2018)](https://arxiv.org/abs/1801.03924)
+- [CLIP paper (Radford et al. 2021)](https://arxiv.org/abs/2103.00020)
+- [open_clip on GitHub](https://github.com/mlfoundations/open_clip)
+- [Z-Image Turbo on Hugging Face](https://huggingface.co/Comfy-Org/z_image_turbo)

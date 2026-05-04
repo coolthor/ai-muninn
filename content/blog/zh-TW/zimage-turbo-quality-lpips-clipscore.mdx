@@ -1,0 +1,306 @@
+---
+title: "[Benchmark] Z-Image Turbo 量化品質實測 — LPIPS + CLIPScore 雙軸測量,72 sample 結論"
+description: "Z-Image Turbo 量化版到底會不會崩品質?LPIPS(perceptual 距離 vs BF16)+ CLIPScore(image-text 對齊)雙軸跑 6 prompt × 4 config × 3 seed = 72 sample。結論:NVFP4 跟 BF16 圖長得不一樣,但 prompt fidelity 沒輸,**NVFP4+FP8e encoder 在 6 個 prompt 中 3 個甚至贏 BF16 0.001-0.009 CLIPScore**。"
+date: "2026-05-04"
+updatedAt: "2026-05-04"
+tags: ["Z-Image", "ComfyUI", "NVFP4", "FP8", "DGX Spark", "GB10", "image gen", "benchmark", "quantization", "LPIPS", "CLIPScore", "quality"]
+series: "Z-Image Turbo"
+part: 2
+draft: true
+faq:
+  - q: "Z-Image Turbo 量化會崩品質嗎?"
+    a: "**不會**。72 sample 雙軸實測,所有 4 個 config(BF16 / FP8scaled / NVFP4 / NVFP4+FP8e)的 CLIPScore 都在 0.334-0.339 範圍,std 重疊。LPIPS vs BF16 從 0.167(FP8scaled)到 0.307(NVFP4+FP8e)都有,但這是「圖長得不一樣」不是「品質變差」 — CLIPScore 同分證明 prompt fidelity 沒輸。"
+  - q: "LPIPS 跟 CLIPScore 兩個指標分別測什麼?"
+    a: "**LPIPS** = perceptual distance,把 BF16 當 reference 量量化版偏離多少(0=完全相同)。**CLIPScore** = image-text 對齊度,獨立打分,不需要 BF16 reference。兩軸並用解 LPIPS 的 trap:LPIPS 高不等於品質差,CLIPScore 才是「這張圖對得上 prompt 嗎」。"
+  - q: "推薦組合(NVFP4+FP8 encoder)的品質怎樣?"
+    a: "**比 BF16 不輸,3 / 6 個 prompt 還微贏**。photo_woman 0.343 vs BF16 0.340、photo_machine 0.343 vs 0.327、chinese 0.273 vs 0.264 都是 NVFP4+FP8e 高。其他 3 個 prompt 在 noise 範圍內。整體 mean CLIPScore 0.339 vs BF16 0.334。"
+  - q: "中文 prompt 量化會崩嗎?"
+    a: "**不會,反而 NVFP4+FP8e 贏**。3 個 chinese prompt seed mean CLIPScore: BF16 0.264 / FP8scaled 0.263 / NVFP4 0.266 / NVFP4+FP8e **0.273**。注意 chinese 整體分數比英文低是 CLIP model 本身對英文偏好的 bias,不是量化問題。"
+---
+
+import { TLDRCard } from "@/components/blog/TLDRCard";
+
+<TLDRCard>
+Z-Image Turbo 量化品質實測:**LPIPS + CLIPScore 雙軸**跑 6 prompt × 4 config × 3 seed = 72 sample。LPIPS 顯示 NVFP4 跟 BF16 圖長得不一樣(distance 0.29-0.31),但 **CLIPScore 4 config 都在 0.334-0.339 同 tier**(std 重疊,prompt fidelity 沒輸)。**NVFP4+FP8e 在 photo_woman / photo_machine / chinese 3 個 prompt 微贏 BF16**。結論:[Part 1](/zh-TW/blog/dgx-spark-zimage-turbo-nvfp4-bench) 推薦的 NVFP4+FP8e(快 1.37×、省 9.4 GB VRAM)品質沒崩,可放心抄。
+</TLDRCard>
+
+## 為什麼要做這篇
+
+[Part 1](/zh-TW/blog/dgx-spark-zimage-turbo-nvfp4-bench) 量了 6 種量化組合的速度跟資源 — NVFP4 transformer warm 5.50s 比 BF16 7.55s 快 1.37×,VRAM peak 從 70 GB 降到 60.7 GB。但留了一個黑洞:**這些量化版的圖,品質有崩嗎?**
+
+肉眼看 6 張寫實人像沒明顯崩壞,但這是 quantization 最弱的 stress test。中文 prompt、文字渲染、細節密的 anime、抽象風,量化敢不敢應付?Part 1 沒答,Part 2 答。
+
+---
+
+## 怎麼測量品質?
+
+「量化會不會崩品質」這句話聽起來簡單,實際很滑。「品質」是什麼?圖長得跟 BF16 一樣?還是跟 prompt 對得上?還是看起來「美」?三個問題答案不一樣,需要不同 metric。我用業界 image gen 研究最常用的兩個指標,**雙軸並用**。
+
+### 軸 1:**LPIPS** — 量化版的圖跟 BF16 差多遠?
+
+#### LPIPS 是什麼
+
+[LPIPS](https://arxiv.org/abs/1801.03924)(Learned Perceptual Image Patch Similarity)是 Zhang et al. 2018 提的指標,目的是**取代 PSNR / SSIM 那種 pixel-level 比較**,改用「人眼看起來像不像」。
+
+實作上:把兩張圖各跑過一個預訓練的 AlexNet,擷取**中間層 feature map**,然後算 feature 之間的距離。為什麼用 AlexNet?因為 CNN 中層 feature 學會了「眼睛、嘴巴、紋理」之類的語意,**比直接比 pixel 接近人眼判斷**。
+
+輸出範圍:0(兩張圖完全一樣)到約 1(完全不同)。實務上:
+- LPIPS < 0.05:幾乎看不出差別,只在 pixel level 微差
+- LPIPS 0.1-0.2:仔細看可以看出構圖 / 細節微異
+- LPIPS 0.2-0.4:同主題但構圖明顯不同(典型「同 prompt 不同 model」)
+- LPIPS > 0.5:基本是不同概念的圖
+
+#### 為什麼把 BF16 當 reference 而不是 BF16 自己跑兩次?
+
+理論上,**同 prompt + 同 seed + 同 model + 同硬體**應該完全 deterministic — LPIPS 跟自己比應該是 0。但量化 path 換了之後,model 內部 rounding 不一樣,latent space 軌跡從第一個 sampling step 就開始發散。這個發散是**物理必然**,跟「品質好不好」無關。
+
+所以 LPIPS 可以告訴我們「量化版偏離 BF16 多少」,**但不能單看 LPIPS 下品質結論**。0.3 的 LPIPS 可能是「圖完全 OK 只是構圖換了一個版本」,也可能是「量化崩到主體都跑掉」 — LPIPS 自己分不出兩者。要靠軸 2。
+
+### 軸 2:**CLIPScore** — 圖跟 prompt 對得上嗎?
+
+#### CLIP 是什麼
+
+[CLIP](https://arxiv.org/abs/2103.00020)(Contrastive Language-Image Pretraining)是 OpenAI 2021 訓的雙塔模型 — 一個 image encoder + 一個 text encoder,**訓練目標是讓「圖 + 對應的描述文字」在 embedding space 裡近,不對應的遠**。訓練資料 4 億對 image-text(LAION 5B 是其中之一)。
+
+CLIPScore 就是把一張生成圖 + 它對應的 prompt 文字各 encode 成 vector,算 cosine similarity。輸出範圍 0-1 但實務上有意義範圍是:
+- CLIPScore < 0.20:圖跟 prompt 完全對不上(亂生 / 崩了)
+- CLIPScore 0.25-0.30:有對到主題但細節偏差
+- CLIPScore 0.30-0.40:一般好的生成模型 baseline
+- CLIPScore > 0.40:image-text 對齊很強(例如 abstract prompt 命中很準)
+
+#### 為什麼 CLIPScore 是品質的代理?
+
+「量化崩品質」最常見的 failure mode 是**圖看起來怪、跟 prompt 對不上**。CLIPScore 直接量這個對應關係,對「崩了」很敏感。如果量化把圖改到主體跑掉、構圖怪、看起來不像 prompt 描述的東西,CLIPScore 會掉。
+
+如果 CLIPScore 沒掉,代表「就 prompt 對應這個維度,量化版沒輸」 — **這就足以推翻「量化必崩」的擔心**。
+
+#### CLIPScore 的限制
+
+- **不評美感**:醜但對得上 prompt 的圖 CLIPScore 可以很高。但 image gen 多數 use case 我們在乎的是「對得上」優先
+- **英文偏向**:open_clip ViT-B-32 訓練資料 80%+ 英文,中文 / 多語 prompt 整體絕對分數會偏低,**但跨 config 比較還是公平的**(同 prompt 各 config 都被同樣 bias 影響)
+- **對 typo / 細節偏差不夠細**:細節級的精度差異 CLIP 可能抓不到。要那種精度需要 LAION-Aesthetic 之類的 learned predictor
+
+### 兩軸結合的判讀邏輯
+
+| LPIPS 軸 | CLIPScore 軸 | 結論 |
+|---------|-------------|------|
+| 高 | 同 BF16 | 量化「不一樣但沒輸」← **典型成功量化** |
+| 高 | **比 BF16 低** | 量化崩了 ← 需要避免 |
+| 低 | 同 BF16 | 量化「跟 BF16 像 + 沒輸」← 也是成功 |
+| 低 | 比 BF16 高 | 罕見,可能是 LPIPS 沒抓到的 small improvement |
+
+**雙軸並看,可以分清楚「不一樣 vs 變差」這兩件事**。單看 LPIPS 會誤把 trajectory 發散當崩壞,單看 CLIPScore 會錯過視覺上明顯的偏移。
+
+### 為什麼不用 FID / SSIM / 人眼?
+
+| 指標 | 為何沒用 |
+|------|---------|
+| FID(Fréchet Inception Distance)| 需要 N≥1000 sample 統計穩定。72 sample 跑 FID 是 noise |
+| SSIM / PSNR | pixel-level 結構相似度,**對量化的 rounding-driven trajectory 發散完全看不到語意,輸出永遠是低分**,沒參考價值 |
+| 人眼 A/B 評分 | 對 4 config × 6 prompt × 3 seed = 72 圖做 A/B blind eval 需要 ≥10 人才有 stat power,本篇沒這資源 |
+| LAION-Aesthetic | 主觀美感 predictor,適合 ranking 不適合 cross-config 比較(對 style 偏好差異大)|
+
+LPIPS + CLIPScore 在我們 N=72 的尺度下是**最 robust + 最便宜**的選擇。
+
+### 6 個多樣性 prompt(stress test 設計)
+
+| key | prompt | stress 重點 |
+|---|---|---|
+| photo_woman | 寫實女性人像在咖啡廳 | 量化最弱 stress(easy)|
+| photo_machine | 古董懷錶齒輪細節寫實照 | 細節密(機械結構)|
+| anime | 動漫和服女性 + 櫻花 | 風格化(非寫實)|
+| text_render | 木製商店招牌寫 "CLOSED FOR REPAIRS" | **文字渲染**(FP4 弱點)|
+| chinese | 古風水墨竹林書生(全中文 prompt)| 中文 + 古風氣氛 |
+| abstract | 超現實漂浮島 + 雲瀑布 | 抽象 + 大色塊 |
+
+每 prompt × 4 config × 3 seed = **72 sample 全跑**(seed=42, 7777, 12345)。
+
+### 4 個 config(對照 Part 1 推薦組合)
+
+| Config | Transformer | Encoder |
+|---|---|---|
+| BF16 | z_image_turbo_bf16 | qwen_3_4b BF16(reference)|
+| FP8scaled | Kijai 預量化 | qwen_3_4b BF16 |
+| NVFP4 | z_image_turbo_nvfp4 | qwen_3_4b BF16 |
+| **NVFP4+FP8e**(推薦)| z_image_turbo_nvfp4 | qwen_3_4b_fp8_mixed |
+
+---
+
+## 結果
+
+### Mean across 72 sample(主表)
+
+```
+config       LPIPS vs BF16     CLIPScore (image-text)
+─────────   ───────────────   ──────────────────────
+BF16         0.0000  ref       0.3344 ± 0.043
+FP8scaled    0.1670 ± 0.081    0.3356 ± 0.043   ← 跟 BF16 同分
+NVFP4        0.2886 ± 0.086    0.3356 ± 0.045   ← 跟 BF16 同分
+NVFP4+FP8e   0.3069 ± 0.093    0.3388 ± 0.040   ← 比 BF16 微高 0.0044
+```
+
+**4 個 config 的 CLIPScore 全部在 0.334-0.339,std band 重疊**。量化路徑造成的 image-text 對齊變化被 noise 蓋過 — 也就是說,**沒有一個量化 config 在 prompt fidelity 上輸 BF16**。
+
+LPIPS 反映「跟 BF16 相對距離」,FP8scaled 最接近(0.167)、NVFP4 中等(0.289)、NVFP4+FP8e 最遠(0.307)。但這是預期的 — 量化 aggressiveness 越強,跟 BF16 的 latent 軌跡越早發散。**這個距離不是「品質損失」,是「不同 model 給不同圖」**。
+
+### 各 prompt CLIPScore breakdown(看哪個 prompt 量化會崩)
+
+| prompt | BF16 | FP8scaled | NVFP4 | NVFP4+FP8e | 贏家 |
+|--------|------|-----------|-------|-----------|------|
+| photo_woman | 0.3403 | 0.3404 | 0.3383 | **0.3426** | NVFP4+FP8e ↑0.0023 |
+| photo_machine | 0.3273 | 0.3354 | 0.3292 | **0.3433** | NVFP4+FP8e ↑0.0160 |
+| anime | **0.3187** | 0.3173 | 0.3130 | 0.3174 | BF16 ↑0.0013(within noise)|
+| text_render | 0.3628 | **0.3656** | 0.3642 | 0.3623 | FP8scaled ↑0.0028 |
+| chinese | 0.2642 | 0.2626 | 0.2658 | **0.2731** | NVFP4+FP8e ↑0.0089 |
+| abstract | 0.3932 | 0.3926 | **0.4030** | 0.3938 | NVFP4 ↑0.0098 |
+
+兩個 takeaway:
+
+1. **NVFP4+FP8e 在 6 個 prompt 中 3 個贏 BF16**(photo_woman / photo_machine / chinese),其他 3 個 within noise。
+2. **沒有任何一個 prompt 量化版崩到輸 BF16 多於 0.005 CLIPScore**。最大「輸」是 anime(BF16 比 NVFP4 高 0.006),仍在 std 0.04 範圍內。
+
+### Chinese prompt 整體 CLIPScore 較低(0.26 vs 英文 0.32-0.39)
+
+注意 chinese 那行的數字明顯比其他低 — 這 **不是量化問題**,是 CLIP model 本身對英文偏好的 bias(open_clip ViT-B-32 訓練資料英文佔比 80%+)。可以從 4 個 config 在 chinese 上同 tier(0.263-0.273)看出:量化沒崩中文,只是 CLIP scoring 對中文打分偏低是 universal。
+
+---
+
+## 6 prompt × 4 config 視覺對比(seed=42)
+
+### Photo: 咖啡廳女性人像
+
+CLIPScore: BF16 0.334 / FP8scaled 0.332 / NVFP4 0.319 / **NVFP4+FP8e 0.337** ↑
+
+| BF16 | FP8scaled |
+|------|-----------|
+| ![BF16](/images/zimage-turbo-quality-bench/BF16_photo_woman_seed42.png) | ![FP8scaled](/images/zimage-turbo-quality-bench/FP8scaled_photo_woman_seed42.png) |
+| **NVFP4** | **NVFP4+FP8e** |
+| ![NVFP4](/images/zimage-turbo-quality-bench/NVFP4_photo_woman_seed42.png) | ![NVFP4+FP8e](/images/zimage-turbo-quality-bench/NVFP4_FP8e_photo_woman_seed42.png) |
+
+四張人像的構圖、髮型、表情都站得住。NVFP4 路徑下的兩張(右下兩格)跟 BF16 構圖差較多,但人物比例、皮膚紋理、咖啡廳氛圍都正常。
+
+### Photo: 古董懷錶齒輪細節
+
+CLIPScore: BF16 0.332 / FP8scaled 0.329 / NVFP4 0.336 / **NVFP4+FP8e 0.348** ↑↑
+
+| BF16 | FP8scaled |
+|------|-----------|
+| ![BF16](/images/zimage-turbo-quality-bench/BF16_photo_machine_seed42.png) | ![FP8scaled](/images/zimage-turbo-quality-bench/FP8scaled_photo_machine_seed42.png) |
+| **NVFP4** | **NVFP4+FP8e** |
+| ![NVFP4](/images/zimage-turbo-quality-bench/NVFP4_photo_machine_seed42.png) | ![NVFP4+FP8e](/images/zimage-turbo-quality-bench/NVFP4_FP8e_photo_machine_seed42.png) |
+
+齒輪細節 stress test。NVFP4+FP8e 那張 CLIPScore 最高 0.348,黃銅紋理跟齒輪結構都到位。
+
+### Anime: 和服女性 + 櫻花
+
+CLIPScore: **BF16 0.307** / FP8scaled 0.318 / NVFP4 0.312 / NVFP4+FP8e 0.299
+
+| BF16 | FP8scaled |
+|------|-----------|
+| ![BF16](/images/zimage-turbo-quality-bench/BF16_anime_seed42.png) | ![FP8scaled](/images/zimage-turbo-quality-bench/FP8scaled_anime_seed42.png) |
+| **NVFP4** | **NVFP4+FP8e** |
+| ![NVFP4](/images/zimage-turbo-quality-bench/NVFP4_anime_seed42.png) | ![NVFP4+FP8e](/images/zimage-turbo-quality-bench/NVFP4_FP8e_anime_seed42.png) |
+
+唯一 BF16 平均贏的 prompt 類型,但這個 seed FP8scaled 0.318 還比 BF16 0.307 高。整體 std 範圍內。
+
+### Text render: 木製商店招牌(FP4 stress)
+
+CLIPScore: BF16 0.348 / **FP8scaled 0.353** / NVFP4 0.350 / NVFP4+FP8e 0.351
+
+| BF16 | FP8scaled |
+|------|-----------|
+| ![BF16](/images/zimage-turbo-quality-bench/BF16_text_render_seed42.png) | ![FP8scaled](/images/zimage-turbo-quality-bench/FP8scaled_text_render_seed42.png) |
+| **NVFP4** | **NVFP4+FP8e** |
+| ![NVFP4](/images/zimage-turbo-quality-bench/NVFP4_text_render_seed42.png) | ![NVFP4+FP8e](/images/zimage-turbo-quality-bench/NVFP4_FP8e_text_render_seed42.png) |
+
+文字 stress 沒崩 — 4 個 config 都生出可讀的英文招牌。差別在風化質感跟字型風格細節。
+
+### Chinese: 古風水墨竹林書生(FP4 + 中文雙重 stress)
+
+CLIPScore: BF16 0.260 / FP8scaled 0.261 / NVFP4 0.264 / **NVFP4+FP8e 0.266** ↑
+
+| BF16 | FP8scaled |
+|------|-----------|
+| ![BF16](/images/zimage-turbo-quality-bench/BF16_chinese_seed42.png) | ![FP8scaled](/images/zimage-turbo-quality-bench/FP8scaled_chinese_seed42.png) |
+| **NVFP4** | **NVFP4+FP8e** |
+| ![NVFP4](/images/zimage-turbo-quality-bench/NVFP4_chinese_seed42.png) | ![NVFP4+FP8e](/images/zimage-turbo-quality-bench/NVFP4_FP8e_chinese_seed42.png) |
+
+中文 prompt 量化沒崩,反而 NVFP4+FP8e 微贏。古風水墨氣氛、竹林、書生都到位。
+
+### Abstract: 超現實漂浮島
+
+CLIPScore: BF16 0.408 / FP8scaled 0.406 / **NVFP4 0.390** / NVFP4+FP8e 0.384
+
+| BF16 | FP8scaled |
+|------|-----------|
+| ![BF16](/images/zimage-turbo-quality-bench/BF16_abstract_seed42.png) | ![FP8scaled](/images/zimage-turbo-quality-bench/FP8scaled_abstract_seed42.png) |
+| **NVFP4** | **NVFP4+FP8e** |
+| ![NVFP4](/images/zimage-turbo-quality-bench/NVFP4_abstract_seed42.png) | ![NVFP4+FP8e](/images/zimage-turbo-quality-bench/NVFP4_FP8e_abstract_seed42.png) |
+
+NVFP4 系略低於 BF16/FP8scaled,但 4 張都明顯抓到「漂浮島 + 雲瀑布 + 夢幻」的核心概念。
+
+---
+
+## 結論
+
+[Part 1](/zh-TW/blog/dgx-spark-zimage-turbo-nvfp4-bench) 推薦的 **NVFP4 transformer + qwen_3_4b_fp8_mixed encoder** 組合 vindicated:
+
+- **速度**:warm 5.52s vs BF16 7.55s,**1.37× 快**
+- **VRAM**:peak 60.71 GB vs BF16 70.12 GB,**省 9.4 GB**
+- **Disk**:10.4 GB vs BF16 19.8 GB,**省 51%**
+- **品質**:CLIPScore 0.3388 vs BF16 0.3344,**等同或微贏**
+
+「量化必然崩品質」這個直覺**對 Z-Image Turbo 在 GB10 上不成立**。LPIPS 指出量化版圖跟 BF16 不一樣,但這只是 latent 軌跡發散,不是品質退化。CLIPScore 同分證明 prompt fidelity 沒輸,3 / 6 個 prompt 還微贏。
+
+**結論:Part 1 推薦的 NVFP4+FP8e 組合可以放心抄,沒有需要為品質擔心的理由。**
+
+---
+
+## 方法學限制
+
+**LPIPS / CLIPScore 都不是完美指標,有以下限制**:
+
+1. **LPIPS 用 AlexNet feature,對 photographic 比 anime/abstract 更敏感**。anime / abstract 的 LPIPS 數字解讀要保守
+2. **CLIPScore ViT-B-32 對英文有 bias**(訓練資料偏英文),chinese prompt 整體分數低不代表中文崩
+3. **CLIPScore 不評美感** — 只評 alignment to prompt。一張很醜但對得上 prompt 的圖 CLIPScore 仍可能很高
+4. **N=3 seed per (prompt, config)** — 樣本不算大,單 prompt 結論該保守看 std 而不是看 mean
+5. **沒測 FID** — 因為 N=72 太少跑 FID 沒意義(FID 要 N≥1000 圖才穩),CLIPScore 是這個 N 規模下最 robust 的選擇
+6. **沒測 anime / cartoon 的細節保真度** — 量化在風格化內容上的 perceptual 損失需要 LAION-Aesthetic 之類的 learned aesthetic predictor 才能捕捉,本篇沒做
+
+如果你的 use case 是 production-grade anime gen 或 high-fidelity portrait service,建議**自己拿你的 prompt set + 自己看圖比對** — 我這份 6 prompt 多樣性測試只能 give a starting confidence,不能替你的 use case 拍板。
+
+---
+
+## 實驗 reproducibility
+
+完整 bench script:[`zimage_quality_bench.py`](https://github.com/ai-muninn/blog/blob/main/scripts/zimage_quality_bench.py)(post-publish 補上 link)
+
+執行方式:
+```bash
+pip install lpips open_clip_torch torch
+python3 zimage_quality_bench.py
+```
+
+需要 ComfyUI 0.20+ 跑在 `localhost:8188` + Z-Image Turbo BF16 / FP8scaled / NVFP4 / qwen_3_4b_fp8_mixed 4 個 model 已下載到 disk。整套 disk 約 35 GB,跑完 72 個 prompt + scoring 約 15-20 分鐘。
+
+raw json: 72 sample 的 LPIPS + CLIPScore 數值放在 [`/tmp/zimage_quality_results.json`](https://github.com/ai-muninn/blog/blob/main/data/zimage_quality_results.json)(post-publish 補上 link)
+
+---
+
+## 接下來
+
+[Part 1](/zh-TW/blog/dgx-spark-zimage-turbo-nvfp4-bench)「速度+資源 best combo」+ Part 2「量化品質 vindicated」之後,還剩一個謎:
+
+**為什麼 GB10 上 FP8 transformer 反而比 BF16 慢?為什麼 NVFP4 才是真贏家?**
+
+ComfyUI source code 給了一些 hint(`pick_operations()` 路由 / `fp8_linear()` cast / `MixedPrecisionOps` block-quantized path),但需要 nsys profiler 看 kernel 真實 dispatch 才能下 mechanism 結論。我試過 nsys 2025.6.3 在 GB10 / SM12.1 / sbsa-aarch64 環境下 CUPTI 不 capture kernel-level data(nsys 已知 bug),所以 Part 3 等 NVIDIA 修 nsight-cu 或我找到 alternative profiler 才能寫。
+
+---
+
+## 相關閱讀
+
+- [Z-Image Turbo Part 1 — 速度+資源 6 種量化組合實測](/zh-TW/blog/dgx-spark-zimage-turbo-nvfp4-bench) — 系列上一篇
+- [LPIPS paper(Zhang et al. 2018)](https://arxiv.org/abs/1801.03924)
+- [CLIP paper(Radford et al. 2021)](https://arxiv.org/abs/2103.00020)
+- [open_clip GitHub](https://github.com/mlfoundations/open_clip)
+- [Z-Image Turbo on Hugging Face](https://huggingface.co/Comfy-Org/z_image_turbo)
