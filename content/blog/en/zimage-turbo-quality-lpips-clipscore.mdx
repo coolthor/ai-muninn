@@ -169,6 +169,8 @@ The chinese row sits noticeably below the others — this is **not a quantizatio
 
 ## Side-by-side comparison: 6 prompts × 4 configs (seed=42)
 
+> The CLIPScore numbers under each image below are for the **single seed=42 sample**. The breakdown table earlier reports **mean across all 3 seeds**, so the same (prompt, config) cell can show slightly different numbers in the two places (gap stays inside the 0.04 std band — expected).
+
 ### Photo: portrait of a woman in a coffee shop
 
 CLIPScore: BF16 0.334 / FP8scaled 0.332 / NVFP4 0.319 / **NVFP4+FP8e 0.337** ↑
@@ -275,17 +277,15 @@ If your use case is production-grade anime generation or high-fidelity portrait 
 
 ## Reproducibility
 
-Full bench script: [`zimage_quality_bench.py`](https://github.com/ai-muninn/blog/blob/main/scripts/zimage_quality_bench.py) (link added post-publish)
+The full bench script `zimage_quality_bench.py` and the 72-sample LPIPS + CLIPScore raw JSON are not yet on GitHub (cleanup pending). If you want to run this yourself, the core idea:
 
-How to run:
 ```bash
 pip install lpips open_clip_torch torch
-python3 zimage_quality_bench.py
+# Roll your own driver: hit ComfyUI's HTTP API for 6 prompts × 4 configs × 3 seeds,
+# pipe each output through lpips(pretrained='alex') + open_clip ViT-B-32 to score.
 ```
 
-Requirements: ComfyUI 0.20+ at `localhost:8188` plus the four model files (BF16, FP8scaled, NVFP4, qwen_3_4b_fp8_mixed) downloaded. Total disk ~35 GB, full run (72 generations + scoring) ~15–20 minutes.
-
-Raw JSON: 72 sample LPIPS + CLIPScore values at [`/tmp/zimage_quality_results.json`](https://github.com/ai-muninn/blog/blob/main/data/zimage_quality_results.json) (link added post-publish).
+Requirements: ComfyUI 0.20+ at `localhost:8188` plus the four model files (BF16, FP8scaled, NVFP4, qwen_3_4b_fp8_mixed) downloaded. Total disk ~35 GB if you want all four configs side-by-side (Part 1's recommended single combo is much smaller). Full run (72 generations + scoring) ~15–20 minutes.
 
 ---
 

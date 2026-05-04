@@ -28,7 +28,7 @@ DGX Spark GB10 跑 Z-Image Turbo,N=10 隔離 GPU 實測 6 種量化組合。**NV
 
 ## 白話版:Z-Image Turbo 是什麼,為何要做這份 bench
 
-[Z-Image Turbo](https://huggingface.co/Comfy-Org/z_image_turbo) 是 Alibaba PAI 在 2026 年 4 月發布的開源 image gen 模型。distilled 版只要 8 step 就能生圖。Apache 2.0 商用 OK,Self-host 全套自架。
+[Z-Image Turbo](https://huggingface.co/Comfy-Org/z_image_turbo) 是 Alibaba 通義(Tongyi-MAI)2025 年 11 月底發布的開源 image gen 模型。distilled 版只要 8 step 就能生圖。Apache 2.0 商用 OK,Self-host 全套自架。
 
 如果你不熟「量化」(quantization)— FP8 / NVFP4 / BF16 這幾個數值格式分別是什麼、為什麼壓位元能省 memory、為什麼有時候反而會慢 — 先看入門:
 
@@ -199,15 +199,15 @@ Prompt:`a photorealistic portrait of a young woman with long flowing black hair,
 HF_REPO=https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main
 
 # transformer
-curl -L -o models/diffusion_models/split_files/diffusion_models/z_image_turbo_nvfp4.safetensors \
+curl -L -o models/diffusion_models/z_image_turbo_nvfp4.safetensors \
   $HF_REPO/split_files/diffusion_models/z_image_turbo_nvfp4.safetensors
 
 # text encoder (FP8 mixed)
-curl -L -o models/text_encoders/split_files/text_encoders/qwen_3_4b_fp8_mixed.safetensors \
+curl -L -o models/text_encoders/qwen_3_4b_fp8_mixed.safetensors \
   $HF_REPO/split_files/text_encoders/qwen_3_4b_fp8_mixed.safetensors
 
 # vae
-curl -L -o models/vae/split_files/vae/ae.safetensors \
+curl -L -o models/vae/ae.safetensors \
   $HF_REPO/split_files/vae/ae.safetensors
 ```
 
@@ -216,12 +216,12 @@ ComfyUI workflow JSON 範本(API 直接 POST 到 `/prompt`):
 ```json
 {
   "1": {"class_type": "UNETLoader", "inputs": {
-    "unet_name": "split_files/diffusion_models/z_image_turbo_nvfp4.safetensors",
+    "unet_name": "z_image_turbo_nvfp4.safetensors",
     "weight_dtype": "default"}},
   "2": {"class_type": "CLIPLoader", "inputs": {
-    "clip_name": "split_files/text_encoders/qwen_3_4b_fp8_mixed.safetensors",
+    "clip_name": "qwen_3_4b_fp8_mixed.safetensors",
     "type": "lumina2", "device": "default"}},
-  "3": {"class_type": "VAELoader", "inputs": {"vae_name": "split_files/vae/ae.safetensors"}},
+  "3": {"class_type": "VAELoader", "inputs": {"vae_name": "ae.safetensors"}},
   "11": {"class_type": "ModelSamplingAuraFlow", "inputs": {"model": ["1", 0], "shift": 3.0}},
   "4": {"class_type": "CLIPTextEncode", "inputs": {"text": "<your prompt>", "clip": ["2", 0]}},
   "5": {"class_type": "ConditioningZeroOut", "inputs": {"conditioning": ["4", 0]}},
@@ -240,7 +240,7 @@ ComfyUI workflow JSON 範本(API 直接 POST 到 `/prompt`):
 - `CLIPLoader.type` 必須設 `lumina2`(Z-Image 借 Lumina2 pipeline,沒有獨立 `z_image` type)
 - 必走 `ModelSamplingAuraFlow shift=3` patch(少這個 sampling 不收斂)
 - Latent 用 `EmptySD3LatentImage` 不是 `EmptyFlux2LatentImage`
-- model 路徑要帶 `split_files/` 前綴(Comfy-Org HF repo 結構)
+- 上面下載命令把檔直接放在 `models/{diffusion_models,text_encoders,vae}/` 下,workflow 裡 `unet_name`/`clip_name`/`vae_name` 就是純檔名(不帶子目錄)。如果你保留 HF 原 `split_files/...` 子結構下載,workflow 路徑也要帶 `split_files/diffusion_models/...` 前綴對應
 
 ---
 
@@ -249,8 +249,8 @@ ComfyUI workflow JSON 範本(API 直接 POST 到 `/prompt`):
 這份 N=10 數據是 **publication-grade**,但有限制:
 
 1. **單 prompt 單 seed 測 latency** — 不同 prompt 訪問模式不同,但量化路徑差異主要在 transformer / encoder kernel,跟 prompt 內容無關,所以單 prompt 結果應該可外推
-2. **品質沒測** — 第 29 篇會用 LPIPS + CLIPScore 雙軸跑 6 prompt × 多 seed
-3. **mechanism 沒解** — 為什麼 FP8 比 BF16 慢、為什麼 NVFP4 比兩者都快?第 28 篇深挖
+2. **品質沒測** — Part 2 用 LPIPS + CLIPScore 雙軸跑 6 prompt × 多 seed
+3. **mechanism 沒解** — 為什麼 FP8 比 BF16 慢、為什麼 NVFP4 比兩者都快?Part 3 深挖
 4. **GB10 unique** — `vram_used` 是 unified memory,跟 dGPU 上的 dedicated VRAM 計法不同。RTX 5090 / B200 上結果可能完全不同
 
 ---
@@ -263,7 +263,7 @@ ComfyUI workflow JSON 範本(API 直接 POST 到 `/prompt`):
 
 **完全相反**。但這不是「同硬體上 NVFP4 vs FP8 的對立 evidence」 — LLM trap 是 vLLM Marlin kernel 在 SM12.1 上的特定品質問題,Image gen 走 PyTorch + comfy_kitchen 不同 backend。**結論依 stack/workload 而異,不是 GB10 universal truth**。
 
-為什麼這兩條 path 上量化會走不同路徑、得到相反速度結論?第 28 篇深挖 ComfyUI ops.py + comfy_kitchen 的 kernel dispatch 邏輯。
+為什麼這兩條 path 上量化會走不同路徑、得到相反速度結論?Part 3 深挖 ComfyUI ops.py + comfy_kitchen 的 kernel dispatch 邏輯。
 
 ---
 

@@ -28,7 +28,7 @@ DGX Spark GB10, six Z-Image Turbo quant configs measured with N=10 isolated GPU.
 
 ## Plain-language version: what is Z-Image Turbo and why this bench exists
 
-[Z-Image Turbo](https://huggingface.co/Comfy-Org/z_image_turbo) is an open-source image generation model released by Alibaba PAI in April 2026. The distilled variant generates images in just 8 sampling steps. Apache 2.0 licensed, fine for commercial use, fully self-host.
+[Z-Image Turbo](https://huggingface.co/Comfy-Org/z_image_turbo) is an open-source image generation model released by Alibaba's Tongyi-MAI team in late November 2025. The distilled variant generates images in just 8 sampling steps. Apache 2.0 licensed, fine for commercial use, fully self-host.
 
 If you are new to quantization — what FP8 / NVFP4 / BF16 are, why fewer bits saves memory, why fewer bits sometimes runs slower — start with the primer:
 
@@ -199,15 +199,15 @@ Download:
 HF_REPO=https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main
 
 # transformer
-curl -L -o models/diffusion_models/split_files/diffusion_models/z_image_turbo_nvfp4.safetensors \
+curl -L -o models/diffusion_models/z_image_turbo_nvfp4.safetensors \
   $HF_REPO/split_files/diffusion_models/z_image_turbo_nvfp4.safetensors
 
 # text encoder (FP8 mixed)
-curl -L -o models/text_encoders/split_files/text_encoders/qwen_3_4b_fp8_mixed.safetensors \
+curl -L -o models/text_encoders/qwen_3_4b_fp8_mixed.safetensors \
   $HF_REPO/split_files/text_encoders/qwen_3_4b_fp8_mixed.safetensors
 
 # vae
-curl -L -o models/vae/split_files/vae/ae.safetensors \
+curl -L -o models/vae/ae.safetensors \
   $HF_REPO/split_files/vae/ae.safetensors
 ```
 
@@ -216,12 +216,12 @@ ComfyUI workflow JSON template (POST directly to `/prompt`):
 ```json
 {
   "1": {"class_type": "UNETLoader", "inputs": {
-    "unet_name": "split_files/diffusion_models/z_image_turbo_nvfp4.safetensors",
+    "unet_name": "z_image_turbo_nvfp4.safetensors",
     "weight_dtype": "default"}},
   "2": {"class_type": "CLIPLoader", "inputs": {
-    "clip_name": "split_files/text_encoders/qwen_3_4b_fp8_mixed.safetensors",
+    "clip_name": "qwen_3_4b_fp8_mixed.safetensors",
     "type": "lumina2", "device": "default"}},
-  "3": {"class_type": "VAELoader", "inputs": {"vae_name": "split_files/vae/ae.safetensors"}},
+  "3": {"class_type": "VAELoader", "inputs": {"vae_name": "ae.safetensors"}},
   "11": {"class_type": "ModelSamplingAuraFlow", "inputs": {"model": ["1", 0], "shift": 3.0}},
   "4": {"class_type": "CLIPTextEncode", "inputs": {"text": "<your prompt>", "clip": ["2", 0]}},
   "5": {"class_type": "ConditioningZeroOut", "inputs": {"conditioning": ["4", 0]}},
@@ -240,7 +240,7 @@ Easy traps:
 - `CLIPLoader.type` must be `lumina2` (Z-Image piggybacks on the Lumina2 pipeline; there is no standalone `z_image` type)
 - Must wire in the `ModelSamplingAuraFlow shift=3` patch — without it, sampling does not converge
 - Latent uses `EmptySD3LatentImage`, not `EmptyFlux2LatentImage`
-- Model paths need the `split_files/` prefix (Comfy-Org HF repo structure)
+- The download commands above place files directly under `models/{diffusion_models,text_encoders,vae}/`, so the workflow's `unet_name`/`clip_name`/`vae_name` are bare filenames (no subdirectory). If you keep the HF `split_files/...` substructure when downloading, prefix the workflow paths with `split_files/diffusion_models/...` accordingly
 
 ---
 
